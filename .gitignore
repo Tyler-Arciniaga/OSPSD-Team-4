@@ -1,0 +1,166 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+bin/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyPI configuration file
+.pypirc
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.toml
+.cache
+.pytest_cache/
+.noscript_cache/
+.nosetests
+.htmlcov/
+.tox/
+.xdist/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.mutmut-cache
+.pytest_cache/
+.hypothesis/
+.poetry.lock
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+hasher-manifest.txt
+
+# pyenv
+#   For a library or package, you might want to ignore these files since the Python version is individual.
+#   For an app development setup, you may want to check them in.
+#.python-version
+
+# pipenv
+#   According to pypa/pipenv#1055, pipenv should tend to check Pipfile.lock into version control.
+#   But if you wish to ignore it, uncomment the following:
+#Pipfile.lock
+
+# poetry
+#   Using Poetry, it is generally recommended to commit poetry.lock to version control.
+#   But if you wish to ignore it, uncomment the following:
+#poetry.lock
+
+# pdm
+#   PDM stores project-wide configurations in .pdm.toml
+.pdm.toml
+.pdm-plugins/
+__pdm-build__/
+
+# Hatch
+.hatch/
+
+# PEP 582; used by e.g. pdm
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat-pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# PyCharm / IntelliJ IDEA settings
+.idea/
+
+# VS Code settings
+.vscode/
+
+# Ruff linter cache
+.ruff_cache/
+
+# Streamlit secrets
+.streamlit/secrets.toml
