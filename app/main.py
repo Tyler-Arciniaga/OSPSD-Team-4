@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+
 from app.models import Issue
 
 app = FastAPI(title="Issue Tracking Service")

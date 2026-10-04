@@ -16,35 +16,112 @@ We are building a FastAPI backend service for the Issue Tracker vertical, using 
 
 ## Project Status
 
-Levels 1 and 2 are in progress: implementing one documented API operation and connecting it to Trello. Setup, usage, and verification instructions will be added as this work is completed.
+The service currently implements GET /issues/{issue_id} using fixed data, with API documentation and automated tests. Trello integration is pending.
+
+GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests.
 
 ## Project Structure
 
-To be completed: locations of application code and tests, with a brief explanation of their responsibilities.
+- `app/main.py`: FastAPI application and issue retrieval endpoint.
+- `app/models.py`: Public response model for an issue.
+- `tests/test_get_issue.py`: Tests for successful retrieval and unknown issues.
+- `docs/api.md`: API contract, examples, and assumptions.
+- `pyproject.toml`: Python requirement, dependencies, and tool configuration.
+- `uv.lock`: Locked dependency versions for reproducible installation.
+- `.github/workflows/ci.yml`: Automated linting, formatting, type checking, and tests.
+- `AGENTS.md`: Contribution and release workflow.
 
 ## Installation
 
-To be added upon completion of Level 1: supported Python version, dependency installation, and environment setup. Update upon completion of Level 2 with any additional dependencies required for Trello.
+The project requires Python 3.11.5 or newer. Local checks were verified
+with Python 3.13.5 and uv 0.12.17; CI uses those same versions.
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/),
+then run these commands from the repository root:
+
+```bash
+uv sync --locked --python 3.13.5
+```
+
+This creates a local `.venv` and installs application and development
+dependencies using the versions in `uv.lock`.
+
+Use `uv run` for project commands; manually activating `.venv` is
+not necessary.
 
 ## Configuration
 
-To be added upon completion of Level 2: Trello test-account setup, required permissions, and how to supply credentials locally.
+The current implementation uses fixed data and requires no credentials
+or environment variables.
+
+To be added with the Trello integration: test-account setup, required
+permissions, and instructions for supplying credentials locally.
 
 Do not commit credentials to the repository.
 
 ## Running the Service
 
-To be added upon completion of Level 1: the command to start the service locally and its local address. Update upon completion of Level 2 if the startup instructions change.
+From the repository root, run:
+
+```bash
+uv run --locked uvicorn app.main:app --reload
+```
+
+The service runs at http://127.0.0.1:8000.
+Interactive API documentation is available at http://127.0.0.1:8000/docs.
+
+The `--reload` option automatically restarts the server when code changes
+during development. Press Ctrl+C in the terminal to stop it.
 
 ## API Usage
 
-To be added upon completion of Level 1: the operation’s HTTP method, route, required parameters, response format, successful status code, and an example request and response. Verify upon completion of Level 2 that the documentation matches the Trello-backed operation.
+Retrieve an issue using `GET /issues/{issue_id}`, where `issue_id` is
+the required issue identifier.
+
+With the service running:
+
+```bash
+curl -i http://127.0.0.1:8000/issues/64f1c0a2b3d4e5f607182930
+```
+
+Expected status: `200 OK`
+
+Expected response body:
+
+```json
+{
+  "id": "64f1c0a2b3d4e5f607182930",
+  "title": "Example issue"
+}
+```
+
+The current implementation returns fixed data for this example ID.
+Unknown IDs return `404 Not Found`.
+
+See [the API contract](docs/api.md) for response fields, errors,
+and assumptions.
 
 ## Code Checks and Tests
 
-To be completed: commands for running the project’s automated tests and code checks, with an explanation of what each verifies.
+From the repository root, run:
 
-Distinguish tests that run without Trello access from any integration tests that require it.
+```bash
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked mypy app tests
+uv run --locked pytest
+```
+
+- Ruff checks for lint issues, including import organization.
+- Ruff's formatting check verifies style without changing files.
+- mypy checks for type inconsistencies.
+- pytest runs the automated behavior tests.
+
+GitHub Actions runs these same commands on pushes and pull requests.
+
+The current tests check successful issue retrieval and a 404 response
+for an unknown issue. They require no running server, Trello credentials,
+or live network access.
 
 ## Trello Verification
 
@@ -52,4 +129,4 @@ To be added upon completion of Level 2: instructions for verifying the operation
 
 ## Contributing
 
-See [AGENTS.md](AGENTS.md) for the proposed contribution and release workflow.
+See [AGENTS.md](AGENTS.md) for the contribution and release workflow.

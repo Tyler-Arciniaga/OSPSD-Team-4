@@ -4,8 +4,6 @@ See [README.md](README.md#project-structure) for the project structure and code 
 
 ## Planning and task ownership
 
-The following process is proposed for team review:
-
 - Meet once a week to review progress, prioritize tasks, and assign an owner and reviewer to each substantial task.
 - Track tasks, expected behavior, and dependencies in GitHub Issues, using the appropriate feature request or bug report template.
 - Each member focuses on their designated task and reviews their assigned teammate’s work.
@@ -24,7 +22,7 @@ The following process is proposed for team review:
 ## Setup and verification
 
 - Follow the README’s [Installation](README.md#installation), [Configuration](README.md#configuration), and [Running the Service](README.md#running-the-service) instructions.
-- Follow [Code Checks and Tests](README.md#code-checks-and-tests) to run checks locally. GitHub Actions should run the same automated checks.
+- Before merging, run linting, formatting checks, type checking, and automated tests as documented in [Code Checks and Tests](README.md#code-checks-and-tests). All checks must pass locally and in GitHub Actions.
 - Follow [Trello Verification](README.md#trello-verification) to verify the integration against a Trello test account.
 - Keep credentials out of the repository.
 
