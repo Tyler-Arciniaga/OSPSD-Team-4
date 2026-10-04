@@ -33,3 +33,6 @@ Add any other context about the problem here.
 
 **Possible Solution**
  Optional: suggest a fix or reason for the bug
+
+**Reviewer**
+Name the teammate assigned to review this work.
