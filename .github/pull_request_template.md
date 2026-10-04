@@ -36,5 +36,11 @@ If there are user-facing changes then we may require documentation to be updated
 If there are any breaking changes to public APIs, please add the `api change` label.
 -->
 
+**Remaining work or blockers**
+List anything unfinished or blocking progress, or write “None.”
+
+**AI-generated code**
+Disclose any AI-generated code included in this PR, or write “None.”
+
 ## Additional Notes
 <!-- Any other context, screenshots, or information for reviewers -->
