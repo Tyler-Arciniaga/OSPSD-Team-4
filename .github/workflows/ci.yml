@@ -1,0 +1,39 @@
+# Based on uv's GitHub Actions guide:
+# https://docs.astral.sh/uv/guides/integration/github/
+
+name: CI
+
+# Run when commits are pushed or pull requests are opened or updated.
+on:
+  push:
+  pull_request:
+
+# Allow the workflow to read the repository.
+permissions:
+  contents: read
+
+# Run the steps below on a temporary Linux machine provided by GitHub.
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Download the repository's code into the runner.
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      # Use the uv and Python versions verified locally.
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v9
+        with:
+          version: "0.12.17"
+          python-version: "3.13.5"
+
+      # Create the environment and install dependencies from uv.lock.
+      # Fail if the lockfile needs updating.
+      - name: Install dependencies
+        run: uv sync --locked
+
+      # Run the project's tests inside that environment.
+      - name: Run tests
+        run: uv run --locked pytest
