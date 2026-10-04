@@ -103,23 +103,48 @@ and assumptions.
 
 ## Code Checks and Tests
 
-From the repository root, run:
+Run the following checks from the repository root. GitHub Actions runs
+the same checks on pushes and pull requests.
+
+### Linting
+
+We use Ruff's default lint rules as a baseline for common coding mistakes,
+including unused imports, undefined names, and import organization.
+See [Ruff's default rules](https://docs.astral.sh/ruff/default-rules/)
+for the complete list and explanations.
 
 ```bash
 uv run --locked ruff check .
+```
+
+Ruff's version is locked in `uv.lock`. Review rule changes when upgrading,
+investigate reported warnings, and review automated fixes before committing.
+
+### Formatting
+
+Check that Python files follow Ruff's formatting style without modifying them:
+
+```bash
 uv run --locked ruff format --check .
+```
+
+### Type Checking
+
+Check for inconsistencies between type annotations and how values are used:
+
+```bash
 uv run --locked mypy app tests
+```
+
+### Automated Tests
+
+Run the behavior tests:
+
+```bash
 uv run --locked pytest
 ```
 
-- Ruff checks for lint issues, including import organization.
-- Ruff's formatting check verifies style without changing files.
-- mypy checks for type inconsistencies.
-- pytest runs the automated behavior tests.
-
-GitHub Actions runs these same commands on pushes and pull requests.
-
-The current tests check successful issue retrieval and a 404 response
+The current tests verify successful issue retrieval and a 404 response
 for an unknown issue. They require no running server, Trello credentials,
 or live network access.
 
