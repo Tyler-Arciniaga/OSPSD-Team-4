@@ -12,5 +12,12 @@ pythonpath = ["."]
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
+    "mypy>=2.4.0",
     "pytest>=9.1.1",
+    "ruff>=0.16.10",
 ]
+
+[tool.ruff.lint]
+# Use Ruff's default rules as a baseline for common coding mistakes.
+# Ruff's version is locked in uv.lock; review rule changes when upgrading.
+# Rule descriptions: https://docs.astral.sh/ruff/default-rules/
