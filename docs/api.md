@@ -17,7 +17,7 @@ Return one issue by its identifier.
 
 | Name | Location | Type | Required | Description |
 | --- | --- | --- | --- | --- |
-| `issue_id` | path | string | yes | The identifier of the issue to return. |
+| `issue_id` | path | string | yes | The full Trello card ID of the issue to return (24 lowercase hexadecimal characters). |
 
 ### Successful response
 
@@ -42,6 +42,14 @@ These two fields are the whole public contract. No other fields are promised, an
 | Situation | Status | Body |
 | --- | --- | --- |
 | No issue exists with the given `issue_id` | `404 Not Found` | `{"detail": "Issue not found"}` |
+| Malformed identifier (including a short card link) | `404 Not Found` | `{"detail": "Issue not found"}` |
+| Service credentials are missing | `503 Service Unavailable` | `{"detail": "Trello credentials not configured"}` |
+| Trello rejects the request, cannot be reached, times out, or returns an invalid response | `502 Bad Gateway` | `{"detail": "Trello request failed"}` |
+
+These are initial integration errors, not the final Level 5 error model.
+After a 503, the service operator must configure credentials. A caller may
+retry a read after a transient 502; invalid credentials or permissions require
+operator action. Missing or malformed identifiers require a corrected ID.
 
 ### Example
 
@@ -77,6 +85,7 @@ These affect observable behavior and are not guaranteed by the assignment spec, 
 
 - **`id` is an opaque string.** Callers should treat it as an identifier to pass back to the service. They should not parse it or assume a format.
 - **`title` is always present.** An issue without a title is not part of this contract.
-- **Fixed data for now.** At Level 1, the only issue that exists is the one shown above. Level 2 will replace this with data from the real provider, keeping the same response shape.
+- **Real data.** The example ID and title illustrate the response shape; they are not seeded resources. Supply a full card ID accessible to the configured Trello account. Card short links are not supported, ensuring the response ID equals the requested ID.
+- **Provider translation.** Trello's `id` becomes `id`, and `name` becomes `title`. Each request reads current Trello data; the service does not cache or modify it.
 - **Only `id` and `title` are returned.** Other issue fields (status, description, assignee, and so on) are left out on purpose, because they are not needed for the smallest useful operation. We will add fields only when an operation needs them.
 - **Domain vocabulary.** This API says "issue" and does not use any provider's terms. Provider details do not appear in responses.
