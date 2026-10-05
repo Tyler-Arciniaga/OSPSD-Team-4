@@ -18,9 +18,7 @@ We are building a FastAPI backend service for the Issue Tracker vertical, using 
 
 The service implements GET /issues/{issue_id} against Trello, translating a
 card's `id` and `name` into the public `id` and `title` fields. Automated
-tests run without credentials or network access. Live retrieval and
-provider-state freshness were verified on October 5, 2026. Independent
-verification by a second teammate and human review remain open.
+tests run without credentials or network access.
 
 GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests.
 
@@ -57,12 +55,12 @@ not necessary.
 
 Use a dedicated Trello test account and a private test board containing a
 card your team may change. The account granting the token must be able to
-read the board. No paid feature is needed for this single-card operation.
+read the board.
 
-1. Sign in to the test account. Create a Power-Up in the
-   [Trello developer portal](https://trello.com/apps/admin), open its Trello
-   Auth tab, and generate an API key. A deployed Power-Up is not needed to
-   make this REST request.
+1. Sign in to the test account. Create an app in the
+   [Trello developer portal](https://trello.com/apps/admin), selecting
+   "My app doesn't use Power-up capabilities." Open **Trello Auth** and
+   generate an API key.
 2. In a browser, replace `YOUR_API_KEY` in this URL with that key and approve
    read-only access (the token expires after one day):
    `https://trello.com/1/authorize?expiration=1day&scope=read&response_type=token&key=YOUR_API_KEY`.
@@ -74,19 +72,14 @@ read the board. No paid feature is needed for this single-card operation.
    ```
 
    Edit `.env` locally and fill in `TRELLO_API_KEY` and `TRELLO_TOKEN`.
-   `.env` is ignored by Git; `.env.example` contains no credentials.
+   `.env` is ignored by Git. Do not commit credentials.
 
 The startup command below loads `.env` into the service environment.
 Existing exported environment variables take precedence over values in
-the file. Restart the server after changing credentials in `.env`.
-Missing or blank credentials produce HTTP 503.
-Tokens grant access to the authorizing account's readable boards, so use
-the dedicated test account rather than a personal account.
+the file. Restart the server after changing `.env`.
 
 See [Trello authorization](https://developer.atlassian.com/cloud/trello/guides/rest-api/authorization/)
 for permissions and token revocation.
-
-Do not commit credentials to the repository.
 
 ## Running the Service
 
@@ -174,10 +167,8 @@ Run the behavior tests:
 uv run --locked pytest
 ```
 
-The tests verify the public response, Trello authentication and field
-translation, missing resources, missing configuration, and provider
-failures. They substitute only the outbound HTTP call and require no
-running server, real Trello credentials, or live network access.
+Tests cover retrieval, field translation, authentication, and failures
+without a running server, real credentials, or network access.
 
 ## Trello Verification
 
@@ -193,46 +184,19 @@ running server, real Trello credentials, or live network access.
    ```
 
    Expect HTTP 200 and exactly `{"id":"<your full card ID>","title":"HW1 Level 2 test"}`.
-   Compare both values to the real card. No Trello-specific fields should appear.
+   Compare both values to the real card.
 3. Rename the card to `HW1 Level 2 renamed` in Trello and repeat the request.
-   Expect HTTP 200 with the new title and the same ID. This checks that the
-   service reads real provider state rather than fixed data.
+   Expect HTTP 200 with the new title and the same ID.
 4. Run `curl -i http://127.0.0.1:8000/issues/does-not-exist`.
    Expect HTTP 404 and `{"detail":"Issue not found"}`.
-5. Have a second teammate follow these instructions with authorized access.
-   Record the date, tested commit, expected and actual results, and verifier
-   names in the related issue or PR. Include no credentials or raw request
-   headers. A documented procedure alone is not evidence of a successful run.
-6. Delete the disposable test card (and board if created only for this check)
-   through Trello. The GET operation itself changes no provider state.
+5. Delete the disposable test card and any board created only for this check.
    Revoke the token from the test account's Settings > Applications page
    when finished, stop the server, clear credentials from `.env`, and run
    `unset TRELLO_API_KEY TRELLO_TOKEN` if you also exported them.
 
-The integration uses [Get a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-get),
-requests only `id,name`, and authenticates using Trello's documented OAuth
-key/token header. Each service request makes one Trello request with a
-10-second socket timeout; it does not retry or cache results. Raw provider
-errors and credentials are not returned to callers. Invalid credentials,
-permission failures, rate limiting, and provider failures currently share
-HTTP 502; a fuller error model belongs to Level 5.
-
-### Recorded live verification
-
-On October 5, 2026, the user supplied a successful live response and Codex
-repeated the checks on the `feature/level-2-trello` implementation:
-
-| Check | Actual result |
-| --- | --- |
-| Retrieve test card `6ac3dffdd8bb4313ab47ca6a` | HTTP 200; exactly `id` and `title`, with title `test`. |
-| Temporarily rename the card in Trello | HTTP 200 from the service with title `HW1 Level 2 renamed` and the same ID. |
-| Restore the original card title | Trello and the service both confirmed title `test`. |
-| Request `does-not-exist` | HTTP 404; `{"detail":"Issue not found"}`. |
-
-The test card remains available for teammate verification. These checks
-do not establish independent setup by a second teammate. The focused PR
-must identify the tested commit and record that teammate's verification
-and human approval before Level 2 is treated as complete.
+Each service request makes one [Get a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-get)
+request for `id,name`, with a 10-second socket timeout and no retries or
+caching. See [the API contract](docs/api.md) for errors and supported IDs.
 
 ## Contributing
 
