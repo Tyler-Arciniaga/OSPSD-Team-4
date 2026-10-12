@@ -96,7 +96,9 @@ def test_trello_network_failure(monkeypatch: pytest.MonkeyPatch, error: Exceptio
     "payload", [b"not json", b"{}", b"[]", b'{"id":"wrong","name":"Title"}']
 )
 def test_invalid_trello_response(monkeypatch: pytest.MonkeyPatch, payload: bytes):
-    monkeypatch.setattr(provider, "urlopen", lambda request, timeout: io.BytesIO(payload))
+    monkeypatch.setattr(
+        provider, "urlopen", lambda request, timeout: io.BytesIO(payload)
+    )
     response = client.get(f"/issues/{KNOWN_ISSUE_ID}")
     assert response.status_code == 502
     assert response.json() == {"detail": "Trello request failed"}

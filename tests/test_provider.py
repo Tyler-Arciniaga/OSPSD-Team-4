@@ -10,7 +10,7 @@ from app.provider import TrelloIssueProvider
 
 
 def test_trello_implements_issue_provider():
-    #Abstraction test
+    # Abstraction test
     provider = TrelloIssueProvider()
     assert isinstance(provider, IssueProvider)
 
@@ -38,7 +38,6 @@ def test_trello_translates_card_to_issue(monkeypatch):
     assert result.id == issue_id
     assert result.title == "Fix login bug"
     assert "desc" not in result.model_dump()
-
 
 
 from email.message import Message
@@ -75,8 +74,8 @@ def test_trello_missing_issue_returns_404(monkeypatch):
 @pytest.mark.parametrize(
     "payload",
     [
-        b"not json",                              # Invalid JSON
-        b'{"id":"64f1c0a2b3d4e5f607182930"}',     # Missing name
+        b"not json",  # Invalid JSON
+        b'{"id":"64f1c0a2b3d4e5f607182930"}',  # Missing name
         b'{"id":"wrong","name":"Fix login bug"}',  # Incorrect ID
     ],
 )
@@ -96,6 +95,7 @@ def test_trello_rejects_malformed_response(monkeypatch, payload):
 
     assert exc.value.status_code == 502
     assert exc.value.detail == "Trello request failed"
+
 
 def test_provider_interchangeability():
     class FakeIssueProvider:
