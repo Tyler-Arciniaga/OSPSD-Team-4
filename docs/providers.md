@@ -1,5 +1,4 @@
-
-# Provider-Independent Interface (Level 3)
+# Provider Interface and Dependency Injection
 
 ## Purpose
 
@@ -37,40 +36,75 @@ The Trello implementation is responsible for:
 
 ## Provider Boundary
 
-The application follows this structure:
+The endpoint in `app/main.py` receives an object satisfying the
+`IssueProvider` interface and calls its `get_issue()` method.
+It does not import or construct `TrelloIssueProvider`.
 
-```text
-HTTP Request
-    |
-    v
-FastAPI Application (main.py)
-    |
-    v
-IssueProvider Interface (interface.py)
-    |
-    v
-TrelloIssueProvider (provider.py)
-    |
-    v
-Trello REST API
-```
+The interface describes the required method; it is not an extra
+processing step. The supplied provider performs the actual retrieval
+and returns the service's `Issue` model.
 
-The application operates on the `Issue` domain model, while the provider implementation handles Trello-specific details.
+## Provider Selection
+
+`app/dependencies.py` defines `get_issue_provider()`, which creates
+and returns a `TrelloIssueProvider` during normal operation.
+
+The endpoint declares this dependency using
+`Annotated[IssueProvider, Depends(get_issue_provider)]`.
+FastAPI calls the supplier and passes the resulting object to the
+endpoint when handling a request.
+
+The concrete provider choice is kept in `app/dependencies.py`.
+Trello authentication, requests, and response translation remain
+in `app/provider.py`.
+
+A new provider object is created for each request. It stores no
+shared mutable state. The Trello implementation reads credentials
+from environment variables when retrieving an issue.
 
 ## Testing
 
-Provider tests are located in `tests/test_provider.py`.
+### Provider tests
 
-They verify:
+`tests/test_provider.py` checks the provider's interface compatibility,
+response translation, and handling of missing issues and invalid
+responses. Its runtime protocol check confirms the required method
+is present; it does not establish full behavioral correctness.
 
-- Compliance with the `IssueProvider` contract.
-- Translation of Trello responses into the `Issue` model.
-- Handling of missing issues and invalid provider responses.
+### Endpoint tests with simulated Trello responses
 
-Existing endpoint tests remain in `tests/test_get_issue.py`.
+`tests/test_get_issue.py` exercises the endpoint and real Trello
+implementation while replacing network calls with controlled
+responses. These tests cover request construction, translation,
+credentials, and provider failures without contacting Trello.
+
+### Endpoint tests with supplied providers
+
+`tests/test_injected_provider.py` supplies alternative implementations
+through `app.dependency_overrides`.
+
+These tests verify that:
+
+- The endpoint uses the supplied provider and returns its result.
+- Invalid IDs are rejected without calling the provider's retrieval method.
+- A missing-issue error from the provider produces the expected 404 response.
+
+The successful retrieval test removes Trello credentials and fails
+if the real Trello retrieval method is called. Overrides and other
+temporary changes are restored automatically by pytest's
+`monkeypatch` fixture.
+
+### Live Trello verification
+
+Offline tests do not establish that real credentials and Trello
+access work. Follow [Trello Verification](../README.md#trello-verification)
+to verify the normally configured service against a real test card.
 
 ## Current Scope
 
-The interface contains only one operation because issue retrieval is the only provider behavior required at this stage.
+The interface contains one operation: issue retrieval.
+Trello remains the provider during normal operation, while tests
+can supply controlled implementations without changing endpoint code.
 
-Level 3 does not require runtime provider replacement or dependency injection. Those capabilities will be introduced in Level 4.
+No additional real provider or runtime provider-selection feature
+is implemented.

@@ -1,0 +1,95 @@
+import pytest
+from fastapi import HTTPException
+from fastapi.testclient import TestClient
+
+from app.dependencies import get_issue_provider
+from app.interface import IssueProvider
+from app.main import app
+from app.models import Issue
+from app.provider import TrelloIssueProvider
+
+
+def test_endpoint_uses_supplied_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    issue_id = "64f1c0a2b3d4e5f607182930"
+    requested_ids: list[str] = []
+
+    class FakeIssueProvider:
+        def get_issue(self, issue_id: str) -> Issue:
+            requested_ids.append(issue_id)
+            return Issue(id=issue_id, title="Issue from the fake provider")
+
+    def supply_fake_provider() -> IssueProvider:
+        return FakeIssueProvider()
+
+    # The test must work without Trello credentials.
+    monkeypatch.delenv("TRELLO_API_KEY", raising=False)
+    monkeypatch.delenv("TRELLO_TOKEN", raising=False)
+
+    # Fail if the endpoint accidentally uses the real Trello implementation.
+    def forbid_trello(self: TrelloIssueProvider, issue_id: str) -> Issue:
+        raise AssertionError("This test must not use Trello")
+
+    monkeypatch.setattr(TrelloIssueProvider, "get_issue", forbid_trello)
+
+    # Tell FastAPI to supply our fake instead of the normal provider.
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        get_issue_provider,
+        supply_fake_provider,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(f"/issues/{issue_id}")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": issue_id,
+        "title": "Issue from the fake provider",
+    }
+    assert requested_ids == [issue_id]
+
+
+def test_invalid_id_does_not_call_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnexpectedCallProvider:
+        def get_issue(self, issue_id: str) -> Issue:
+            raise AssertionError("Invalid IDs must not reach the provider")
+
+    def supply_provider() -> IssueProvider:
+        return UnexpectedCallProvider()
+
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        get_issue_provider,
+        supply_provider,
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/issues/does-not-exist")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Issue not found"}
+
+
+def test_provider_missing_issue_returns_404(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class MissingIssueProvider:
+        def get_issue(self, issue_id: str) -> Issue:
+            raise HTTPException(status_code=404, detail="Issue not found")
+
+    def supply_provider() -> IssueProvider:
+        return MissingIssueProvider()
+
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        get_issue_provider,
+        supply_provider,
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/issues/64f1c0a2b3d4e5f607182930")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Issue not found"}
