@@ -1,10 +1,13 @@
-from app.interface import IssueProvider
-from app.provider import TrelloIssueProvider
 import io
 import json
-from app.models import Issue
-from app import provider as provider_module
+
 import pytest
+
+from app import provider as provider_module
+from app.interface import IssueProvider
+from app.models import Issue
+from app.provider import TrelloIssueProvider
+
 
 def test_trello_implements_issue_provider():
     #Abstraction test
@@ -41,6 +44,7 @@ def test_trello_translates_card_to_issue(monkeypatch):
 from email.message import Message
 from urllib.error import HTTPError
 from urllib.request import Request
+
 from fastapi import HTTPException
 
 

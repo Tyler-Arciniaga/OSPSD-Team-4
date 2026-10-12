@@ -2,9 +2,9 @@ import re
 
 from fastapi import FastAPI, HTTPException
 
+from app.interface import IssueProvider
 from app.models import Issue
 from app.provider import TrelloIssueProvider
-from app.interface import IssueProvider
 
 app = FastAPI(title="Issue Tracking Service")
 

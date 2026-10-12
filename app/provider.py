@@ -1,12 +1,11 @@
 import json
 import os
-
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from fastapi import HTTPException
-from app.models import Issue
 
+from app.models import Issue
 
 
 class TrelloIssueProvider:

@@ -2,12 +2,13 @@ import io
 import json
 from email.message import Message
 from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, urlsplit
 from urllib.request import Request
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main
+from app import main, provider
 
 client = TestClient(main.app)
 
@@ -23,17 +24,20 @@ def trello_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     def forbid_network(*args: object, **kwargs: object) -> None:
         raise AssertionError("Tests must not contact Trello")
 
-    monkeypatch.setattr(main, "urlopen", forbid_network)
+    monkeypatch.setattr(provider, "urlopen", forbid_network)
 
 
 def test_get_issue_returns_id_and_title(monkeypatch: pytest.MonkeyPatch):
     def get_card(request: Request, timeout: int) -> io.BytesIO:
-        assert request.full_url == (
-            f"https://api.trello.com/1/cards/{KNOWN_ISSUE_ID}?fields=id,name"
-        )
-        assert request.get_header("Authorization") == (
-            'OAuth oauth_consumer_key="test-key", oauth_token="test-token"'
-        )
+        parsed = urlsplit(request.full_url)
+
+        assert parsed.path == f"/1/cards/{KNOWN_ISSUE_ID}"
+        assert parse_qs(parsed.query) == {
+            "fields": ["id,name"],
+            "key": ["test-key"],
+            "token": ["test-token"],
+        }
+        assert request.get_header("Authorization") is None
         assert timeout == 10
         return io.BytesIO(
             json.dumps(
@@ -41,7 +45,7 @@ def test_get_issue_returns_id_and_title(monkeypatch: pytest.MonkeyPatch):
             ).encode()
         )
 
-    monkeypatch.setattr(main, "urlopen", get_card)
+    monkeypatch.setattr(provider, "urlopen", get_card)
     response = client.get(f"/issues/{KNOWN_ISSUE_ID}")
 
     assert response.status_code == 200
@@ -69,7 +73,7 @@ def test_trello_http_errors(
             request.full_url, status, "private provider message", Message(), None
         )
 
-    monkeypatch.setattr(main, "urlopen", fail)
+    monkeypatch.setattr(provider, "urlopen", fail)
     response = client.get(f"/issues/{KNOWN_ISSUE_ID}")
     assert response.status_code == expected
     assert response.json() == {
@@ -82,7 +86,7 @@ def test_trello_network_failure(monkeypatch: pytest.MonkeyPatch, error: Exceptio
     def fail(request: Request, timeout: int) -> None:
         raise error
 
-    monkeypatch.setattr(main, "urlopen", fail)
+    monkeypatch.setattr(provider, "urlopen", fail)
     response = client.get(f"/issues/{KNOWN_ISSUE_ID}")
     assert response.status_code == 502
     assert response.json() == {"detail": "Trello request failed"}
@@ -92,7 +96,7 @@ def test_trello_network_failure(monkeypatch: pytest.MonkeyPatch, error: Exceptio
     "payload", [b"not json", b"{}", b"[]", b'{"id":"wrong","name":"Title"}']
 )
 def test_invalid_trello_response(monkeypatch: pytest.MonkeyPatch, payload: bytes):
-    monkeypatch.setattr(main, "urlopen", lambda request, timeout: io.BytesIO(payload))
+    monkeypatch.setattr(provider, "urlopen", lambda request, timeout: io.BytesIO(payload))
     response = client.get(f"/issues/{KNOWN_ISSUE_ID}")
     assert response.status_code == 502
     assert response.json() == {"detail": "Trello request failed"}
