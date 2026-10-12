@@ -169,6 +169,85 @@ HTTP/1.1 422
 The reason phrase after `422` depends on the Python version running the
 service; callers should rely on the status code.
 
+## Update an issue
+
+Change one or more fields of an existing issue and return the updated issue.
+Fields left out of the request body are not changed.
+
+| Item | Value |
+| --- | --- |
+| Method | `PATCH` |
+| Route | `/issues/{issue_id}` |
+| Changes state? | Yes. Updates the issue in the provider. |
+| Success status | `200 OK` |
+
+### Parameters
+
+| Name | Location | Type | Required | Description |
+| --- | --- | --- | --- | --- |
+| `issue_id` | path | string | yes | The full Trello card ID of the issue to update (24 lowercase hexadecimal characters). |
+
+### Request body
+
+A JSON object containing at least one of the fields below.
+
+```json
+{
+  "title": "Renamed issue"
+}
+```
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `title` | string | no | The new title. 1 to 256 characters, containing at least one non-whitespace character. Sent to the provider as given, without trimming. |
+
+`title` is currently the only field that can be changed, and it follows the
+same rule as in [Create an issue](#create-an-issue). Unknown fields are
+rejected rather than ignored, so a typo cannot be silently dropped.
+
+### Successful response
+
+Status `200 OK`, with the updated issue in the same shape as
+[Get an issue](#get-an-issue):
+
+```json
+{
+  "id": "64f1c0a2b3d4e5f607182930",
+  "title": "Renamed issue"
+}
+```
+
+### Errors
+
+| Situation | Status | Body |
+| --- | --- | --- |
+| No issue exists with the given `issue_id` | `404 Not Found` | `{"detail": "Issue not found"}` |
+| Malformed identifier (including a short card link) | `404 Not Found` | `{"detail": "Issue not found"}` |
+| Body is missing or not JSON, the object is empty, or `title` is `null`, not a string, empty, whitespace-only, or longer than 256 characters | `422 Unprocessable Content` | FastAPI's validation error format (`{"detail": [...]}`) |
+| Body contains a field other than `title` | `422 Unprocessable Content` | FastAPI's validation error format (`{"detail": [...]}`) |
+| Service credentials are missing | `503 Service Unavailable` | `{"detail": "Trello credentials not configured"}` |
+| Trello rejects the request, cannot be reached, times out, or returns an invalid response | `502 Bad Gateway` | `{"detail": "Trello request failed"}` |
+
+The request body is validated before the identifier, so a request with both
+an invalid body and a malformed ID returns `422`. Rejected requests never
+reach Trello.
+
+Setting the same title again returns `200` and leaves the issue unchanged,
+so repeating a successful request is safe. After a `502`, the update may or
+may not have been applied; read the issue with `GET` before retrying.
+
+### Example
+
+```bash
+curl -i -X PATCH http://127.0.0.1:8000/issues/64f1c0a2b3d4e5f607182930 \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Renamed issue"}'
+```
+
+```json
+{"id": "64f1c0a2b3d4e5f607182930", "title": "Renamed issue"}
+```
+
 ## Delete an issue
 
 Permanently delete an existing issue from the provider. With Trello this
@@ -220,9 +299,10 @@ HTTP/1.1 204 No Content
 
 ## What callers can rely on
 
-- A GET `200` or POST `201` response always contains `id` and `title` and nothing else.
+- A GET or PATCH `200` or POST `201` response always contains `id` and `title` and nothing else.
 - Repeating a GET request has no side effects.
 - Each `201` response means exactly one new issue was created. A `422` or `503` response means none was created.
+- A `PATCH` changes only the fields included in the request body.
 - A successful DELETE returns `204` with no body and removes the issue.
 - The routes, methods, and response shapes above will not change without an update to this document.
 
@@ -233,8 +313,8 @@ These affect observable behavior and are not guaranteed by the assignment spec, 
 - **`id` is an opaque string.** Callers should treat it as an identifier to pass back to the service. They should not parse it or assume a format.
 - **`title` is always present.** An issue without a title is not part of this contract.
 - **Real data.** The example ID and title illustrate the response shape; they are not seeded resources. Supply a full card ID accessible to the configured Trello account. Card short links are not supported, ensuring the response ID equals the requested ID.
-- **Provider translation.** GET and POST translate Trello's `id` into `id` and `name` into `title`, without caching. POST creates a Trello card. DELETE permanently removes the Trello card and returns no provider data.
-- **Created titles.** The title is sent to the provider as given, without trimming. The response returns the title as the provider reports it after creation.
+- **Provider translation.** GET and POST translate Trello's `id` into `id` and `name` into `title`, without caching. POST creates a Trello card. PATCH sends `title` as the card's `name` and returns the card as Trello reports it afterwards. DELETE permanently removes the Trello card and returns no provider data.
+- **Created and updated titles.** POST and PATCH share one title rule (`IssueTitle` in `app/models.py`). The title is sent to the provider as given, without trimming. The response returns the title as the provider reports it after creation or update.
 - **Title limit.** The 256-character limit is a service rule for a short title, not a provider limit. Any provider must accept titles at least that long.
 - **Where new issues go.** New issues are created in a single target location chosen by the service operator (for Trello, the list named by `TRELLO_LIST_ID`). Callers cannot choose it. Support for more than one location would be added as a provider-independent field, not as a provider ID.
 - **Only `id` and `title` are returned or accepted.** Other issue fields (status, description, assignee, and so on) are left out on purpose, because they are not needed for the smallest useful operation. We will add fields only when an operation needs them.

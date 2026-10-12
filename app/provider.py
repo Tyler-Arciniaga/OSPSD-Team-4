@@ -1,13 +1,14 @@
 import json
 import os
 import re
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from fastapi import HTTPException
 
-from app.models import ISSUE_ID_PATTERN, Issue
+from app.models import ISSUE_ID_PATTERN, Issue, IssueUpdate
 
 
 def _credentials() -> tuple[str, str]:
@@ -22,7 +23,16 @@ def _credentials() -> tuple[str, str]:
 class TrelloIssueProvider:
     def get_issue(self, issue_id: str) -> Issue:
         """Retrieve a Trello card and convert it into an Issue."""
-        issue = self._request_card("GET", issue_id)
+        issue = self._request_card("GET", issue_id, {"fields": "id,name"})
+        assert issue is not None
+        return issue
+
+    def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
+        """Update a Trello card and convert the result into an Issue."""
+        params: dict[str, str] = {}
+        if changes.title is not None:
+            params["name"] = changes.title
+        issue = self._request_card("PUT", issue_id, params)
         assert issue is not None
         return issue
 
@@ -73,15 +83,16 @@ class TrelloIssueProvider:
                 status_code=502, detail="Trello request failed"
             ) from None
 
-    def _request_card(self, method: str, issue_id: str) -> Issue | None:
-        """Send one card request with shared authentication and error mapping."""
+    def _request_card(
+        self, method: str, issue_id: str, params: dict[str, str] | None = None
+    ) -> Issue | None:
+        """Send one card request with shared authentication and error mapping.
+
+        Returns the translated card, or None for DELETE (which has no card body).
+        """
         key, token = _credentials()
 
-        params = {"key": key, "token": token}
-        if method == "GET":
-            params["fields"] = "id,name"
-        query = urlencode(params)
-
+        query = urlencode({**(params or {}), "key": key, "token": token})
         request = Request(
             f"https://api.trello.com/1/cards/{issue_id}?{query}",
             headers={"Accept": "application/json"},
@@ -91,7 +102,7 @@ class TrelloIssueProvider:
             with urlopen(request, timeout=10) as response:
                 if method == "DELETE":
                     return None
-                card = json.load(response)
+                card: Any = json.load(response)
             issue = Issue(id=card["id"], title=card["name"])
             if issue.id != issue_id:
                 raise ValueError("Unexpected card ID")

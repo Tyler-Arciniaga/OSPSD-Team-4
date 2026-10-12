@@ -16,9 +16,10 @@ We are building a FastAPI backend service for the Issue Tracker vertical, using 
 
 ## Project Status
 
-The service implements `GET /issues/{issue_id}`, `POST /issues`, and
-`DELETE /issues/{issue_id}` against Trello. GET and POST translate a card's
-`id` and `name` into the public `id` and `title` fields; DELETE permanently
+The service implements `GET /issues/{issue_id}`, `POST /issues`,
+`PATCH /issues/{issue_id}`, and `DELETE /issues/{issue_id}` against Trello.
+GET, POST, and PATCH translate a card's `id` and `name` into the public `id`
+and `title` fields; PATCH updates an issue's `title`; DELETE permanently
 removes the card. Automated tests run without credentials or network access.
 
 GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests.
@@ -26,7 +27,7 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 ## Project Structure
 
 - `app/main.py`: FastAPI endpoints, which validate input and call the supplied provider.
-- `app/models.py`: Public issue response model and issue creation request model.
+- `app/models.py`: Public `Issue` response model, `IssueCreate` and `IssueUpdate` request models, and the shared `IssueTitle` rule.
 - `app/interface.py`: Provider-independent `IssueProvider` contract.
 - `app/provider.py`: Trello authentication, requests, and response translation.
 - `app/dependencies.py`: Creates and supplies the Trello provider to the endpoints.
@@ -34,6 +35,7 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 - `tests/test_create_issue.py`: Creation endpoint tests with simulated Trello responses.
 - `tests/test_provider.py`: Provider compatibility, translation, and error tests.
 - `tests/test_injected_provider.py`: Endpoint tests using supplied fake providers.
+- `tests/test_update_issue.py`: `PATCH` endpoint tests with simulated Trello responses and supplied providers.
 - `tests/test_delete_issue.py`: DELETE request, failure, and injected-provider workflow tests.
 - `docs/api.md`: API contract, examples, and assumptions.
 - `docs/providers.md`: Provider interface, dependency setup, and testing approach.
@@ -64,8 +66,8 @@ not necessary.
 
 Use a dedicated Trello test account and a private test board containing a
 card your team may change and a list your team may add cards to. The
-account granting the token must be able to read the board and create and
-delete its test cards.
+account granting the token must be able to read the board and create, edit,
+and delete its test cards.
 
 1. Sign in to the test account. Create an app in the
    [Trello developer portal](https://trello.com/apps/admin), selecting
@@ -73,7 +75,7 @@ delete its test cards.
    generate an API key.
 2. In a browser, replace `YOUR_API_KEY` in this URL with that key and approve
    read and write access (the token expires after one day). Write access is
-   required for POST and DELETE:
+   required for POST, PATCH, and DELETE:
    `https://trello.com/1/authorize?expiration=1day&scope=read,write&response_type=token&key=YOUR_API_KEY`.
 3. Copy the credential template if you do not already have a `.env` file:
 
@@ -152,6 +154,19 @@ and a body of the same shape as above containing the new card's ID and
 title. A missing, empty, whitespace-only, or over-256-character title, or any
 field other than `title`, returns `422`.
 
+Update an issue's title using `PATCH /issues/{issue_id}`:
+
+```bash
+curl -i -X PATCH http://127.0.0.1:8000/issues/64f1c0a2b3d4e5f607182930 \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Renamed issue"}'
+```
+
+Expected status: `200 OK`, with the updated issue in the same shape as
+above. An empty body, or a title that breaks the same rules as POST
+(missing, empty, whitespace-only, or over 256 characters), or any field
+other than `title`, returns `422`.
+
 Permanently delete a disposable test issue:
 
 ```bash
@@ -209,11 +224,12 @@ Run all automated tests:
 uv run --locked pytest
 ```
 
-Tests cover all three endpoints, request body validation, Trello request
-construction and response translation, missing credentials or target issue
-list, and provider failures. They also verify that the endpoints can use a
-supplied fake provider, invalid DELETE IDs and invalid POST bodies cause no
-provider call, and deleted issues cannot be read or deleted again.
+Tests cover all four endpoints, request body validation (including the
+shared title rule for POST and PATCH), Trello request construction and
+response translation, missing credentials or target issue list, and provider
+failures. They also verify that the endpoints can use a supplied fake
+provider, invalid IDs and invalid bodies cause no provider call, and deleted
+issues cannot be read or deleted again.
 
 The tests use simulated responses or fake providers and require no
 running server, real credentials, or network access. Live Trello
@@ -256,7 +272,18 @@ for the provider setup and the responsibilities of each test file.
    with the same body.
 6. Repeat the request with `-d '{"title": ""}'`. Expect HTTP 422 and
    confirm no new card appears in Trello.
-7. Delete the disposable test card through the service:
+7. Rename the step 2 test card through the service:
+
+   ```bash
+   curl -i -X PATCH "http://127.0.0.1:8000/issues/$TRELLO_TEST_CARD_ID" \
+     -H "Content-Type: application/json" \
+     -d '{"title": "HW1 PATCH test"}'
+   ```
+
+   Expect HTTP 200 with the same ID and the new title. Confirm in Trello
+   that the card's name changed, then repeat the step 2 `GET` and expect
+   the new title.
+8. Delete the disposable test card through the service:
 
    ```bash
    curl -i -X DELETE "http://127.0.0.1:8000/issues/$TRELLO_TEST_CARD_ID"
@@ -265,7 +292,7 @@ for the provider setup and the responsibilities of each test file.
    Expect HTTP 204 with an empty body. Confirm the card is gone in Trello.
    Repeat GET and DELETE for the same ID; both should return HTTP 404 and
    `{"detail":"Issue not found"}`. Record the observed results in the PR.
-8. Delete any remaining disposable cards (including the card created in
+9. Delete any remaining disposable cards (including the card created in
    step 5) and any board created only for this check.
    Revoke the token from the test account's Settings > Applications page
    when finished, stop the server, clear credentials from `.env`, and run
@@ -274,9 +301,11 @@ for the provider setup and the responsibilities of each test file.
 Each GET makes one [Get a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-get)
 request for `id,name`. Each POST makes one
 [Create a new Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-post)
-request with `idList` and `name`. Each DELETE makes one
+request with `idList` and `name`. Each PATCH makes one
+[Update a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-put)
+request. Each DELETE makes one
 [Delete a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-delete)
-request and ignores the successful response body. All three use a 10-second
+request and ignores the successful response body. All four use a 10-second
 socket timeout with no retries or caching. See [the API contract](docs/api.md)
 for errors and supported IDs.
 
