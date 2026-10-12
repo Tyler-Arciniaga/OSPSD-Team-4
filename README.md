@@ -24,10 +24,16 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 
 ## Project Structure
 
-- `app/main.py`: FastAPI application and issue retrieval endpoint.
+- `app/main.py`: FastAPI endpoint, which validates the ID and calls the supplied provider.
 - `app/models.py`: Public response model for an issue.
-- `tests/test_get_issue.py`: Offline tests for retrieval, translation, and failures.
+- `app/interface.py`: Provider-independent `IssueProvider` contract.
+- `app/provider.py`: Trello authentication, requests, and response translation.
+- `app/dependencies.py`: Creates and supplies the Trello provider to the endpoint.
+- `tests/test_get_issue.py`: Endpoint tests with simulated Trello responses.
+- `tests/test_provider.py`: Provider compatibility, translation, and error tests.
+- `tests/test_injected_provider.py`: Endpoint tests using supplied fake providers.
 - `docs/api.md`: API contract, examples, and assumptions.
+- `docs/providers.md`: Provider interface, dependency setup, and testing approach.
 - `pyproject.toml`: Python requirement, dependencies, and tool configuration.
 - `uv.lock`: Locked dependency versions for reproducible installation.
 - `.github/workflows/ci.yml`: Automated linting, formatting, type checking, and tests.
@@ -161,14 +167,22 @@ uv run --locked mypy app tests
 
 ### Automated Tests
 
-Run the behavior tests:
+Run all automated tests:
 
 ```bash
 uv run --locked pytest
 ```
 
-Tests cover retrieval, field translation, authentication, and failures
-without a running server, real credentials, or network access.
+Tests cover endpoint behavior, Trello request construction and response
+translation, missing credentials, and provider failures. They also verify
+that the endpoint can use a supplied fake provider.
+
+The tests use simulated responses or fake providers and require no
+running server, real credentials, or network access. Live Trello
+verification is performed separately as described below.
+
+See [Provider Interface and Dependency Injection](docs/providers.md)
+for the provider setup and the responsibilities of each test file.
 
 ## Trello Verification
 
