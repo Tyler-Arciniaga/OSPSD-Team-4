@@ -1,12 +1,22 @@
 import json
 import os
+import re
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from fastapi import HTTPException
 
-from app.models import Issue
+from app.models import ISSUE_ID_PATTERN, Issue
+
+
+def _credentials() -> tuple[str, str]:
+    """Return the Trello API key and token, or fail if either is missing."""
+    key = os.environ.get("TRELLO_API_KEY")
+    token = os.environ.get("TRELLO_TOKEN")
+    if not key or not token:
+        raise HTTPException(status_code=503, detail="Trello credentials not configured")
+    return key, token
 
 
 class TrelloIssueProvider:
@@ -20,14 +30,52 @@ class TrelloIssueProvider:
         """Permanently delete a Trello card."""
         self._request_card("DELETE", issue_id)
 
+    def create_issue(self, title: str) -> Issue:
+        """Create a Trello card in the configured list and convert it into an Issue."""
+
+        key, token = _credentials()
+        list_id = os.environ.get("TRELLO_LIST_ID")
+        if not list_id:
+            raise HTTPException(status_code=503, detail="Trello list not configured")
+
+        params = urlencode(
+            {
+                "idList": list_id,
+                "name": title,
+                "key": key,
+                "token": token,
+            }
+        )
+
+        request = Request(
+            f"https://api.trello.com/1/cards?{params}",
+            headers={"Accept": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=10) as response:
+                card = json.load(response)
+            # re.fullmatch raises TypeError if the ID is not a string.
+            if not re.fullmatch(ISSUE_ID_PATTERN, card["id"]):
+                raise ValueError("Unexpected card ID")
+            if not isinstance(card["name"], str):
+                raise TypeError("Unexpected card name")
+            return Issue(id=card["id"], title=card["name"])
+        except HTTPError as exc:
+            # A Trello 404 here means the configured list is wrong, not a
+            # missing issue, so every rejection is reported as a failure.
+            exc.close()
+            raise HTTPException(
+                status_code=502, detail="Trello request failed"
+            ) from None
+        except (URLError, OSError, ValueError, KeyError, TypeError):
+            raise HTTPException(
+                status_code=502, detail="Trello request failed"
+            ) from None
+
     def _request_card(self, method: str, issue_id: str) -> Issue | None:
         """Send one card request with shared authentication and error mapping."""
-        key = os.environ.get("TRELLO_API_KEY")
-        token = os.environ.get("TRELLO_TOKEN")
-        if not key or not token:
-            raise HTTPException(
-                status_code=503, detail="Trello credentials not configured"
-            )
+        key, token = _credentials()
 
         params = {"key": key, "token": token}
         if method == "GET":
