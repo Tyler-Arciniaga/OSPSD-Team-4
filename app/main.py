@@ -1,7 +1,7 @@
 import re
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response
 
 from app.dependencies import get_issue_provider
 from app.interface import IssueProvider
@@ -10,13 +10,28 @@ from app.models import Issue
 app = FastAPI(title="Issue Tracking Service")
 
 
+def require_valid_issue_id(issue_id: str) -> None:
+    """Reject malformed IDs before they reach the provider."""
+    if not re.fullmatch(r"[0-9a-f]{24}", issue_id):
+        raise HTTPException(status_code=404, detail="Issue not found")
+
+
 @app.get("/issues/{issue_id}", response_model=Issue)
 def get_issue(
     issue_id: str,
     provider: Annotated[IssueProvider, Depends(get_issue_provider)],
 ) -> Issue:
     """Retrieve an issue by its full ID using the supplied provider."""
-    if not re.fullmatch(r"[0-9a-f]{24}", issue_id):
-        raise HTTPException(status_code=404, detail="Issue not found")
-
+    require_valid_issue_id(issue_id)
     return provider.get_issue(issue_id)
+
+
+@app.delete("/issues/{issue_id}", status_code=204, response_class=Response)
+def delete_issue(
+    issue_id: str,
+    provider: Annotated[IssueProvider, Depends(get_issue_provider)],
+) -> Response:
+    """Permanently delete an issue by its full ID using the supplied provider."""
+    require_valid_issue_id(issue_id)
+    provider.delete_issue(issue_id)
+    return Response(status_code=204)

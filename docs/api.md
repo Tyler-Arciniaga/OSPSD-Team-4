@@ -73,10 +73,60 @@ HTTP/1.1 404 Not Found
 {"detail":"Issue not found"}
 ```
 
+## Delete an issue
+
+Permanently delete an existing issue from the provider. With Trello this
+deletes the card, rather than archiving it.
+
+| Item | Value |
+| --- | --- |
+| Method | `DELETE` |
+| Route | `/issues/{issue_id}` |
+| Parameters | `issue_id`: full Trello card ID (24 lowercase hexadecimal characters) |
+| Request body | None required |
+| Changes state? | Yes. Permanently removes the issue. |
+| Success status | `204 No Content`, with an empty body |
+
+### Errors and repetition
+
+| Situation | Status | Body |
+| --- | --- | --- |
+| Missing issue, including an issue already deleted | `404 Not Found` | `{"detail": "Issue not found"}` |
+| Malformed identifier (including a short card link) | `404 Not Found` | `{"detail": "Issue not found"}` |
+| Service credentials are missing | `503 Service Unavailable` | `{"detail": "Trello credentials not configured"}` |
+| Trello rejects the request, cannot be reached, or times out | `502 Bad Gateway` | `{"detail": "Trello request failed"}` |
+
+Malformed IDs are rejected before any provider operation. DELETE uses the
+same initial error model as GET; the final Level 5 error model remains future
+work. A 503 requires credential configuration; rejected credentials or
+permissions require operator action.
+
+After a successful deletion, GET and repeated DELETE requests return 404.
+Repeated deletion does not restore or create an issue, although the status
+changes from 204 to 404.
+
+A 502 does not prove that the card still exists: Trello may have deleted it
+before the response was lost. Check with GET before deciding whether to
+retry. The service sends one DELETE request and never automatically retries
+or makes a preliminary GET request.
+
+### Example
+
+Use a disposable test card; deletion is permanent.
+
+```bash
+curl -i -X DELETE http://127.0.0.1:8000/issues/64f1c0a2b3d4e5f607182930
+```
+
+```http
+HTTP/1.1 204 No Content
+```
+
 ## What callers can rely on
 
-- A `200` response always contains `id` and `title` and nothing else.
-- Repeating the same request has no side effects.
+- A GET `200` response always contains `id` and `title` and nothing else.
+- Repeating a GET request has no side effects.
+- A successful DELETE returns `204` with no body and removes the issue.
 - The route, method, and response shape above will not change without an update to this document.
 
 ## Assumptions
@@ -86,6 +136,6 @@ These affect observable behavior and are not guaranteed by the assignment spec, 
 - **`id` is an opaque string.** Callers should treat it as an identifier to pass back to the service. They should not parse it or assume a format.
 - **`title` is always present.** An issue without a title is not part of this contract.
 - **Real data.** The example ID and title illustrate the response shape; they are not seeded resources. Supply a full card ID accessible to the configured Trello account. Card short links are not supported, ensuring the response ID equals the requested ID.
-- **Provider translation.** Trello's `id` becomes `id`, and `name` becomes `title`. Each request reads current Trello data; the service does not cache or modify it.
+- **Provider translation.** GET translates Trello's `id` into `id` and `name` into `title`, without caching. DELETE permanently removes the Trello card and returns no provider data.
 - **Only `id` and `title` are returned.** Other issue fields (status, description, assignee, and so on) are left out on purpose, because they are not needed for the smallest useful operation. We will add fields only when an operation needs them.
 - **Domain vocabulary.** This API says "issue" and does not use any provider's terms. Provider details do not appear in responses.

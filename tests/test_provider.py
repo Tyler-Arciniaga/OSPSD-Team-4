@@ -102,6 +102,9 @@ def test_provider_interchangeability():
         def get_issue(self, issue_id: str) -> Issue:
             return Issue(id=issue_id, title="Fake issue")
 
+        def delete_issue(self, issue_id: str) -> None:
+            pass
+
     fake_provider: IssueProvider = FakeIssueProvider()
 
     assert isinstance(fake_provider, IssueProvider)

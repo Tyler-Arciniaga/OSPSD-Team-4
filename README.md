@@ -16,22 +16,24 @@ We are building a FastAPI backend service for the Issue Tracker vertical, using 
 
 ## Project Status
 
-The service implements GET /issues/{issue_id} against Trello, translating a
-card's `id` and `name` into the public `id` and `title` fields. Automated
+The service implements `GET /issues/{issue_id}` and `DELETE /issues/{issue_id}`
+against Trello. GET translates a card's `id` and `name` into the public
+`id` and `title` fields; DELETE permanently removes the card. Automated
 tests run without credentials or network access.
 
 GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests.
 
 ## Project Structure
 
-- `app/main.py`: FastAPI endpoint, which validates the ID and calls the supplied provider.
+- `app/main.py`: FastAPI endpoints, which validate the ID and call the supplied provider.
 - `app/models.py`: Public response model for an issue.
 - `app/interface.py`: Provider-independent `IssueProvider` contract.
 - `app/provider.py`: Trello authentication, requests, and response translation.
-- `app/dependencies.py`: Creates and supplies the Trello provider to the endpoint.
+- `app/dependencies.py`: Creates and supplies the Trello provider to the endpoints.
 - `tests/test_get_issue.py`: Endpoint tests with simulated Trello responses.
 - `tests/test_provider.py`: Provider compatibility, translation, and error tests.
 - `tests/test_injected_provider.py`: Endpoint tests using supplied fake providers.
+- `tests/test_delete_issue.py`: DELETE request, failure, and injected-provider workflow tests.
 - `docs/api.md`: API contract, examples, and assumptions.
 - `docs/providers.md`: Provider interface, dependency setup, and testing approach.
 - `pyproject.toml`: Python requirement, dependencies, and tool configuration.
@@ -61,15 +63,16 @@ not necessary.
 
 Use a dedicated Trello test account and a private test board containing a
 card your team may change. The account granting the token must be able to
-read the board.
+read the board and delete its test cards.
 
 1. Sign in to the test account. Create an app in the
    [Trello developer portal](https://trello.com/apps/admin), selecting
    "My app doesn't use Power-up capabilities." Open **Trello Auth** and
    generate an API key.
 2. In a browser, replace `YOUR_API_KEY` in this URL with that key and approve
-   read-only access (the token expires after one day):
-   `https://trello.com/1/authorize?expiration=1day&scope=read&response_type=token&key=YOUR_API_KEY`.
+   read and write access (the token expires after one day). Write access is
+   required for DELETE:
+   `https://trello.com/1/authorize?expiration=1day&scope=read,write&response_type=token&key=YOUR_API_KEY`.
 3. Copy the credential template if you do not already have a `.env` file:
 
    ```bash
@@ -127,6 +130,17 @@ Replace the example ID with the full ID of your test card. The returned
 title is that card's current name. Unknown or malformed IDs return
 `404 Not Found`; Trello rejection or unavailability produces HTTP 502.
 
+Permanently delete a disposable test issue:
+
+```bash
+curl -i -X DELETE http://127.0.0.1:8000/issues/64f1c0a2b3d4e5f607182930
+```
+
+Expected status: `204 No Content`, with an empty body. Subsequent GET or
+DELETE requests for that issue return `404`. This deletes the Trello card,
+rather than archiving it. After a `502`, deletion may already have happened;
+check with GET before retrying. The service does not retry requests.
+
 See [the API contract](docs/api.md) for response fields, errors,
 and assumptions.
 
@@ -173,9 +187,10 @@ Run all automated tests:
 uv run --locked pytest
 ```
 
-Tests cover endpoint behavior, Trello request construction and response
+Tests cover both endpoints, Trello request construction and response
 translation, missing credentials, and provider failures. They also verify
-that the endpoint can use a supplied fake provider.
+that the endpoints can use a supplied fake provider, invalid DELETE IDs
+cause no provider call, and deleted issues cannot be read or deleted again.
 
 The tests use simulated responses or fake providers and require no
 running server, real credentials, or network access. Live Trello
@@ -203,14 +218,26 @@ for the provider setup and the responsibilities of each test file.
    Expect HTTP 200 with the new title and the same ID.
 4. Run `curl -i http://127.0.0.1:8000/issues/does-not-exist`.
    Expect HTTP 404 and `{"detail":"Issue not found"}`.
-5. Delete the disposable test card and any board created only for this check.
+5. Delete the disposable test card through the service:
+
+   ```bash
+   curl -i -X DELETE "http://127.0.0.1:8000/issues/$TRELLO_TEST_CARD_ID"
+   ```
+
+   Expect HTTP 204 with an empty body. Confirm the card is gone in Trello.
+   Repeat GET and DELETE for the same ID; both should return HTTP 404 and
+   `{"detail":"Issue not found"}`. Record the observed results in the PR.
+6. Delete any remaining disposable card or board created only for this check.
    Revoke the token from the test account's Settings > Applications page
    when finished, stop the server, clear credentials from `.env`, and run
    `unset TRELLO_API_KEY TRELLO_TOKEN` if you also exported them.
 
-Each service request makes one [Get a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-get)
-request for `id,name`, with a 10-second socket timeout and no retries or
-caching. See [the API contract](docs/api.md) for errors and supported IDs.
+Each GET makes one [Get a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-get)
+request for `id,name`. Each DELETE makes one
+[Delete a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-delete)
+request and ignores the successful response body. Both use a 10-second
+socket timeout with no retries or caching. See [the API contract](docs/api.md)
+for errors and supported IDs.
 
 ## Contributing
 
