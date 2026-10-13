@@ -16,21 +16,22 @@ We are building a FastAPI backend service for the Issue Tracker vertical, using 
 
 ## Project Status
 
-The service implements `GET /issues/{issue_id}` and `DELETE /issues/{issue_id}`
-against Trello. GET translates a card's `id` and `name` into the public
-`id` and `title` fields; DELETE permanently removes the card. Automated
-tests run without credentials or network access.
+The service implements `GET /issues/{issue_id}`, `POST /issues`, and
+`DELETE /issues/{issue_id}` against Trello. GET and POST translate a card's
+`id` and `name` into the public `id` and `title` fields; DELETE permanently
+removes the card. Automated tests run without credentials or network access.
 
 GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests.
 
 ## Project Structure
 
-- `app/main.py`: FastAPI endpoints, which validate the ID and call the supplied provider.
-- `app/models.py`: Public response model for an issue.
+- `app/main.py`: FastAPI endpoints, which validate input and call the supplied provider.
+- `app/models.py`: Public issue response model and issue creation request model.
 - `app/interface.py`: Provider-independent `IssueProvider` contract.
 - `app/provider.py`: Trello authentication, requests, and response translation.
 - `app/dependencies.py`: Creates and supplies the Trello provider to the endpoints.
-- `tests/test_get_issue.py`: Endpoint tests with simulated Trello responses.
+- `tests/test_get_issue.py`: Retrieval endpoint tests with simulated Trello responses.
+- `tests/test_create_issue.py`: Creation endpoint tests with simulated Trello responses.
 - `tests/test_provider.py`: Provider compatibility, translation, and error tests.
 - `tests/test_injected_provider.py`: Endpoint tests using supplied fake providers.
 - `tests/test_delete_issue.py`: DELETE request, failure, and injected-provider workflow tests.
@@ -62,8 +63,9 @@ not necessary.
 ## Configuration
 
 Use a dedicated Trello test account and a private test board containing a
-card your team may change. The account granting the token must be able to
-read the board and delete its test cards.
+card your team may change and a list your team may add cards to. The
+account granting the token must be able to read the board and create and
+delete its test cards.
 
 1. Sign in to the test account. Create an app in the
    [Trello developer portal](https://trello.com/apps/admin), selecting
@@ -71,7 +73,7 @@ read the board and delete its test cards.
    generate an API key.
 2. In a browser, replace `YOUR_API_KEY` in this URL with that key and approve
    read and write access (the token expires after one day). Write access is
-   required for DELETE:
+   required for POST and DELETE:
    `https://trello.com/1/authorize?expiration=1day&scope=read,write&response_type=token&key=YOUR_API_KEY`.
 3. Copy the credential template if you do not already have a `.env` file:
 
@@ -82,6 +84,11 @@ read the board and delete its test cards.
 
    Edit `.env` locally and fill in `TRELLO_API_KEY` and `TRELLO_TOKEN`.
    `.env` is ignored by Git. Do not commit credentials.
+4. Set `TRELLO_LIST_ID` in `.env` to the full ID of the list where new
+   issues should be created. To find it, open any card in that list,
+   append `.json` to its URL, and copy the top-level `idList` value
+   (24 hexadecimal characters). Retrieval works without this setting;
+   creation returns `503` until it is set.
 
 The startup command below loads `.env` into the service environment.
 Existing exported environment variables take precedence over values in
@@ -98,8 +105,8 @@ From the repository root, run:
 uv run --locked uvicorn app.main:app --reload --env-file .env
 ```
 
-The service runs at http://127.0.0.1:8000.
-Interactive API documentation is available at http://127.0.0.1:8000/docs.
+The service runs at <http://127.0.0.1:8000>.
+Interactive API documentation is available at <http://127.0.0.1:8000/docs>.
 
 The `--reload` option automatically restarts the server when code changes
 during development. Press Ctrl+C in the terminal to stop it.
@@ -107,7 +114,9 @@ during development. Press Ctrl+C in the terminal to stop it.
 ## API Usage
 
 Retrieve an issue using `GET /issues/{issue_id}`, where `issue_id` is
-the required issue identifier.
+the required issue identifier. Create an issue using `POST /issues`
+with a JSON body containing a `title`. Permanently delete an issue using
+`DELETE /issues/{issue_id}`.
 
 With the service running:
 
@@ -129,6 +138,19 @@ Expected response body:
 Replace the example ID with the full ID of your test card. The returned
 title is that card's current name. Unknown or malformed IDs return
 `404 Not Found`; Trello rejection or unavailability produces HTTP 502.
+
+To create an issue:
+
+```bash
+curl -i -X POST http://127.0.0.1:8000/issues \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Example issue"}'
+```
+
+Expected status: `201 Created`, with a `Location: /issues/<new ID>` header
+and a body of the same shape as above containing the new card's ID and
+title. A missing, empty, whitespace-only, or over-256-character title, or any
+field other than `title`, returns `422`.
 
 Permanently delete a disposable test issue:
 
@@ -187,10 +209,11 @@ Run all automated tests:
 uv run --locked pytest
 ```
 
-Tests cover both endpoints, Trello request construction and response
-translation, missing credentials, and provider failures. They also verify
-that the endpoints can use a supplied fake provider, invalid DELETE IDs
-cause no provider call, and deleted issues cannot be read or deleted again.
+Tests cover all three endpoints, request body validation, Trello request
+construction and response translation, missing credentials or target issue
+list, and provider failures. They also verify that the endpoints can use a
+supplied fake provider, invalid DELETE IDs and invalid POST bodies cause no
+provider call, and deleted issues cannot be read or deleted again.
 
 The tests use simulated responses or fake providers and require no
 running server, real credentials, or network access. Live Trello
@@ -218,7 +241,22 @@ for the provider setup and the responsibilities of each test file.
    Expect HTTP 200 with the new title and the same ID.
 4. Run `curl -i http://127.0.0.1:8000/issues/does-not-exist`.
    Expect HTTP 404 and `{"detail":"Issue not found"}`.
-5. Delete the disposable test card through the service:
+5. With `TRELLO_LIST_ID` set to the test card's `idList`, create an issue:
+
+   ```bash
+   curl -i -X POST http://127.0.0.1:8000/issues \
+     -H "Content-Type: application/json" \
+     -d '{"title": "HW1 POST test"}'
+   ```
+
+   Expect HTTP 201, a `Location: /issues/<new ID>` header, and
+   `{"id":"<new ID>","title":"HW1 POST test"}`. Confirm a card with that
+   name appears in the configured list in Trello, then run
+   `curl -i "http://127.0.0.1:8000/issues/<new ID>"` and expect HTTP 200
+   with the same body.
+6. Repeat the request with `-d '{"title": ""}'`. Expect HTTP 422 and
+   confirm no new card appears in Trello.
+7. Delete the disposable test card through the service:
 
    ```bash
    curl -i -X DELETE "http://127.0.0.1:8000/issues/$TRELLO_TEST_CARD_ID"
@@ -227,15 +265,18 @@ for the provider setup and the responsibilities of each test file.
    Expect HTTP 204 with an empty body. Confirm the card is gone in Trello.
    Repeat GET and DELETE for the same ID; both should return HTTP 404 and
    `{"detail":"Issue not found"}`. Record the observed results in the PR.
-6. Delete any remaining disposable card or board created only for this check.
+8. Delete any remaining disposable cards (including the card created in
+   step 5) and any board created only for this check.
    Revoke the token from the test account's Settings > Applications page
    when finished, stop the server, clear credentials from `.env`, and run
-   `unset TRELLO_API_KEY TRELLO_TOKEN` if you also exported them.
+   `unset TRELLO_API_KEY TRELLO_TOKEN TRELLO_LIST_ID` if you also exported them.
 
 Each GET makes one [Get a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-get)
-request for `id,name`. Each DELETE makes one
+request for `id,name`. Each POST makes one
+[Create a new Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-post)
+request with `idList` and `name`. Each DELETE makes one
 [Delete a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-delete)
-request and ignores the successful response body. Both use a 10-second
+request and ignores the successful response body. All three use a 10-second
 socket timeout with no retries or caching. See [the API contract](docs/api.md)
 for errors and supported IDs.
 
