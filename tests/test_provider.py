@@ -105,6 +105,9 @@ def test_provider_interchangeability():
         def delete_issue(self, issue_id: str) -> None:
             pass
 
+        def create_issue(self, title: str) -> Issue:
+            return Issue(id="issue-456", title=title)
+
     fake_provider: IssueProvider = FakeIssueProvider()
 
     assert isinstance(fake_provider, IssueProvider)
@@ -113,3 +116,58 @@ def test_provider_interchangeability():
 
     assert result.id == "issue-123"
     assert result.title == "Fake issue"
+
+    created = fake_provider.create_issue("New fake issue")
+
+    assert created.id == "issue-456"
+    assert created.title == "New fake issue"
+
+
+def test_trello_translates_created_card_to_issue(monkeypatch):
+    issue_id = "64f1c0a2b3d4e5f607182930"
+
+    monkeypatch.setenv("TRELLO_API_KEY", "test-key")
+    monkeypatch.setenv("TRELLO_TOKEN", "test-token")
+    monkeypatch.setenv("TRELLO_LIST_ID", "5f1c0a2b3d4e5f6071829304")
+
+    card = {
+        "id": issue_id,
+        "name": "Fix login bug",
+        "idList": "5f1c0a2b3d4e5f6071829304",
+        "desc": "",
+    }
+
+    def fake_urlopen(request, timeout):
+        return io.BytesIO(json.dumps(card).encode())
+
+    monkeypatch.setattr(provider_module, "urlopen", fake_urlopen)
+
+    result = TrelloIssueProvider().create_issue("Fix login bug")
+
+    assert isinstance(result, Issue)
+    assert result.model_dump() == {"id": issue_id, "title": "Fix login bug"}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"not json",  # Invalid JSON
+        b'{"id":"64f1c0a2b3d4e5f607182930"}',  # Missing name
+        b'{"id":"short","name":"Fix login bug"}',  # Malformed ID
+    ],
+)
+def test_trello_rejects_malformed_created_card(monkeypatch, payload):
+    monkeypatch.setenv("TRELLO_API_KEY", "test-key")
+    monkeypatch.setenv("TRELLO_TOKEN", "test-token")
+    monkeypatch.setenv("TRELLO_LIST_ID", "5f1c0a2b3d4e5f6071829304")
+
+    def fake_urlopen(request, timeout):
+        return io.BytesIO(payload)
+
+    monkeypatch.setattr(provider_module, "urlopen", fake_urlopen)
+
+    with pytest.raises(HTTPException) as exc:
+        TrelloIssueProvider().create_issue("Fix login bug")
+
+    assert exc.value.status_code == 502
+    assert exc.value.detail == "Trello request failed"

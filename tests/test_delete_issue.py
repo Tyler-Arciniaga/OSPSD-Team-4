@@ -137,6 +137,9 @@ def test_delete_uses_injected_provider_and_cannot_be_retrieved_or_deleted_again(
             del issues[issue_id]
             deleted_ids.append(issue_id)
 
+        def create_issue(self, title: str) -> Issue:
+            raise AssertionError("DELETE must not create an issue")
+
     def supply_provider() -> IssueProvider:
         return FakeIssueProvider()
 
@@ -168,6 +171,9 @@ def test_delete_invalid_id_does_not_call_injected_provider(
 
         def delete_issue(self, issue_id: str) -> None:
             raise AssertionError("Invalid IDs must not reach the provider")
+
+        def create_issue(self, title: str) -> Issue:
+            raise AssertionError("DELETE must not create an issue")
 
     def supply_provider() -> IssueProvider:
         return UnexpectedCallProvider()
