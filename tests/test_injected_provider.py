@@ -18,6 +18,9 @@ def test_endpoint_uses_supplied_provider(monkeypatch: pytest.MonkeyPatch) -> Non
             requested_ids.append(issue_id)
             return Issue(id=issue_id, title="Issue from the fake provider")
 
+        def delete_issue(self, issue_id: str) -> None:
+            raise AssertionError("GET must not delete an issue")
+
     def supply_fake_provider() -> IssueProvider:
         return FakeIssueProvider()
 
@@ -56,6 +59,9 @@ def test_invalid_id_does_not_call_provider(
         def get_issue(self, issue_id: str) -> Issue:
             raise AssertionError("Invalid IDs must not reach the provider")
 
+        def delete_issue(self, issue_id: str) -> None:
+            raise AssertionError("Invalid IDs must not reach the provider")
+
     def supply_provider() -> IssueProvider:
         return UnexpectedCallProvider()
 
@@ -78,6 +84,9 @@ def test_provider_missing_issue_returns_404(
     class MissingIssueProvider:
         def get_issue(self, issue_id: str) -> Issue:
             raise HTTPException(status_code=404, detail="Issue not found")
+
+        def delete_issue(self, issue_id: str) -> None:
+            raise AssertionError("GET must not delete an issue")
 
     def supply_provider() -> IssueProvider:
         return MissingIssueProvider()
