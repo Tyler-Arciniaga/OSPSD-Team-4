@@ -1,12 +1,16 @@
 from typing import Protocol, runtime_checkable
 
-from app.models import Issue
+from app.models import Issue, IssueUpdate
 
 
 @runtime_checkable
 class IssueProvider(Protocol):
     def get_issue(self, issue_id: str) -> Issue:
         """Retrieve an issue by its ID."""
+        ...
+
+    def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
+        """Apply the supplied changes to an issue and return the updated issue."""
         ...
 
     def delete_issue(self, issue_id: str) -> None:

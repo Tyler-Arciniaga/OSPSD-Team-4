@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from app import main, provider
 from app.dependencies import get_issue_provider
 from app.interface import IssueProvider
-from app.models import Issue
+from app.models import Issue, IssueUpdate
 
 client = TestClient(main.app)
 KNOWN_ISSUE_ID = "64f1c0a2b3d4e5f607182930"
@@ -131,6 +131,9 @@ def test_delete_uses_injected_provider_and_cannot_be_retrieved_or_deleted_again(
                 raise HTTPException(status_code=404, detail="Issue not found")
             return issues[issue_id]
 
+        def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
+            raise AssertionError("DELETE must not update an issue")
+
         def delete_issue(self, issue_id: str) -> None:
             if issue_id not in issues:
                 raise HTTPException(status_code=404, detail="Issue not found")
@@ -168,6 +171,9 @@ def test_delete_invalid_id_does_not_call_injected_provider(
     class UnexpectedCallProvider:
         def get_issue(self, issue_id: str) -> Issue:
             raise AssertionError("DELETE must not retrieve an issue")
+
+        def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
+            raise AssertionError("DELETE must not update an issue")
 
         def delete_issue(self, issue_id: str) -> None:
             raise AssertionError("Invalid IDs must not reach the provider")

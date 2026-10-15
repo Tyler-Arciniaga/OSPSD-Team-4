@@ -5,7 +5,7 @@ from fastapi import Depends, FastAPI, HTTPException, Response
 
 from app.dependencies import get_issue_provider
 from app.interface import IssueProvider
-from app.models import ISSUE_ID_PATTERN, Issue, IssueCreate
+from app.models import ISSUE_ID_PATTERN, Issue, IssueCreate, IssueUpdate
 
 app = FastAPI(title="Issue Tracking Service")
 
@@ -24,6 +24,17 @@ def get_issue(
     """Retrieve an issue by its full ID using the supplied provider."""
     require_valid_issue_id(issue_id)
     return provider.get_issue(issue_id)
+
+
+@app.patch("/issues/{issue_id}", response_model=Issue)
+def update_issue(
+    issue_id: str,
+    changes: IssueUpdate,
+    provider: Annotated[IssueProvider, Depends(get_issue_provider)],
+) -> Issue:
+    """Partially update an issue by its full ID using the supplied provider."""
+    require_valid_issue_id(issue_id)
+    return provider.update_issue(issue_id, changes)
 
 
 @app.delete("/issues/{issue_id}", status_code=204, response_class=Response)

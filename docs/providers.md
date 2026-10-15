@@ -28,6 +28,14 @@ This allows application code to retrieve, create, and delete issues using the se
 - **External state:** Writes. Each successful call creates exactly one issue. The operation is not idempotent.
 - **Assumptions:** The provider decides where the issue is created from its own configuration; the caller does not supply a provider-specific location.
 
+### Operation: `update_issue(issue_id: str, changes: IssueUpdate) -> Issue`
+
+- **Purpose:** Apply a partial update to a single issue.
+- **Input:** `issue_id` — a string identifying the issue; `changes` — an `IssueUpdate` containing only the fields to change (currently `title`). `IssueUpdate` is validated before the provider is called, so it always contains at least one field, and `title` follows the same rule as `create_issue()` (1 to 256 characters, not whitespace-only).
+- **Return value:** The updated `Issue`, containing `id` and `title`.
+- **External state:** Modifies the issue in the provider. Fields not present in `changes` are left as they are.
+- **Assumptions:** A successful operation returns the issue as the provider reports it after the update, not a copy built from the request.
+
 ### Operation: `delete_issue(issue_id: str) -> None`
 
 - **Purpose:** Permanently delete an existing issue.
@@ -49,6 +57,7 @@ The Trello implementation is responsible for:
 - Managing provider-specific authentication.
 - Retrieving Trello card data.
 - Creating Trello cards in the list named by the `TRELLO_LIST_ID` environment variable.
+- Updating Trello cards (`title` is sent as the card's `name` with Trello's Update a Card `PUT` request).
 - Permanently deleting cards using Trello's [Delete a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-delete) operation. Trello's HTTP 200 success is translated into the service's HTTP 204, without parsing a response body.
 - Translating Trello's `id` and `name` fields into the service's `Issue` model.
 - Keeping provider-specific request and response structures hidden from application code.
@@ -57,13 +66,14 @@ The Trello implementation is responsible for:
 
 The endpoints in `app/main.py` receive an object satisfying the
 `IssueProvider` interface. `GET /issues/{issue_id}` calls `get_issue()`,
-`POST /issues` calls `create_issue()`, and `DELETE /issues/{issue_id}`
-calls `delete_issue()`. They do not import or construct `TrelloIssueProvider`.
-All three provider methods share the credential check in `app/provider.py`.
-`get_issue()` and `delete_issue()` also share request construction and
-error mapping. `create_issue()` has its own, because a Trello 404 during
-creation means the configured list is wrong, not that an issue is missing,
-so it is reported as 502.
+`POST /issues` calls `create_issue()`, `PATCH /issues/{issue_id}` calls
+`update_issue()`, and `DELETE /issues/{issue_id}` calls `delete_issue()`.
+They do not import or construct `TrelloIssueProvider`.
+All four provider methods share the credential check in `app/provider.py`.
+`get_issue()`, `update_issue()`, and `delete_issue()` also share request
+construction and error mapping. `create_issue()` has its own, because a
+Trello 404 during creation means the configured list is wrong, not that an
+issue is missing, so it is reported as 502.
 
 The interface describes the required methods; it is not an extra
 processing step. The supplied provider performs the actual operation.
@@ -73,8 +83,9 @@ processing step. The supplied provider performs the actual operation.
 `app/dependencies.py` defines `get_issue_provider()`, which creates
 and returns a `TrelloIssueProvider` during normal operation.
 
-All three endpoints declare this dependency using
-`Annotated[IssueProvider, Depends(get_issue_provider)]`.
+All four endpoints declare this dependency using
+`Annotated[IssueProvider, Depends(get_issue_provider)]`, so
+all four use the same supplier and the same override mechanism.
 FastAPI calls the supplier and passes the resulting object to the
 endpoint when handling a request.
 
@@ -121,10 +132,28 @@ These tests verify that:
 - A missing-issue error from the provider produces the expected 404 response.
 - A creation failure from the provider is passed through unchanged.
 
+Every fake provider in these tests implements all four interface methods.
+Methods a test should not use raise `AssertionError`.
+
 The successful retrieval and creation tests remove Trello credentials
 and fail if the corresponding real Trello method is called. Overrides and other
 temporary changes are restored automatically by pytest's
 `monkeypatch` fixture.
+
+### Update endpoint tests
+
+`tests/test_update_issue.py` covers `PATCH /issues/{issue_id}` in both styles:
+
+- With the real Trello implementation and simulated responses: the `PUT`
+  request's method, path, query parameters, and timeout; titles at and over
+  the 256-character limit; titles sent without trimming; malformed IDs;
+  invalid bodies (`422`); Trello `404`, rejection, network failure, and
+  invalid responses; and missing credentials.
+- With supplied providers: the endpoint passes the ID and validated changes
+  to `update_issue()` without touching Trello; rejected requests never reach
+  the provider; and a provider's missing-issue error becomes a `404`.
+- `test_create_and_update_share_title_rule` checks that `IssueCreate` and
+  `IssueUpdate` accept and reject the same titles.
 
 ### DELETE testing strategy
 
@@ -156,7 +185,9 @@ to verify the normally configured service against a real test card.
 
 ## Current Scope
 
-The interface contains three operations: issue retrieval, issue creation, and permanent deletion.
+The interface contains four operations: issue retrieval, issue creation,
+partial issue update (only `title` can currently be updated), and permanent
+deletion.
 Trello remains the provider during normal operation, while tests
 can supply controlled implementations without changing endpoint code.
 

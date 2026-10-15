@@ -5,7 +5,7 @@ import pytest
 
 from app import provider as provider_module
 from app.interface import IssueProvider
-from app.models import Issue
+from app.models import Issue, IssueUpdate
 from app.provider import TrelloIssueProvider
 
 
@@ -102,6 +102,9 @@ def test_provider_interchangeability():
         def get_issue(self, issue_id: str) -> Issue:
             return Issue(id=issue_id, title="Fake issue")
 
+        def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
+            return Issue(id=issue_id, title=changes.title or "Fake issue")
+
         def delete_issue(self, issue_id: str) -> None:
             pass
 
@@ -116,6 +119,11 @@ def test_provider_interchangeability():
 
     assert result.id == "issue-123"
     assert result.title == "Fake issue"
+
+    updated = fake_provider.update_issue("issue-123", IssueUpdate(title="Renamed"))
+
+    assert updated.id == "issue-123"
+    assert updated.title == "Renamed"
 
     created = fake_provider.create_issue("New fake issue")
 
