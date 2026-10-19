@@ -302,8 +302,7 @@ for the provider setup and the responsibilities of each test file.
 
    Expect HTTP 204 with an empty body. Confirm the card is gone in Trello.
    Repeat GET and DELETE for the same ID; both should return HTTP 404 and
-   `{"error":{"code":"not_found","message":"Issue not found"}}`. Record the
-   observed results in the PR.
+   `{"error":{"code":"not_found","message":"Issue not found"}}`.
 9. Check that a real provider failure is translated. Stop the server and
    restart it with an invalid token, keeping the key from `.env`:
 
@@ -316,8 +315,7 @@ for the provider setup and the responsibilities of each test file.
    `{"error":{"code":"access_denied","message":"The issue tracker denied access to this issue"}}`.
    The server terminal should show one log line like
    `{"level": "WARNING", "operation": "get_issue", "error": "access_denied", "status": 403, "provider_involved": true, "cause": "provider_status=401"}`,
-   with no key, token, URL, or stack trace. Record the observed status and
-   log line in the PR.
+   with no key, token, URL, or stack trace.
 10. Delete any remaining disposable cards (including the card created in
    step 5) and any board created only for this check.
    Revoke the token from the test account's Settings > Applications page
