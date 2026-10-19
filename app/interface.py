@@ -5,6 +5,17 @@ from app.models import Issue, IssueUpdate
 
 @runtime_checkable
 class IssueProvider(Protocol):
+    """Operations every issue provider must support.
+
+    Implementations report expected failures only by raising
+    `app.errors.ServiceError`; provider SDK exceptions and provider-specific
+    messages must not escape. Set `provider_involved=True` only when a request
+    to the provider was attempted. Use `not_found` for a missing issue,
+    `access_denied` when the provider rejects the service's credentials or
+    permissions, `service_not_configured` for missing provider configuration,
+    and `provider_error` for any other failed or unusable provider response.
+    """
+
     def get_issue(self, issue_id: str) -> Issue:
         """Retrieve an issue by its ID."""
         ...

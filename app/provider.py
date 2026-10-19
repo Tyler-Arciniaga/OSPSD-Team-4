@@ -6,8 +6,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from fastapi import HTTPException
-
+from app.errors import ErrorCode, ServiceError
 from app.models import ISSUE_ID_PATTERN, Issue, IssueUpdate
 
 
@@ -16,8 +15,67 @@ def _credentials() -> tuple[str, str]:
     key = os.environ.get("TRELLO_API_KEY")
     token = os.environ.get("TRELLO_TOKEN")
     if not key or not token:
-        raise HTTPException(status_code=503, detail="Trello credentials not configured")
+        raise ServiceError(
+            ErrorCode.SERVICE_NOT_CONFIGURED,
+            "Issue tracker credentials not configured",
+            cause="missing_credentials",
+        )
     return key, token
+
+
+def _provider_error(message: str, cause: str) -> ServiceError:
+    """Report a failed or unusable Trello request without Trello details."""
+    return ServiceError(
+        ErrorCode.PROVIDER_ERROR, message, provider_involved=True, cause=cause
+    )
+
+
+def _translate_request_failure(exc: Exception) -> ServiceError:
+    """Translate a network failure or unusable Trello response.
+
+    Only the exception's class name is kept: its message may contain the
+    request URL, which carries the key and token.
+    """
+    # A timeout may be raised directly or wrapped in a URLError.
+    if isinstance(exc, TimeoutError) or (
+        isinstance(exc, URLError) and isinstance(exc.reason, TimeoutError)
+    ):
+        return _provider_error("The issue tracker did not respond in time", "timeout")
+    if isinstance(exc, OSError):
+        return _provider_error(
+            "The issue tracker could not be reached", type(exc).__name__
+        )
+    return _provider_error(
+        "The issue tracker returned an unexpected response", type(exc).__name__
+    )
+
+
+def _translate_http_error(
+    exc: HTTPError, *, missing_means_not_found: bool
+) -> ServiceError:
+    """Translate a Trello HTTP rejection into a service error.
+
+    Only the status code is kept: the URL carries the key and token, and the
+    response body is provider data.
+    """
+    exc.close()
+    cause = f"provider_status={exc.code}"
+    if exc.code == 404 and missing_means_not_found:
+        return ServiceError(
+            ErrorCode.NOT_FOUND, "Issue not found", provider_involved=True, cause=cause
+        )
+    if exc.code in (401, 403):
+        return ServiceError(
+            ErrorCode.ACCESS_DENIED,
+            "The issue tracker denied access to this issue",
+            provider_involved=True,
+            cause=cause,
+        )
+    if exc.code == 429:
+        return _provider_error("The issue tracker is rate limiting requests", cause)
+    if exc.code >= 500:
+        return _provider_error("The issue tracker is currently unavailable", cause)
+    return _provider_error("The issue tracker rejected the request", cause)
 
 
 class TrelloIssueProvider:
@@ -46,7 +104,11 @@ class TrelloIssueProvider:
         key, token = _credentials()
         list_id = os.environ.get("TRELLO_LIST_ID")
         if not list_id:
-            raise HTTPException(status_code=503, detail="Trello list not configured")
+            raise ServiceError(
+                ErrorCode.SERVICE_NOT_CONFIGURED,
+                "Issue tracker target list not configured",
+                cause="missing_target_list",
+            )
 
         params = urlencode(
             {
@@ -73,15 +135,10 @@ class TrelloIssueProvider:
             return Issue(id=card["id"], title=card["name"])
         except HTTPError as exc:
             # A Trello 404 here means the configured list is wrong, not a
-            # missing issue, so every rejection is reported as a failure.
-            exc.close()
-            raise HTTPException(
-                status_code=502, detail="Trello request failed"
-            ) from None
-        except (URLError, OSError, ValueError, KeyError, TypeError):
-            raise HTTPException(
-                status_code=502, detail="Trello request failed"
-            ) from None
+            # missing issue, so it is reported as a provider failure.
+            raise _translate_http_error(exc, missing_means_not_found=False) from None
+        except (URLError, OSError, ValueError, KeyError, TypeError) as exc:
+            raise _translate_request_failure(exc) from None
 
     def _request_card(
         self, method: str, issue_id: str, params: dict[str, str] | None = None
@@ -108,13 +165,6 @@ class TrelloIssueProvider:
                 raise ValueError("Unexpected card ID")
             return issue
         except HTTPError as exc:
-            exc.close()
-            if exc.code == 404:
-                raise HTTPException(status_code=404, detail="Issue not found") from None
-            raise HTTPException(
-                status_code=502, detail="Trello request failed"
-            ) from None
-        except (URLError, OSError, ValueError, KeyError, TypeError):
-            raise HTTPException(
-                status_code=502, detail="Trello request failed"
-            ) from None
+            raise _translate_http_error(exc, missing_means_not_found=True) from None
+        except (URLError, OSError, ValueError, KeyError, TypeError) as exc:
+            raise _translate_request_failure(exc) from None
