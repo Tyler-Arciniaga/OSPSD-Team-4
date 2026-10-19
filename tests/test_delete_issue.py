@@ -1,17 +1,25 @@
 import io
 from email.message import Message
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
 from urllib.request import Request
 
 import pytest
-from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app import main, provider
 from app.dependencies import get_issue_provider
+from app.errors import ErrorCode, ServiceError
 from app.interface import IssueProvider
 from app.models import Issue, IssueUpdate
+from tests.expected_errors import (
+    CREDENTIALS_NOT_CONFIGURED,
+    ISSUE_HTTP_FAILURES,
+    NETWORK_FAILURES,
+    NOT_FOUND,
+    ErrorJson,
+    error_body,
+)
 
 client = TestClient(main.app)
 KNOWN_ISSUE_ID = "64f1c0a2b3d4e5f607182930"
@@ -66,7 +74,7 @@ def test_delete_invalid_id_never_contacts_trello(issue_id: str) -> None:
     response = client.delete(f"/issues/{issue_id}")
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "Issue not found"}
+    assert response.json() == NOT_FOUND
 
 
 @pytest.mark.parametrize("variable", ["TRELLO_API_KEY", "TRELLO_TOKEN"])
@@ -77,33 +85,29 @@ def test_delete_missing_credentials(
     response = client.delete(f"/issues/{KNOWN_ISSUE_ID}")
 
     assert response.status_code == 503
-    assert response.json() == {"detail": "Trello credentials not configured"}
+    assert response.json() == CREDENTIALS_NOT_CONFIGURED
 
 
-@pytest.mark.parametrize(
-    ("status", "expected"), [(404, 404), (401, 502), (403, 502), (429, 502), (500, 502)]
-)
+@pytest.mark.parametrize(("status", "expected", "body"), ISSUE_HTTP_FAILURES)
 def test_delete_trello_http_errors(
-    monkeypatch: pytest.MonkeyPatch, status: int, expected: int
+    monkeypatch: pytest.MonkeyPatch, status: int, expected: int, body: ErrorJson
 ) -> None:
-    error_body = io.BytesIO(b"private provider details")
+    trello_body = io.BytesIO(b"private provider details")
 
     def fail(request: Request, timeout: int) -> None:
-        raise HTTPError(request.full_url, status, "private", Message(), error_body)
+        raise HTTPError(request.full_url, status, "private", Message(), trello_body)
 
     monkeypatch.setattr(provider, "urlopen", fail)
     response = client.delete(f"/issues/{KNOWN_ISSUE_ID}")
 
     assert response.status_code == expected
-    assert response.json() == {
-        "detail": "Issue not found" if expected == 404 else "Trello request failed"
-    }
-    assert error_body.closed
+    assert response.json() == body
+    assert trello_body.closed
 
 
-@pytest.mark.parametrize("error", [URLError("private"), TimeoutError("private")])
+@pytest.mark.parametrize(("error", "body"), NETWORK_FAILURES)
 def test_delete_network_failure_is_not_retried(
-    monkeypatch: pytest.MonkeyPatch, error: Exception
+    monkeypatch: pytest.MonkeyPatch, error: Exception, body: ErrorJson
 ) -> None:
     calls: list[Request] = []
 
@@ -115,7 +119,7 @@ def test_delete_network_failure_is_not_retried(
     response = client.delete(f"/issues/{KNOWN_ISSUE_ID}")
 
     assert response.status_code == 502
-    assert response.json() == {"detail": "Trello request failed"}
+    assert response.json() == body
     assert len(calls) == 1
 
 
@@ -128,7 +132,9 @@ def test_delete_uses_injected_provider_and_cannot_be_retrieved_or_deleted_again(
     class FakeIssueProvider:
         def get_issue(self, issue_id: str) -> Issue:
             if issue_id not in issues:
-                raise HTTPException(status_code=404, detail="Issue not found")
+                raise ServiceError(
+                    ErrorCode.NOT_FOUND, "Issue not found", provider_involved=True
+                )
             return issues[issue_id]
 
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
@@ -136,7 +142,9 @@ def test_delete_uses_injected_provider_and_cannot_be_retrieved_or_deleted_again(
 
         def delete_issue(self, issue_id: str) -> None:
             if issue_id not in issues:
-                raise HTTPException(status_code=404, detail="Issue not found")
+                raise ServiceError(
+                    ErrorCode.NOT_FOUND, "Issue not found", provider_involved=True
+                )
             del issues[issue_id]
             deleted_ids.append(issue_id)
 
@@ -161,7 +169,7 @@ def test_delete_uses_injected_provider_and_cannot_be_retrieved_or_deleted_again(
         client.delete(f"/issues/{KNOWN_ISSUE_ID}"),
     ):
         assert response.status_code == 404
-        assert response.json() == {"detail": "Issue not found"}
+        assert response.json() == NOT_FOUND
     assert deleted_ids == [KNOWN_ISSUE_ID]
 
 
@@ -190,7 +198,7 @@ def test_delete_invalid_id_does_not_call_injected_provider(
     response = client.delete("/issues/does-not-exist")
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "Issue not found"}
+    assert response.json() == NOT_FOUND
 
 
 def test_delete_lost_response_may_follow_a_successful_deletion(
@@ -206,7 +214,9 @@ def test_delete_lost_response_may_follow_a_successful_deletion(
     response = client.delete(f"/issues/{KNOWN_ISSUE_ID}")
 
     assert response.status_code == 502
-    assert response.json() == {"detail": "Trello request failed"}
+    assert response.json() == error_body(
+        "provider_error", "The issue tracker did not respond in time"
+    )
     assert deleted_ids == [KNOWN_ISSUE_ID]
 
 

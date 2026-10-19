@@ -1,8 +1,8 @@
 import pytest
-from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.dependencies import get_issue_provider
+from app.errors import ErrorCode, ServiceError
 from app.interface import IssueProvider
 from app.main import app
 from app.models import Issue, IssueUpdate
@@ -87,7 +87,9 @@ def test_invalid_id_does_not_call_provider(
         response = client.get("/issues/does-not-exist")
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "Issue not found"}
+    assert response.json() == {
+        "error": {"code": "not_found", "message": "Issue not found"}
+    }
 
 
 def test_provider_missing_issue_returns_404(
@@ -95,7 +97,9 @@ def test_provider_missing_issue_returns_404(
 ) -> None:
     class MissingIssueProvider:
         def get_issue(self, issue_id: str) -> Issue:
-            raise HTTPException(status_code=404, detail="Issue not found")
+            raise ServiceError(
+                ErrorCode.NOT_FOUND, "Issue not found", provider_involved=True
+            )
 
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
             raise AssertionError("GET must not update the issue")
@@ -119,7 +123,9 @@ def test_provider_missing_issue_returns_404(
         response = client.get("/issues/64f1c0a2b3d4e5f607182930")
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "Issue not found"}
+    assert response.json() == {
+        "error": {"code": "not_found", "message": "Issue not found"}
+    }
 
 
 def test_create_uses_supplied_provider(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -210,6 +216,7 @@ def test_invalid_create_body_does_not_call_provider(
         response = client.post("/issues", json=body)
 
     assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_input"
 
 
 def test_create_accepts_maximum_title_length(
@@ -258,7 +265,11 @@ def test_provider_create_failure_is_passed_through(
             raise AssertionError("POST must not delete an issue")
 
         def create_issue(self, title: str) -> Issue:
-            raise HTTPException(status_code=502, detail="Trello request failed")
+            raise ServiceError(
+                ErrorCode.PROVIDER_ERROR,
+                "The issue tracker is currently unavailable",
+                provider_involved=True,
+            )
 
     def supply_provider() -> IssueProvider:
         return FailingProvider()
@@ -273,4 +284,9 @@ def test_provider_create_failure_is_passed_through(
         response = client.post("/issues", json={"title": "New issue"})
 
     assert response.status_code == 502
-    assert response.json() == {"detail": "Trello request failed"}
+    assert response.json() == {
+        "error": {
+            "code": "provider_error",
+            "message": "The issue tracker is currently unavailable",
+        }
+    }
