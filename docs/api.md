@@ -2,115 +2,6 @@
 
 This document is the contract for the public operations of the Issue Tracker Service.
 
-## Error model
-
-Every failed request returns a JSON body of the same shape, whichever
-operation failed and whatever caused it:
-
-```json
-{
-  "error": {
-    "code": "not_found",
-    "message": "Issue not found"
-  }
-}
-```
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `error.code` | string | A stable, machine-readable error code from the table below. Callers should branch on this. |
-| `error.message` | string | A short human-readable explanation. Its wording may change; do not parse it. |
-| `error.details` | array | Present only for `invalid_input` caused by a rejected request body. Each entry is `{"field": ..., "message": ...}`. |
-
-A `422` response lists every problem with the body:
-
-```json
-{
-  "error": {
-    "code": "invalid_input",
-    "message": "Request body is invalid",
-    "details": [
-      {"field": "title", "message": "String should have at least 1 character"}
-    ]
-  }
-}
-```
-
-`field` names the rejected body field, or is `body` when the body as a whole
-was rejected (for example, missing, not JSON, or an empty PATCH object).
-
-### Error codes
-
-| Code | Status | When it occurs | Can the caller retry? |
-| --- | --- | --- | --- |
-| `invalid_input` | `422 Unprocessable Content` | The request body is missing, not JSON, contains an unknown field, or breaks a field rule (such as the title rule). Also used with status `405` for an unsupported method on a known route. | No. Correct the request first. |
-| `not_found` | `404 Not Found` | No issue exists with the given ID (including one already deleted), the ID is malformed, or the route does not exist. | No. Use a correct ID. |
-| `access_denied` | `403 Forbidden` | The issue tracker rejected the service's credentials or does not allow it to access the issue. | No. The service operator must fix the credentials or permissions. |
-| `service_not_configured` | `503 Service Unavailable` | The service is missing its issue tracker credentials, or (for creation) its target issue list. | No. The service operator must complete the configuration. |
-| `provider_error` | `502 Bad Gateway` | The issue tracker could not be reached, timed out, rate-limited the service, was unavailable, rejected the request for another reason, or returned a response the service could not use. | Reads: yes, after a short wait. Writes: only after checking with GET, because the change may already have been applied. |
-| `internal_error` | `500 Internal Server Error` | An unexpected failure inside the service. This indicates a bug. | Possibly, but report it if it repeats. |
-
-`provider_error` uses one code for every issue tracker failure, so callers
-need to handle only one case. Its message says what kind of failure it was:
-
-| Situation | Message |
-| --- | --- |
-| Could not connect (DNS failure, connection refused or reset) | `The issue tracker could not be reached` |
-| No response within the 10-second timeout | `The issue tracker did not respond in time` |
-| The issue tracker is rate limiting the service | `The issue tracker is rate limiting requests` |
-| The issue tracker reported a server error | `The issue tracker is currently unavailable` |
-| Any other rejection | `The issue tracker rejected the request` |
-| A response missing required data, or with the wrong issue ID | `The issue tracker returned an unexpected response` |
-
-The other messages are fixed: `Issue not found`, `Resource not found` (for an
-unknown route), `Request not supported` (for an unsupported method),
-`The issue tracker denied access to this issue`,
-`Issue tracker credentials not configured`,
-`Issue tracker target list not configured`, `Request body is invalid`, and
-`Internal server error`.
-
-The service never retries automatically. A failed write can still have been
-applied if the issue tracker processed it and the response was lost, so the
-retry guidance above is conservative for POST, PATCH and DELETE. POST is not
-idempotent: retrying it can create a duplicate issue.
-
-### What callers see and what stays internal
-
-Error responses describe the failure in the service's terms. They never
-contain provider names, provider error messages, provider status codes,
-request URLs, credentials, or stack traces. A caller cannot tell which issue
-tracker the service uses from an error.
-
-Expected failures (every code except `internal_error`) are part of this
-contract. `internal_error` means the service has a bug; its cause is
-recorded only in the service log.
-
-### Failure logging
-
-The service writes one structured JSON line to the `app.errors` logger for
-every failed request:
-
-```json
-{"level": "WARNING", "operation": "get_issue", "error": "not_found", "status": 404, "provider_involved": true, "cause": "provider_status=404"}
-```
-
-| Field | Description |
-| --- | --- |
-| `level` | `WARNING` for 4xx responses, `ERROR` for 5xx responses. |
-| `operation` | The endpoint that failed: `get_issue`, `create_issue`, `update_issue`, `delete_issue`, or `unknown` for an unknown route. |
-| `error` | The error code returned to the caller. |
-| `status` | The HTTP status returned to the caller. |
-| `provider_involved` | `true` only when the service attempted a request to the issue tracker. Malformed IDs, invalid bodies and missing configuration are rejected before that, so they log `false`. |
-| `cause` | A short internal reason, such as `provider_status=429`, `timeout`, `URLError`, `malformed_issue_id` or `missing_credentials`. It is `null` when nothing more specific is known. |
-
-Logs never contain credentials, authorization data, request URLs (the issue
-tracker URL carries the credentials), request or response bodies, or
-exception messages from the issue tracker client. Expected failures are
-logged without a stack trace. Only `internal_error` includes one, because
-it is needed to find the bug.
-
-The service has no request or correlation identifier.
-
 ## Get an issue
 
 Return one issue by its identifier.
@@ -415,6 +306,113 @@ curl -i -X DELETE http://127.0.0.1:8000/issues/64f1c0a2b3d4e5f607182930
 ```http
 HTTP/1.1 204 No Content
 ```
+
+## Error model
+
+Every failed request returns a JSON body of the same shape, whichever
+operation failed and whatever caused it:
+
+```json
+{
+  "error": {
+    "code": "not_found",
+    "message": "Issue not found"
+  }
+}
+```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `error.code` | string | A stable, machine-readable error code from the table below. Callers should branch on this. |
+| `error.message` | string | A short human-readable explanation. Its wording may change; do not parse it. |
+| `error.details` | array | Present only for `invalid_input` caused by a rejected request body. Each entry is `{"field": ..., "message": ...}`. |
+
+A `422` response lists every problem with the body:
+
+```json
+{
+  "error": {
+    "code": "invalid_input",
+    "message": "Request body is invalid",
+    "details": [
+      {"field": "title", "message": "String should have at least 1 character"}
+    ]
+  }
+}
+```
+
+`field` names the rejected body field.
+
+### Error codes
+
+| Code | Status | When it occurs | Can the caller retry? |
+| --- | --- | --- | --- |
+| `invalid_input` | `422 Unprocessable Content` | The request body is missing, not JSON, contains an unknown field, or breaks a field rule (such as the title rule). Also used with status `405` for an unsupported method on a known route. | No. Correct the request first. |
+| `not_found` | `404 Not Found` | No issue exists with the given ID (including one already deleted), the ID is malformed, or the route does not exist. | No. |
+| `access_denied` | `403 Forbidden` | The issue tracker rejected the service's credentials or does not allow it to access the issue. | No. The service operator must fix the credentials or permissions. |
+| `service_not_configured` | `503 Service Unavailable` | The service is missing its issue tracker credentials, or (for creation) its target issue list. | No. The service operator must complete the configuration. |
+| `provider_error` | `502 Bad Gateway` | The issue tracker could not be reached, timed out, rate-limited the service, was unavailable, rejected the request for another reason, or returned a response the service could not use. | Reads: yes, after a short wait. Writes: only after checking with GET, because the change may already have been applied. |
+| `internal_error` | `500 Internal Server Error` | An unexpected failure inside the service. This indicates a bug. | Possibly, but report it if it repeats. |
+
+`provider_error` uses one code for every issue tracker failure, so callers
+need to handle only one case. Its message says what kind of failure it was:
+
+| Situation | Message |
+| --- | --- |
+| Could not connect (DNS failure, connection refused or reset) | `The issue tracker could not be reached` |
+| No response within the 10-second timeout | `The issue tracker did not respond in time` |
+| The issue tracker is rate limiting the service | `The issue tracker is rate limiting requests` |
+| The issue tracker reported a server error | `The issue tracker is currently unavailable` |
+| Any other rejection | `The issue tracker rejected the request` |
+| A response missing required data, or with the wrong issue ID | `The issue tracker returned an unexpected response` |
+
+The other messages are fixed: `Issue not found`, `Resource not found`,
+`Request not supported`, `The issue tracker denied access to this issue`,
+`Issue tracker credentials not configured`,
+`Issue tracker target list not configured`, `Request body is invalid`, and
+`Internal server error`.
+
+The service never retries automatically. A failed write can still have been
+applied if the issue tracker processed it and the response was lost, so the
+retry guidance above is conservative for POST, PATCH and DELETE. POST is not
+idempotent: retrying it can create a duplicate issue.
+
+### What callers see and what stays internal
+
+Error responses describe the failure in the service's terms. They never
+contain provider names, provider error messages, provider status codes,
+request URLs, credentials, or stack traces. A caller cannot tell which issue
+tracker the service uses from an error.
+
+Expected failures (every code except `internal_error`) are part of this
+contract. `internal_error` means the service has a bug; its cause is
+recorded only in the service log.
+
+### Failure logging
+
+The service writes one structured JSON line to the `app.errors` logger for
+every failed request:
+
+```json
+{"level": "WARNING", "operation": "get_issue", "error": "not_found", "status": 404, "provider_involved": true, "cause": "provider_status=404"}
+```
+
+| Field | Description |
+| --- | --- |
+| `level` | `WARNING` for 4xx responses, `ERROR` for 5xx responses. |
+| `operation` | The endpoint that failed: `get_issue`, `create_issue`, `update_issue`, `delete_issue`, or `unknown` for an unknown route. |
+| `error` | The error code returned to the caller. |
+| `status` | The HTTP status returned to the caller. |
+| `provider_involved` | `true` only when the service attempted a request to the issue tracker. Malformed IDs, invalid bodies and missing configuration are rejected before that, so they log `false`. |
+| `cause` | A short internal reason, such as `provider_status=429`, `timeout`, `URLError`, `malformed_issue_id` or `missing_credentials`. It is `null` when nothing more specific is known. |
+
+Logs never contain credentials, authorization data, request URLs (the issue
+tracker URL carries the credentials), request or response bodies, or
+exception messages from the issue tracker client. Expected failures are
+logged without a stack trace. Only `internal_error` includes one, because
+it is needed to find the bug.
+
+The service has no request or correlation identifier.
 
 ## What callers can rely on
 
