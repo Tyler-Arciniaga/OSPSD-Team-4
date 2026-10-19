@@ -1,20 +1,28 @@
 import io
 import json
 from email.message import Message
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
 from urllib.request import Request
 
 import pytest
-from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app import main, provider
 from app.dependencies import get_issue_provider
+from app.errors import ErrorCode, ServiceError
 from app.interface import IssueProvider
 from app.models import MAX_TITLE_LENGTH, Issue, IssueCreate, IssueUpdate
 from app.provider import TrelloIssueProvider
+from tests.expected_errors import (
+    CREDENTIALS_NOT_CONFIGURED,
+    ISSUE_HTTP_FAILURES,
+    NETWORK_FAILURES,
+    NOT_FOUND,
+    UNEXPECTED_RESPONSE,
+    ErrorJson,
+)
 
 client = TestClient(main.app)
 
@@ -91,7 +99,9 @@ def test_patch_rejects_title_over_length_limit() -> None:
     )
 
     assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"] == ["body", "title"]
+    error = response.json()["error"]
+    assert error["code"] == "invalid_input"
+    assert [detail["field"] for detail in error["details"]] == ["title"]
 
 
 def test_patch_keeps_surrounding_whitespace(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -134,7 +144,7 @@ def test_patch_malformed_id_returns_404(issue_id: str) -> None:
     response = client.patch(f"/issues/{issue_id}", json={"title": NEW_TITLE})
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "Issue not found"}
+    assert response.json() == NOT_FOUND
 
 
 @pytest.mark.parametrize(
@@ -152,17 +162,19 @@ def test_patch_invalid_body_returns_422(body: dict[str, object]) -> None:
     response = client.patch(f"/issues/{KNOWN_ISSUE_ID}", json=body)
 
     assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_input"
 
 
 def test_patch_missing_body_returns_422() -> None:
     response = client.patch(f"/issues/{KNOWN_ISSUE_ID}")
 
     assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_input"
 
 
-@pytest.mark.parametrize(("status", "expected"), [(404, 404), (401, 502), (500, 502)])
+@pytest.mark.parametrize(("status", "expected", "body"), ISSUE_HTTP_FAILURES)
 def test_patch_trello_http_errors(
-    monkeypatch: pytest.MonkeyPatch, status: int, expected: int
+    monkeypatch: pytest.MonkeyPatch, status: int, expected: int, body: ErrorJson
 ) -> None:
     def fail(request: Request, timeout: int) -> None:
         raise HTTPError(request.full_url, status, "error", Message(), None)
@@ -171,15 +183,12 @@ def test_patch_trello_http_errors(
     response = client.patch(f"/issues/{KNOWN_ISSUE_ID}", json={"title": NEW_TITLE})
 
     assert response.status_code == expected
-    if expected == 404:
-        assert response.json() == {"detail": "Issue not found"}
-    else:
-        assert response.json() == {"detail": "Trello request failed"}
+    assert response.json() == body
 
 
-@pytest.mark.parametrize("error", [URLError("down"), TimeoutError()])
+@pytest.mark.parametrize(("error", "body"), NETWORK_FAILURES)
 def test_patch_trello_network_failure(
-    monkeypatch: pytest.MonkeyPatch, error: Exception
+    monkeypatch: pytest.MonkeyPatch, error: Exception, body: ErrorJson
 ) -> None:
     def fail(request: Request, timeout: int) -> None:
         raise error
@@ -188,7 +197,7 @@ def test_patch_trello_network_failure(
     response = client.patch(f"/issues/{KNOWN_ISSUE_ID}", json={"title": NEW_TITLE})
 
     assert response.status_code == 502
-    assert response.json() == {"detail": "Trello request failed"}
+    assert response.json() == body
 
 
 @pytest.mark.parametrize(
@@ -208,7 +217,7 @@ def test_patch_invalid_trello_response(
     response = client.patch(f"/issues/{KNOWN_ISSUE_ID}", json={"title": NEW_TITLE})
 
     assert response.status_code == 502
-    assert response.json() == {"detail": "Trello request failed"}
+    assert response.json() == UNEXPECTED_RESPONSE
 
 
 @pytest.mark.parametrize("variable", ["TRELLO_API_KEY", "TRELLO_TOKEN"])
@@ -219,7 +228,7 @@ def test_patch_missing_credentials(
     response = client.patch(f"/issues/{KNOWN_ISSUE_ID}", json={"title": NEW_TITLE})
 
     assert response.status_code == 503
-    assert response.json() == {"detail": "Trello credentials not configured"}
+    assert response.json() == CREDENTIALS_NOT_CONFIGURED
 
 
 # Endpoint with supplied providers (dependency injection).
@@ -306,7 +315,9 @@ def test_patch_provider_missing_issue_returns_404(
             raise AssertionError("PATCH must not call get_issue")
 
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
-            raise HTTPException(status_code=404, detail="Issue not found")
+            raise ServiceError(
+                ErrorCode.NOT_FOUND, "Issue not found", provider_involved=True
+            )
 
         def create_issue(self, title: str) -> Issue:
             raise AssertionError("PATCH must not create an issue")
@@ -324,4 +335,4 @@ def test_patch_provider_missing_issue_returns_404(
     response = client.patch(f"/issues/{KNOWN_ISSUE_ID}", json={"title": NEW_TITLE})
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "Issue not found"}
+    assert response.json() == NOT_FOUND

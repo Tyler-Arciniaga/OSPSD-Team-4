@@ -1,7 +1,7 @@
 import io
 import json
 from email.message import Message
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
 from urllib.request import Request
 
@@ -9,12 +9,22 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import main, provider
+from tests.expected_errors import (
+    ACCESS_DENIED_MESSAGE,
+    CREDENTIALS_NOT_CONFIGURED,
+    LIST_NOT_CONFIGURED,
+    NETWORK_FAILURES,
+    UNEXPECTED_RESPONSE,
+    ErrorJson,
+    error_body,
+)
 
 client = TestClient(main.app)
 
 CREATED_ISSUE_ID = "64f1c0a2b3d4e5f607182930"
 CREATED_ISSUE_TITLE = "Created Trello issue"
 LIST_ID = "5f1c0a2b3d4e5f6071829304"
+REJECTED_MESSAGE = "The issue tracker rejected the request"
 
 
 @pytest.fixture(autouse=True)
@@ -65,8 +75,30 @@ def test_create_issue_returns_id_and_title(monkeypatch: pytest.MonkeyPatch):
     }
 
 
-@pytest.mark.parametrize("status", [400, 401, 403, 404, 429, 500])
-def test_trello_http_errors(monkeypatch: pytest.MonkeyPatch, status: int):
+# A Trello 404 during creation means the configured list is wrong, not a
+# missing issue, so it is reported as a rejected provider request.
+@pytest.mark.parametrize(
+    ("status", "expected", "body"),
+    [
+        (400, 502, error_body("provider_error", REJECTED_MESSAGE)),
+        (401, 403, error_body("access_denied", ACCESS_DENIED_MESSAGE)),
+        (403, 403, error_body("access_denied", ACCESS_DENIED_MESSAGE)),
+        (404, 502, error_body("provider_error", REJECTED_MESSAGE)),
+        (
+            429,
+            502,
+            error_body("provider_error", "The issue tracker is rate limiting requests"),
+        ),
+        (
+            500,
+            502,
+            error_body("provider_error", "The issue tracker is currently unavailable"),
+        ),
+    ],
+)
+def test_trello_http_errors(
+    monkeypatch: pytest.MonkeyPatch, status: int, expected: int, body: ErrorJson
+):
     def fail(request: Request, timeout: int) -> None:
         raise HTTPError(
             request.full_url, status, "private provider message", Message(), None
@@ -74,19 +106,21 @@ def test_trello_http_errors(monkeypatch: pytest.MonkeyPatch, status: int):
 
     monkeypatch.setattr(provider, "urlopen", fail)
     response = client.post("/issues", json={"title": CREATED_ISSUE_TITLE})
-    assert response.status_code == 502
-    assert response.json() == {"detail": "Trello request failed"}
+    assert response.status_code == expected
+    assert response.json() == body
 
 
-@pytest.mark.parametrize("error", [URLError("private"), TimeoutError("private")])
-def test_trello_network_failure(monkeypatch: pytest.MonkeyPatch, error: Exception):
+@pytest.mark.parametrize(("error", "body"), NETWORK_FAILURES)
+def test_trello_network_failure(
+    monkeypatch: pytest.MonkeyPatch, error: Exception, body: ErrorJson
+):
     def fail(request: Request, timeout: int) -> None:
         raise error
 
     monkeypatch.setattr(provider, "urlopen", fail)
     response = client.post("/issues", json={"title": CREATED_ISSUE_TITLE})
     assert response.status_code == 502
-    assert response.json() == {"detail": "Trello request failed"}
+    assert response.json() == body
 
 
 @pytest.mark.parametrize(
@@ -105,7 +139,7 @@ def test_invalid_trello_response(monkeypatch: pytest.MonkeyPatch, payload: bytes
     )
     response = client.post("/issues", json={"title": CREATED_ISSUE_TITLE})
     assert response.status_code == 502
-    assert response.json() == {"detail": "Trello request failed"}
+    assert response.json() == UNEXPECTED_RESPONSE
 
 
 @pytest.mark.parametrize("variable", ["TRELLO_API_KEY", "TRELLO_TOKEN"])
@@ -113,11 +147,11 @@ def test_missing_credentials(monkeypatch: pytest.MonkeyPatch, variable: str):
     monkeypatch.delenv(variable)
     response = client.post("/issues", json={"title": CREATED_ISSUE_TITLE})
     assert response.status_code == 503
-    assert response.json() == {"detail": "Trello credentials not configured"}
+    assert response.json() == CREDENTIALS_NOT_CONFIGURED
 
 
 def test_missing_list_id(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("TRELLO_LIST_ID")
     response = client.post("/issues", json={"title": CREATED_ISSUE_TITLE})
     assert response.status_code == 503
-    assert response.json() == {"detail": "Trello list not configured"}
+    assert response.json() == LIST_NOT_CONFIGURED

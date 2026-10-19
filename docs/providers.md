@@ -42,8 +42,60 @@ This allows application code to retrieve, create, and delete issues using the se
 - **Input:** `issue_id` — a string identifying the issue. The HTTP endpoint validates the full ID before calling the provider.
 - **Return value:** `None` on success. The endpoint returns HTTP 204 with no body.
 - **External state:** Removes the issue. For Trello this deletes, rather than archives, the card.
-- **Errors:** A missing issue is HTTP 404; missing credentials are HTTP 503; provider rejection or network failure is HTTP 502, matching the current GET convention.
+- **Errors:** A missing issue raises `not_found` (HTTP 404); missing credentials raise `service_not_configured` (HTTP 503); a provider rejection or network failure raises `access_denied` or `provider_error`, as for the other operations. See [Errors](#errors).
 - **Assumptions:** Repeated deletion reports a missing issue. A provider failure can follow a completed deletion if the response is lost; no automatic retry occurs.
+
+## Errors
+
+**File:** `app/errors.py`
+
+Providers report every expected failure by raising `ServiceError`, with an
+`ErrorCode` and a caller-facing message written in the service's terms.
+Provider exceptions, provider error messages and provider response bodies
+must not leave the provider. The endpoints in `app/main.py` turn a
+`ServiceError` into the response described in
+[the API error model](api.md#error-model) and log it.
+
+A `ServiceError` also carries two values that are only logged:
+
+- `provider_involved`: set to `True` only when a request to the provider was
+  attempted. Configuration checks that fail before any request leave it
+  `False`.
+- `cause`: a short internal reason, such as `provider_status=429` or
+  `timeout`. It must never contain credentials, URLs, provider messages or
+  response bodies.
+
+| Failure | Code | Status |
+| --- | --- | --- |
+| The issue does not exist | `not_found` | 404 |
+| The provider rejects the service's credentials or permissions | `access_denied` | 403 |
+| Provider configuration is missing | `service_not_configured` | 503 |
+| Any other failed provider request or unusable provider response | `provider_error` | 502 |
+
+### Trello mapping
+
+`TrelloIssueProvider` translates failures as follows. GET, PATCH and DELETE
+share `_request_card()`; `create_issue()` sends its own request. Both use
+`_translate_http_error()` for HTTP errors and `_translate_request_failure()`
+for everything else.
+
+| Trello failure | Code | Logged `cause` |
+| --- | --- | --- |
+| `TRELLO_API_KEY` or `TRELLO_TOKEN` missing | `service_not_configured` | `missing_credentials` |
+| `TRELLO_LIST_ID` missing (creation only) | `service_not_configured` | `missing_target_list` |
+| HTTP 404 for GET, PATCH or DELETE | `not_found` | `provider_status=404` |
+| HTTP 404 for creation (the configured list is wrong, not a missing issue) | `provider_error` | `provider_status=404` |
+| HTTP 401 or 403 | `access_denied` | `provider_status=<status>` |
+| HTTP 429 | `provider_error` | `provider_status=429` |
+| HTTP 5xx | `provider_error` | `provider_status=<status>` |
+| Any other HTTP error | `provider_error` | `provider_status=<status>` |
+| Timeout, raised directly or wrapped in `URLError` | `provider_error` | `timeout` |
+| Other connection failure (`URLError`, `OSError`) | `provider_error` | exception class name |
+| Invalid JSON, missing `id` or `name`, or an unexpected card ID | `provider_error` | exception class name |
+
+Only the HTTP status or the exception's class name is kept. Exception
+messages are discarded, because a Trello request URL carries the API key
+and token in its query string.
 
 ## Provider Implementation
 
@@ -71,9 +123,9 @@ The endpoints in `app/main.py` receive an object satisfying the
 They do not import or construct `TrelloIssueProvider`.
 All four provider methods share the credential check in `app/provider.py`.
 `get_issue()`, `update_issue()`, and `delete_issue()` also share request
-construction and error mapping. `create_issue()` has its own, because a
-Trello 404 during creation means the configured list is wrong, not that an
-issue is missing, so it is reported as 502.
+construction. All four share error translation, except that a Trello 404
+during creation means the configured list is wrong, not that an issue is
+missing, so it is reported as `provider_error` (502).
 
 The interface describes the required methods; it is not an extra
 processing step. The supplied provider performs the actual operation.
@@ -129,8 +181,8 @@ These tests verify that:
 - Invalid IDs are rejected without calling the provider's retrieval method.
 - Invalid creation bodies are rejected with 422 without calling the
   provider's creation method.
-- A missing-issue error from the provider produces the expected 404 response.
-- A creation failure from the provider is passed through unchanged.
+- A provider's `not_found` error produces the expected 404 response.
+- A provider's creation failure is returned in the service's error shape.
 
 Every fake provider in these tests implements all four interface methods.
 Methods a test should not use raise `AssertionError`.
@@ -147,13 +199,38 @@ temporary changes are restored automatically by pytest's
 - With the real Trello implementation and simulated responses: the `PUT`
   request's method, path, query parameters, and timeout; titles at and over
   the 256-character limit; titles sent without trimming; malformed IDs;
-  invalid bodies (`422`); Trello `404`, rejection, network failure, and
-  invalid responses; and missing credentials.
+  invalid bodies (`422`); Trello `404`, `401`/`403`, rate limiting, server
+  errors, network failures and timeouts, and invalid responses; and missing
+  credentials.
 - With supplied providers: the endpoint passes the ID and validated changes
   to `update_issue()` without touching Trello; rejected requests never reach
-  the provider; and a provider's missing-issue error becomes a `404`.
+  the provider; and a provider's `not_found` error becomes a `404`.
 - `test_create_and_update_share_title_rule` checks that `IssueCreate` and
   `IssueUpdate` accept and reject the same titles.
+
+### Error model tests
+
+`tests/test_errors.py` checks the error contract itself, mostly through a
+controlled provider whose operations return or raise a chosen outcome:
+
+- One successful request, one invalid request (`422` with `details`), one
+  missing issue (`404`), and one provider failure (`502`), each comparing
+  the full response body.
+- Access denial (`403`), an unexpected exception (`500` with no internal
+  details in the body), and an unknown route (`404`).
+- Each failure writes exactly one log line, and the test compares the whole
+  record: level, operation, error code, status, `provider_involved` and
+  `cause`. Only the unexpected exception includes a stack trace.
+- Real Trello failures whose URLs and exception messages contain the key and
+  token produce responses and logs containing neither, nor the word
+  "Trello".
+- Missing configuration and malformed IDs are logged with
+  `provider_involved` set to `false`.
+
+Expected error bodies that several endpoint test files share are defined
+once in `tests/expected_errors.py`. `tests/test_errors.py` writes its
+expected bodies out in full, so the exact contract is checked independently
+of those helpers.
 
 ### DELETE testing strategy
 

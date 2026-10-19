@@ -4,6 +4,7 @@ import json
 import pytest
 
 from app import provider as provider_module
+from app.errors import ErrorCode, ServiceError
 from app.interface import IssueProvider
 from app.models import Issue, IssueUpdate
 from app.provider import TrelloIssueProvider
@@ -44,8 +45,6 @@ from email.message import Message
 from urllib.error import HTTPError
 from urllib.request import Request
 
-from fastapi import HTTPException
-
 
 def test_trello_missing_issue_returns_404(monkeypatch):
     issue_id = "64f1c0a2b3d4e5f607182930"
@@ -64,11 +63,13 @@ def test_trello_missing_issue_returns_404(monkeypatch):
 
     monkeypatch.setattr(provider_module, "urlopen", fake_urlopen)
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceError) as exc:
         TrelloIssueProvider().get_issue(issue_id)
 
-    assert exc.value.status_code == 404
-    assert exc.value.detail == "Issue not found"
+    assert exc.value.code == ErrorCode.NOT_FOUND
+    assert exc.value.status == 404
+    assert exc.value.message == "Issue not found"
+    assert exc.value.provider_involved
 
 
 @pytest.mark.parametrize(
@@ -90,11 +91,12 @@ def test_trello_rejects_malformed_response(monkeypatch, payload):
 
     monkeypatch.setattr(provider_module, "urlopen", fake_urlopen)
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceError) as exc:
         TrelloIssueProvider().get_issue(issue_id)
 
-    assert exc.value.status_code == 502
-    assert exc.value.detail == "Trello request failed"
+    assert exc.value.code == ErrorCode.PROVIDER_ERROR
+    assert exc.value.status == 502
+    assert exc.value.message == "The issue tracker returned an unexpected response"
 
 
 def test_provider_interchangeability():
@@ -174,8 +176,9 @@ def test_trello_rejects_malformed_created_card(monkeypatch, payload):
 
     monkeypatch.setattr(provider_module, "urlopen", fake_urlopen)
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceError) as exc:
         TrelloIssueProvider().create_issue("Fix login bug")
 
-    assert exc.value.status_code == 502
-    assert exc.value.detail == "Trello request failed"
+    assert exc.value.code == ErrorCode.PROVIDER_ERROR
+    assert exc.value.status == 502
+    assert exc.value.message == "The issue tracker returned an unexpected response"

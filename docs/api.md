@@ -39,17 +39,18 @@ These two fields are the whole public contract. No other fields are promised, an
 
 ### Errors
 
-| Situation | Status | Body |
-| --- | --- | --- |
-| No issue exists with the given `issue_id` | `404 Not Found` | `{"detail": "Issue not found"}` |
-| Malformed identifier (including a short card link) | `404 Not Found` | `{"detail": "Issue not found"}` |
-| Service credentials are missing | `503 Service Unavailable` | `{"detail": "Trello credentials not configured"}` |
-| Trello rejects the request, cannot be reached, times out, or returns an invalid response | `502 Bad Gateway` | `{"detail": "Trello request failed"}` |
+All errors use the shape described in [Error model](#error-model).
 
-These are initial integration errors, not the final Level 5 error model.
-After a 503, the service operator must configure credentials. A caller may
-retry a read after a transient 502; invalid credentials or permissions require
-operator action. Missing or malformed identifiers require a corrected ID.
+| Situation | Status | Code |
+| --- | --- | --- |
+| No issue exists with the given `issue_id` | `404 Not Found` | `not_found` |
+| Malformed identifier (including a short card link) | `404 Not Found` | `not_found` |
+| The issue tracker denies the service access | `403 Forbidden` | `access_denied` |
+| Service credentials are missing | `503 Service Unavailable` | `service_not_configured` |
+| The issue tracker cannot be reached, times out, is unavailable, or returns an unusable response | `502 Bad Gateway` | `provider_error` |
+
+GET has no side effects, so a caller may retry after a `502`. A `403` or
+`503` requires operator action. A `404` requires a corrected ID.
 
 ### Example
 
@@ -70,7 +71,7 @@ curl -i http://127.0.0.1:8000/issues/does-not-exist
 ```
 HTTP/1.1 404 Not Found
 
-{"detail":"Issue not found"}
+{"error":{"code":"not_found","message":"Issue not found"}}
 ```
 
 ## Create an issue
@@ -121,21 +122,25 @@ As with retrieval, these two fields are the whole public contract.
 
 ### Errors
 
-| Situation | Status | Body |
-| --- | --- | --- |
-| Body is missing, not JSON, or `title` is missing, not a string, empty, whitespace-only, or longer than 256 characters | `422 Unprocessable Content` | FastAPI's validation error format (`{"detail": [...]}`) |
-| Body contains a field other than `title` | `422 Unprocessable Content` | FastAPI's validation error format (`{"detail": [...]}`) |
-| Service credentials are missing | `503 Service Unavailable` | `{"detail": "Trello credentials not configured"}` |
-| The service's target issue list is not configured | `503 Service Unavailable` | `{"detail": "Trello list not configured"}` |
-| Trello rejects the request, cannot be reached, times out, or returns an invalid response | `502 Bad Gateway` | `{"detail": "Trello request failed"}` |
+All errors use the shape described in [Error model](#error-model).
 
-These are initial integration errors, not the final Level 5 error model.
-A 422 requires a corrected request body. After a 503, the service operator
-must configure credentials or the target issue list. Creation is **not**
-idempotent: after a 502, especially a timeout, the issue may already have
-been created. A caller who retries may create a duplicate issue and should
-check for the issue first where that matters. Invalid credentials,
-permissions, or a wrong target issue list require operator action.
+| Situation | Status | Code |
+| --- | --- | --- |
+| Body is missing, not JSON, or `title` is missing, not a string, empty, whitespace-only, or longer than 256 characters | `422 Unprocessable Content` | `invalid_input`, with `details` |
+| Body contains a field other than `title` | `422 Unprocessable Content` | `invalid_input`, with `details` |
+| The issue tracker denies the service access | `403 Forbidden` | `access_denied` |
+| Service credentials are missing | `503 Service Unavailable` | `service_not_configured` |
+| The service's target issue list is not configured | `503 Service Unavailable` | `service_not_configured` |
+| The issue tracker cannot be reached, times out, is unavailable, rejects the request, or returns an unusable response | `502 Bad Gateway` | `provider_error` |
+
+A `422` requires a corrected request body. A `403` or `503` requires
+operator action. A configured target issue list that the issue tracker
+rejects is currently reported as `502` `provider_error`; retrying will not
+help until the operator corrects it.
+
+Creation is **not** idempotent: after a `502`, especially a timeout, the
+issue may already have been created. A caller who retries may create a
+duplicate issue and should check for the issue first where that matters.
 
 ### Example
 
@@ -163,7 +168,7 @@ curl -i -X POST http://127.0.0.1:8000/issues \
 ```
 HTTP/1.1 422
 
-{"detail":[{"type":"string_too_short","loc":["body","title"],"msg":"String should have at least 1 character","input":"","ctx":{"min_length":1}}]}
+{"error":{"code":"invalid_input","message":"Request body is invalid","details":[{"field":"title","message":"String should have at least 1 character"}]}}
 ```
 
 The reason phrase after `422` depends on the Python version running the
@@ -219,22 +224,26 @@ Status `200 OK`, with the updated issue in the same shape as
 
 ### Errors
 
-| Situation | Status | Body |
+All errors use the shape described in [Error model](#error-model).
+
+| Situation | Status | Code |
 | --- | --- | --- |
-| No issue exists with the given `issue_id` | `404 Not Found` | `{"detail": "Issue not found"}` |
-| Malformed identifier (including a short card link) | `404 Not Found` | `{"detail": "Issue not found"}` |
-| Body is missing or not JSON, the object is empty, or `title` is `null`, not a string, empty, whitespace-only, or longer than 256 characters | `422 Unprocessable Content` | FastAPI's validation error format (`{"detail": [...]}`) |
-| Body contains a field other than `title` | `422 Unprocessable Content` | FastAPI's validation error format (`{"detail": [...]}`) |
-| Service credentials are missing | `503 Service Unavailable` | `{"detail": "Trello credentials not configured"}` |
-| Trello rejects the request, cannot be reached, times out, or returns an invalid response | `502 Bad Gateway` | `{"detail": "Trello request failed"}` |
+| No issue exists with the given `issue_id` | `404 Not Found` | `not_found` |
+| Malformed identifier (including a short card link) | `404 Not Found` | `not_found` |
+| Body is missing or not JSON, the object is empty, or `title` is `null`, not a string, empty, whitespace-only, or longer than 256 characters | `422 Unprocessable Content` | `invalid_input`, with `details` |
+| Body contains a field other than `title` | `422 Unprocessable Content` | `invalid_input`, with `details` |
+| The issue tracker denies the service access | `403 Forbidden` | `access_denied` |
+| Service credentials are missing | `503 Service Unavailable` | `service_not_configured` |
+| The issue tracker cannot be reached, times out, is unavailable, rejects the request, or returns an unusable response | `502 Bad Gateway` | `provider_error` |
 
 The request body is validated before the identifier, so a request with both
 an invalid body and a malformed ID returns `422`. Rejected requests never
-reach Trello.
+reach the issue tracker.
 
 Setting the same title again returns `200` and leaves the issue unchanged,
 so repeating a successful request is safe. After a `502`, the update may or
-may not have been applied; read the issue with `GET` before retrying.
+may not have been applied; read the issue with `GET` before retrying. A
+`403` or `503` requires operator action.
 
 ### Example
 
@@ -264,17 +273,18 @@ deletes the card, rather than archiving it.
 
 ### Errors and repetition
 
-| Situation | Status | Body |
-| --- | --- | --- |
-| Missing issue, including an issue already deleted | `404 Not Found` | `{"detail": "Issue not found"}` |
-| Malformed identifier (including a short card link) | `404 Not Found` | `{"detail": "Issue not found"}` |
-| Service credentials are missing | `503 Service Unavailable` | `{"detail": "Trello credentials not configured"}` |
-| Trello rejects the request, cannot be reached, or times out | `502 Bad Gateway` | `{"detail": "Trello request failed"}` |
+All errors use the shape described in [Error model](#error-model).
 
-Malformed IDs are rejected before any provider operation. DELETE uses the
-same initial error model as GET; the final Level 5 error model remains future
-work. A 503 requires credential configuration; rejected credentials or
-permissions require operator action.
+| Situation | Status | Code |
+| --- | --- | --- |
+| Missing issue, including an issue already deleted | `404 Not Found` | `not_found` |
+| Malformed identifier (including a short card link) | `404 Not Found` | `not_found` |
+| The issue tracker denies the service access | `403 Forbidden` | `access_denied` |
+| Service credentials are missing | `503 Service Unavailable` | `service_not_configured` |
+| The issue tracker cannot be reached, times out, is unavailable, or rejects the request | `502 Bad Gateway` | `provider_error` |
+
+Malformed IDs are rejected before any provider operation. A `403` or `503`
+requires operator action.
 
 After a successful deletion, GET and repeated DELETE requests return 404.
 Repeated deletion does not restore or create an issue, although the status
@@ -297,6 +307,113 @@ curl -i -X DELETE http://127.0.0.1:8000/issues/64f1c0a2b3d4e5f607182930
 HTTP/1.1 204 No Content
 ```
 
+## Error model
+
+Every failed request returns a JSON body of the same shape, whichever
+operation failed and whatever caused it:
+
+```json
+{
+  "error": {
+    "code": "not_found",
+    "message": "Issue not found"
+  }
+}
+```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `error.code` | string | A stable, machine-readable error code from the table below. Callers should branch on this. |
+| `error.message` | string | A short human-readable explanation. Its wording may change; do not parse it. |
+| `error.details` | array | Present only for `invalid_input` caused by a rejected request body. Each entry is `{"field": ..., "message": ...}`. |
+
+A `422` response lists every problem with the body:
+
+```json
+{
+  "error": {
+    "code": "invalid_input",
+    "message": "Request body is invalid",
+    "details": [
+      {"field": "title", "message": "String should have at least 1 character"}
+    ]
+  }
+}
+```
+
+`field` names the rejected body field.
+
+### Error codes
+
+| Code | Status | When it occurs | Can the caller retry? |
+| --- | --- | --- | --- |
+| `invalid_input` | `422 Unprocessable Content` | The request body is missing, not JSON, contains an unknown field, or breaks a field rule (such as the title rule). Also used with status `405` for an unsupported method on a known route. | No. Correct the request first. |
+| `not_found` | `404 Not Found` | No issue exists with the given ID (including one already deleted), the ID is malformed, or the route does not exist. | No. |
+| `access_denied` | `403 Forbidden` | The issue tracker rejected the service's credentials or does not allow it to access the issue. | No. The service operator must fix the credentials or permissions. |
+| `service_not_configured` | `503 Service Unavailable` | The service is missing its issue tracker credentials, or (for creation) its target issue list. | No. The service operator must complete the configuration. |
+| `provider_error` | `502 Bad Gateway` | The issue tracker could not be reached, timed out, rate-limited the service, was unavailable, rejected the request for another reason, or returned a response the service could not use. | Reads: yes, after a short wait. Writes: only after checking with GET, because the change may already have been applied. |
+| `internal_error` | `500 Internal Server Error` | An unexpected failure inside the service. This indicates a bug. | Possibly, but report it if it repeats. |
+
+`provider_error` uses one code for every issue tracker failure, so callers
+need to handle only one case. Its message says what kind of failure it was:
+
+| Situation | Message |
+| --- | --- |
+| Could not connect (DNS failure, connection refused or reset) | `The issue tracker could not be reached` |
+| No response within the 10-second timeout | `The issue tracker did not respond in time` |
+| The issue tracker is rate limiting the service | `The issue tracker is rate limiting requests` |
+| The issue tracker reported a server error | `The issue tracker is currently unavailable` |
+| Any other rejection | `The issue tracker rejected the request` |
+| A response missing required data, or with the wrong issue ID | `The issue tracker returned an unexpected response` |
+
+The other messages are fixed: `Issue not found`, `Resource not found`,
+`Request not supported`, `The issue tracker denied access to this issue`,
+`Issue tracker credentials not configured`,
+`Issue tracker target list not configured`, `Request body is invalid`, and
+`Internal server error`.
+
+The service never retries automatically. A failed write can still have been
+applied if the issue tracker processed it and the response was lost, so the
+retry guidance above is conservative for POST, PATCH and DELETE. POST is not
+idempotent: retrying it can create a duplicate issue.
+
+### What callers see and what stays internal
+
+Error responses describe the failure in the service's terms. They never
+contain provider names, provider error messages, provider status codes,
+request URLs, credentials, or stack traces. A caller cannot tell which issue
+tracker the service uses from an error.
+
+Expected failures (every code except `internal_error`) are part of this
+contract. `internal_error` means the service has a bug; its cause is
+recorded only in the service log.
+
+### Failure logging
+
+The service writes one structured JSON line to the `app.errors` logger for
+every failed request:
+
+```json
+{"level": "WARNING", "operation": "get_issue", "error": "not_found", "status": 404, "provider_involved": true, "cause": "provider_status=404"}
+```
+
+| Field | Description |
+| --- | --- |
+| `level` | `WARNING` for 4xx responses, `ERROR` for 5xx responses. |
+| `operation` | The endpoint that failed: `get_issue`, `create_issue`, `update_issue`, `delete_issue`, or `unknown` for an unknown route. |
+| `error` | The error code returned to the caller. |
+| `status` | The HTTP status returned to the caller. |
+| `provider_involved` | `true` only when the service attempted a request to the issue tracker. Malformed IDs, invalid bodies and missing configuration are rejected before that, so they log `false`. |
+| `cause` | A short internal reason, such as `provider_status=429`, `timeout`, `URLError`, `malformed_issue_id` or `missing_credentials`. It is `null` when nothing more specific is known. |
+
+Logs never contain credentials, authorization data, request URLs (the issue
+tracker URL carries the credentials), request or response bodies, or
+exception messages from the issue tracker client. Expected failures are
+logged without a stack trace. Only `internal_error` includes one, because
+it is needed to find the bug.
+
+The service has no request or correlation identifier.
+
 ## What callers can rely on
 
 - A GET or PATCH `200` or POST `201` response always contains `id` and `title` and nothing else.
@@ -304,6 +421,7 @@ HTTP/1.1 204 No Content
 - Each `201` response means exactly one new issue was created. A `422` or `503` response means none was created.
 - A `PATCH` changes only the fields included in the request body.
 - A successful DELETE returns `204` with no body and removes the issue.
+- Every error response has the shape in [Error model](#error-model), and its `error.code` is one of the codes listed there. A failed operation is never reported with a success status.
 - The routes, methods, and response shapes above will not change without an update to this document.
 
 ## Assumptions
@@ -318,4 +436,4 @@ These affect observable behavior and are not guaranteed by the assignment spec, 
 - **Title limit.** The 256-character limit is a service rule for a short title, not a provider limit. Any provider must accept titles at least that long.
 - **Where new issues go.** New issues are created in a single target location chosen by the service operator (for Trello, the list named by `TRELLO_LIST_ID`). Callers cannot choose it. Support for more than one location would be added as a provider-independent field, not as a provider ID.
 - **Only `id` and `title` are returned or accepted.** Other issue fields (status, description, assignee, and so on) are left out on purpose, because they are not needed for the smallest useful operation. We will add fields only when an operation needs them.
-- **Domain vocabulary.** This API says "issue" and does not use any provider's terms. Provider details do not appear in responses.
+- **Domain vocabulary.** This API says "issue" and does not use any provider's terms. Provider details do not appear in responses, including error responses.

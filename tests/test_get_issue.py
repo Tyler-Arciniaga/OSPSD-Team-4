@@ -1,7 +1,7 @@
 import io
 import json
 from email.message import Message
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
 from urllib.request import Request
 
@@ -9,6 +9,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import main, provider
+from tests.expected_errors import (
+    CREDENTIALS_NOT_CONFIGURED,
+    ISSUE_HTTP_FAILURES,
+    NETWORK_FAILURES,
+    NOT_FOUND,
+    UNEXPECTED_RESPONSE,
+    ErrorJson,
+)
 
 client = TestClient(main.app)
 
@@ -59,14 +67,12 @@ def test_get_unknown_issue_returns_404():
     response = client.get("/issues/does-not-exist")
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "Issue not found"}
+    assert response.json() == NOT_FOUND
 
 
-@pytest.mark.parametrize(
-    "status, expected", [(404, 404), (401, 502), (403, 502), (429, 502), (500, 502)]
-)
+@pytest.mark.parametrize(("status", "expected", "body"), ISSUE_HTTP_FAILURES)
 def test_trello_http_errors(
-    monkeypatch: pytest.MonkeyPatch, status: int, expected: int
+    monkeypatch: pytest.MonkeyPatch, status: int, expected: int, body: ErrorJson
 ):
     def fail(request: Request, timeout: int) -> None:
         raise HTTPError(
@@ -76,20 +82,20 @@ def test_trello_http_errors(
     monkeypatch.setattr(provider, "urlopen", fail)
     response = client.get(f"/issues/{KNOWN_ISSUE_ID}")
     assert response.status_code == expected
-    assert response.json() == {
-        "detail": "Issue not found" if expected == 404 else "Trello request failed"
-    }
+    assert response.json() == body
 
 
-@pytest.mark.parametrize("error", [URLError("private"), TimeoutError("private")])
-def test_trello_network_failure(monkeypatch: pytest.MonkeyPatch, error: Exception):
+@pytest.mark.parametrize(("error", "body"), NETWORK_FAILURES)
+def test_trello_network_failure(
+    monkeypatch: pytest.MonkeyPatch, error: Exception, body: ErrorJson
+):
     def fail(request: Request, timeout: int) -> None:
         raise error
 
     monkeypatch.setattr(provider, "urlopen", fail)
     response = client.get(f"/issues/{KNOWN_ISSUE_ID}")
     assert response.status_code == 502
-    assert response.json() == {"detail": "Trello request failed"}
+    assert response.json() == body
 
 
 @pytest.mark.parametrize(
@@ -101,7 +107,7 @@ def test_invalid_trello_response(monkeypatch: pytest.MonkeyPatch, payload: bytes
     )
     response = client.get(f"/issues/{KNOWN_ISSUE_ID}")
     assert response.status_code == 502
-    assert response.json() == {"detail": "Trello request failed"}
+    assert response.json() == UNEXPECTED_RESPONSE
 
 
 @pytest.mark.parametrize("variable", ["TRELLO_API_KEY", "TRELLO_TOKEN"])
@@ -109,4 +115,4 @@ def test_missing_credentials(monkeypatch: pytest.MonkeyPatch, variable: str):
     monkeypatch.delenv(variable)
     response = client.get(f"/issues/{KNOWN_ISSUE_ID}")
     assert response.status_code == 503
-    assert response.json() == {"detail": "Trello credentials not configured"}
+    assert response.json() == CREDENTIALS_NOT_CONFIGURED
