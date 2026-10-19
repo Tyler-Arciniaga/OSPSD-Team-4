@@ -82,9 +82,15 @@ def log_failure(
     *,
     provider_involved: bool,
     cause: str | None = None,
+    exc_info: bool = False,
 ) -> None:
-    """Write one structured JSON line describing a failed operation."""
+    """Write one structured JSON line describing a failed operation.
+
+    Expected failures are logged without a stack trace. Pass `exc_info=True`
+    only for unexpected exceptions, where the trace helps find the bug.
+    """
     record = {
+        "level": "ERROR" if status >= 500 else "WARNING",
         "operation": operation,
         "error": code.value,
         "status": status,
@@ -92,4 +98,4 @@ def log_failure(
         "cause": cause,
     }
     level = logging.ERROR if status >= 500 else logging.WARNING
-    logger.log(level, json.dumps(record))
+    logger.log(level, json.dumps(record), exc_info=exc_info)
