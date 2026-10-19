@@ -20,16 +20,19 @@ The service implements `GET /issues/{issue_id}`, `POST /issues`,
 `PATCH /issues/{issue_id}`, and `DELETE /issues/{issue_id}` against Trello.
 GET, POST, and PATCH translate a card's `id` and `name` into the public `id`
 and `title` fields; PATCH updates an issue's `title`; DELETE permanently
-removes the card. Automated tests run without credentials or network access.
+removes the card. Every failure returns one documented, provider-independent
+error format and writes one sanitized log line. Automated tests run without
+credentials or network access.
 
 GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests.
 
 ## Project Structure
 
-- `app/main.py`: FastAPI endpoints, which validate input and call the supplied provider.
+- `app/main.py`: FastAPI endpoints, which validate input and call the supplied provider, and the handlers that turn failures into error responses and log lines.
+- `app/errors.py`: Error codes, the `ServiceError` raised by providers and endpoints, the error response models, and failure logging.
 - `app/models.py`: Public `Issue` response model, `IssueCreate` and `IssueUpdate` request models, and the shared `IssueTitle` rule.
 - `app/interface.py`: Provider-independent `IssueProvider` contract.
-- `app/provider.py`: Trello authentication, requests, and response translation.
+- `app/provider.py`: Trello authentication, requests, and translation of Trello responses and failures.
 - `app/dependencies.py`: Creates and supplies the Trello provider to the endpoints.
 - `tests/test_get_issue.py`: Retrieval endpoint tests with simulated Trello responses.
 - `tests/test_create_issue.py`: Creation endpoint tests with simulated Trello responses.
@@ -37,8 +40,10 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 - `tests/test_injected_provider.py`: Endpoint tests using supplied fake providers.
 - `tests/test_update_issue.py`: `PATCH` endpoint tests with simulated Trello responses and supplied providers.
 - `tests/test_delete_issue.py`: DELETE request, failure, and injected-provider workflow tests.
-- `docs/api.md`: API contract, examples, and assumptions.
-- `docs/providers.md`: Provider interface, dependency setup, and testing approach.
+- `tests/test_errors.py`: Error response and failure-logging tests using a controlled provider.
+- `tests/expected_errors.py`: Expected error bodies shared by the endpoint tests.
+- `docs/api.md`: API contract, error model, examples, and assumptions.
+- `docs/providers.md`: Provider interface, error translation, dependency setup, and testing approach.
 - `pyproject.toml`: Python requirement, dependencies, and tool configuration.
 - `uv.lock`: Locked dependency versions for reproducible installation.
 - `.github/workflows/ci.yml`: Automated linting, formatting, type checking, and tests.
@@ -139,7 +144,10 @@ Expected response body:
 
 Replace the example ID with the full ID of your test card. The returned
 title is that card's current name. Unknown or malformed IDs return
-`404 Not Found`; Trello rejection or unavailability produces HTTP 502.
+`404 Not Found`. Errors have the form
+`{"error": {"code": "...", "message": "..."}}`; see
+[the error model](docs/api.md#error-model) for every code, its status, and
+whether to retry.
 
 To create an issue:
 
@@ -229,7 +237,9 @@ shared title rule for POST and PATCH), Trello request construction and
 response translation, missing credentials or target issue list, and provider
 failures. They also verify that the endpoints can use a supplied fake
 provider, invalid IDs and invalid bodies cause no provider call, and deleted
-issues cannot be read or deleted again.
+issues cannot be read or deleted again. Error tests check the full error
+response and log line for each class of failure, and that neither responses
+nor logs contain credentials or provider details.
 
 The tests use simulated responses or fake providers and require no
 running server, real credentials, or network access. Live Trello
@@ -256,7 +266,8 @@ for the provider setup and the responsibilities of each test file.
 3. Rename the card to `HW1 Level 2 renamed` in Trello and repeat the request.
    Expect HTTP 200 with the new title and the same ID.
 4. Run `curl -i http://127.0.0.1:8000/issues/does-not-exist`.
-   Expect HTTP 404 and `{"detail":"Issue not found"}`.
+   Expect HTTP 404 and
+   `{"error":{"code":"not_found","message":"Issue not found"}}`.
 5. With `TRELLO_LIST_ID` set to the test card's `idList`, create an issue:
 
    ```bash
@@ -291,8 +302,23 @@ for the provider setup and the responsibilities of each test file.
 
    Expect HTTP 204 with an empty body. Confirm the card is gone in Trello.
    Repeat GET and DELETE for the same ID; both should return HTTP 404 and
-   `{"detail":"Issue not found"}`. Record the observed results in the PR.
-9. Delete any remaining disposable cards (including the card created in
+   `{"error":{"code":"not_found","message":"Issue not found"}}`. Record the
+   observed results in the PR.
+9. Check that a real provider failure is translated. Stop the server and
+   restart it with an invalid token, keeping the key from `.env`:
+
+   ```bash
+   TRELLO_TOKEN=invalid-token uv run --locked uvicorn app.main:app --env-file .env
+   ```
+
+   Request the issue created in step 5, which still exists:
+   `curl -i "http://127.0.0.1:8000/issues/<new ID>"`. Expect HTTP 403 and
+   `{"error":{"code":"access_denied","message":"The issue tracker denied access to this issue"}}`.
+   The server terminal should show one log line like
+   `{"level": "WARNING", "operation": "get_issue", "error": "access_denied", "status": 403, "provider_involved": true, "cause": "provider_status=401"}`,
+   with no key, token, URL, or stack trace. Record the observed status and
+   log line in the PR.
+10. Delete any remaining disposable cards (including the card created in
    step 5) and any board created only for this check.
    Revoke the token from the test account's Settings > Applications page
    when finished, stop the server, clear credentials from `.env`, and run
