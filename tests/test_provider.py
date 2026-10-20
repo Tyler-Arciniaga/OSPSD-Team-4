@@ -99,6 +99,37 @@ def test_trello_rejects_malformed_response(
     assert exc.value.message == "The issue tracker returned an unexpected response"
 
 
+@pytest.mark.parametrize(
+    "issue_id", ["does-not-exist", "abc123", "A" * 24, "a" * 23, "a" * 25]
+)
+@pytest.mark.parametrize("operation", ["get", "update", "delete"])
+def test_trello_rejects_malformed_id_without_a_request(
+    monkeypatch: pytest.MonkeyPatch, issue_id: str, operation: str
+) -> None:
+    # No credentials and no network: the ID check must come first.
+    monkeypatch.delenv("TRELLO_API_KEY", raising=False)
+    monkeypatch.delenv("TRELLO_TOKEN", raising=False)
+
+    def forbid_network(request: Request, timeout: int) -> io.BytesIO:
+        raise AssertionError("Malformed IDs must not reach Trello")
+
+    monkeypatch.setattr(provider_module, "urlopen", forbid_network)
+    trello = TrelloIssueProvider()
+
+    with pytest.raises(ServiceError) as exc:
+        if operation == "get":
+            trello.get_issue(issue_id)
+        elif operation == "update":
+            trello.update_issue(issue_id, IssueUpdate(title="Renamed"))
+        else:
+            trello.delete_issue(issue_id)
+
+    assert exc.value.code == ErrorCode.NOT_FOUND
+    assert exc.value.message == "Issue not found"
+    assert exc.value.cause == "malformed_issue_id"
+    assert not exc.value.provider_involved
+
+
 def test_provider_interchangeability() -> None:
     class FakeIssueProvider:
         def get_issue(self, issue_id: str) -> Issue:

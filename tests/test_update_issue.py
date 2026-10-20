@@ -300,10 +300,8 @@ def test_patch_rejected_input_does_not_call_provider(
         main.app.dependency_overrides, get_issue_provider, supply_provider
     )
 
-    bad_id = client.patch("/issues/does-not-exist", json={"title": NEW_TITLE})
     bad_body = client.patch(f"/issues/{KNOWN_ISSUE_ID}", json={})
 
-    assert bad_id.status_code == 404
     assert bad_body.status_code == 422
 
 

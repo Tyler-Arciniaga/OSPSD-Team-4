@@ -1,4 +1,3 @@
-import re
 from collections.abc import Mapping
 from typing import Annotated, Any
 
@@ -17,7 +16,7 @@ from app.errors import (
     log_failure,
 )
 from app.interface import IssueProvider
-from app.models import ISSUE_ID_PATTERN, Issue, IssueCreate, IssueUpdate
+from app.models import Issue, IssueCreate, IssueUpdate
 
 app = FastAPI(title="Issue Tracking Service")
 
@@ -106,14 +105,6 @@ def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
     return _error_response(500, ErrorCode.INTERNAL_ERROR, "Internal server error")
 
 
-def require_valid_issue_id(issue_id: str) -> None:
-    """Reject malformed IDs before they reach the provider."""
-    if not re.fullmatch(ISSUE_ID_PATTERN, issue_id):
-        raise ServiceError(
-            ErrorCode.NOT_FOUND, "Issue not found", cause="malformed_issue_id"
-        )
-
-
 @app.get(
     "/issues/{issue_id}",
     response_model=Issue,
@@ -123,8 +114,7 @@ def get_issue(
     issue_id: str,
     provider: Annotated[IssueProvider, Depends(get_issue_provider)],
 ) -> Issue:
-    """Retrieve an issue by its full ID using the supplied provider."""
-    require_valid_issue_id(issue_id)
+    """Retrieve an issue by its ID using the supplied provider."""
     return provider.get_issue(issue_id)
 
 
@@ -138,8 +128,7 @@ def update_issue(
     changes: IssueUpdate,
     provider: Annotated[IssueProvider, Depends(get_issue_provider)],
 ) -> Issue:
-    """Partially update an issue by its full ID using the supplied provider."""
-    require_valid_issue_id(issue_id)
+    """Partially update an issue by its ID using the supplied provider."""
     return provider.update_issue(issue_id, changes)
 
 
@@ -153,8 +142,7 @@ def delete_issue(
     issue_id: str,
     provider: Annotated[IssueProvider, Depends(get_issue_provider)],
 ) -> Response:
-    """Permanently delete an issue by its full ID using the supplied provider."""
-    require_valid_issue_id(issue_id)
+    """Permanently delete an issue by its ID using the supplied provider."""
     provider.delete_issue(issue_id)
     return Response(status_code=204)
 

@@ -7,7 +7,11 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from app.errors import ErrorCode, ServiceError
-from app.models import ISSUE_ID_PATTERN, Issue, IssueUpdate
+from app.models import Issue, IssueUpdate
+
+# The format of a full Trello card ID. Used to reject IDs that cannot name a
+# card before contacting Trello, and to check the ID of a created card.
+CARD_ID_PATTERN = r"[0-9a-f]{24}"
 
 
 def _credentials() -> tuple[str, str]:
@@ -21,6 +25,17 @@ def _credentials() -> tuple[str, str]:
             cause="missing_credentials",
         )
     return key, token
+
+
+def _require_card_id(issue_id: str) -> None:
+    """Reject an ID that cannot be a full Trello card ID as a missing issue.
+
+    Runs before the credential check, so no request is attempted.
+    """
+    if not re.fullmatch(CARD_ID_PATTERN, issue_id):
+        raise ServiceError(
+            ErrorCode.NOT_FOUND, "Issue not found", cause="malformed_issue_id"
+        )
 
 
 def _trello_headers() -> dict[str, str]:
@@ -145,8 +160,7 @@ class TrelloIssueProvider:
         try:
             with urlopen(request, timeout=10) as response:
                 card = json.load(response)
-            # re.fullmatch raises TypeError if the ID is not a string.
-            if not re.fullmatch(ISSUE_ID_PATTERN, card["id"]):
+            if not re.fullmatch(CARD_ID_PATTERN, card["id"]):
                 raise ValueError("Unexpected card ID")
             if not isinstance(card["name"], str):
                 raise TypeError("Unexpected card name")
@@ -166,6 +180,7 @@ class TrelloIssueProvider:
         Returns the decoded JSON body, or None for DELETE (which has no card
         body). Send any returned cards to `_card_to_issue()` to turn a card body into an Issue.
         """
+        _require_card_id(issue_id)
         headers = _trello_headers()
 
         url = f"https://api.trello.com/1/cards/{issue_id}"

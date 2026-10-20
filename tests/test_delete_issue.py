@@ -173,34 +173,6 @@ def test_delete_uses_injected_provider_and_cannot_be_retrieved_or_deleted_again(
     assert deleted_ids == [KNOWN_ISSUE_ID]
 
 
-def test_delete_invalid_id_does_not_call_injected_provider(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class UnexpectedCallProvider:
-        def get_issue(self, issue_id: str) -> Issue:
-            raise AssertionError("DELETE must not retrieve an issue")
-
-        def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
-            raise AssertionError("DELETE must not update an issue")
-
-        def delete_issue(self, issue_id: str) -> None:
-            raise AssertionError("Invalid IDs must not reach the provider")
-
-        def create_issue(self, title: str) -> Issue:
-            raise AssertionError("DELETE must not create an issue")
-
-    def supply_provider() -> IssueProvider:
-        return UnexpectedCallProvider()
-
-    monkeypatch.setitem(
-        main.app.dependency_overrides, get_issue_provider, supply_provider
-    )
-    response = client.delete("/issues/does-not-exist")
-
-    assert response.status_code == 404
-    assert response.json() == NOT_FOUND
-
-
 def test_delete_lost_response_may_follow_a_successful_deletion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
