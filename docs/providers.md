@@ -94,8 +94,8 @@ for everything else.
 | Invalid JSON, missing `id` or `name`, or an unexpected card ID | `provider_error` | exception class name |
 
 Only the HTTP status or the exception's class name is kept. Exception
-messages are discarded, because a Trello request URL carries the API key
-and token in its query string.
+messages and response bodies are discarded, because they may contain
+request URLs or other provider details.
 
 ## Provider Implementation
 
@@ -122,6 +122,10 @@ The endpoints in `app/main.py` receive an object satisfying the
 `update_issue()`, and `DELETE /issues/{issue_id}` calls `delete_issue()`.
 They do not import or construct `TrelloIssueProvider`.
 All four provider methods share the credential check in `app/provider.py`.
+The key and token are sent in an `Authorization` header
+(`OAuth oauth_consumer_key="...", oauth_token="..."`, as described in
+[Trello's authorization guide](https://developer.atlassian.com/cloud/trello/guides/rest-api/authorization/)),
+never in the query string, so they do not appear in request URLs.
 `get_issue()`, `update_issue()`, and `delete_issue()` also share request
 construction. All four share error translation, except that a Trello 404
 during creation means the configured list is wrong, not that an issue is
@@ -197,7 +201,7 @@ temporary changes are restored automatically by pytest's
 `tests/test_update_issue.py` covers `PATCH /issues/{issue_id}` in both styles:
 
 - With the real Trello implementation and simulated responses: the `PUT`
-  request's method, path, query parameters, and timeout; titles at and over
+  request's method, path, query parameters, `Authorization` header, and timeout; titles at and over
   the 256-character limit; titles sent without trimming; malformed IDs;
   invalid bodies (`422`); Trello `404`, `401`/`403`, rate limiting, server
   errors, network failures and timeouts, and invalid responses; and missing

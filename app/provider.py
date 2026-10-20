@@ -23,6 +23,19 @@ def _credentials() -> tuple[str, str]:
     return key, token
 
 
+def _trello_headers() -> dict[str, str]:
+    """Return request headers carrying the Trello key and token.
+
+    Credentials go in the Authorization header rather than the query string,
+    so they never appear in request URLs or in HTTPError.url.
+    """
+    key, token = _credentials()
+    return {
+        "Accept": "application/json",
+        "Authorization": f'OAuth oauth_consumer_key="{key}", oauth_token="{token}"',
+    }
+
+
 def _provider_error(message: str, cause: str) -> ServiceError:
     """Report a failed or unusable Trello request without Trello details."""
     return ServiceError(
@@ -34,7 +47,7 @@ def _translate_request_failure(exc: Exception) -> ServiceError:
     """Translate a network failure or unusable Trello response.
 
     Only the exception's class name is kept: its message may contain the
-    request URL, which carries the key and token.
+    request URL or other provider details.
     """
     # A timeout may be raised directly or wrapped in a URLError.
     if isinstance(exc, TimeoutError) or (
@@ -55,8 +68,7 @@ def _translate_http_error(
 ) -> ServiceError:
     """Translate a Trello HTTP rejection into a service error.
 
-    Only the status code is kept: the URL carries the key and token, and the
-    response body is provider data.
+    Only the status code is kept: the response body is provider data.
     """
     exc.close()
     cause = f"provider_status={exc.code}"
@@ -101,7 +113,7 @@ class TrelloIssueProvider:
     def create_issue(self, title: str) -> Issue:
         """Create a Trello card in the configured list and convert it into an Issue."""
 
-        key, token = _credentials()
+        headers = _trello_headers()
         list_id = os.environ.get("TRELLO_LIST_ID")
         if not list_id:
             raise ServiceError(
@@ -110,18 +122,11 @@ class TrelloIssueProvider:
                 cause="missing_target_list",
             )
 
-        params = urlencode(
-            {
-                "idList": list_id,
-                "name": title,
-                "key": key,
-                "token": token,
-            }
-        )
+        params = urlencode({"idList": list_id, "name": title})
 
         request = Request(
             f"https://api.trello.com/1/cards?{params}",
-            headers={"Accept": "application/json"},
+            headers=headers,
             method="POST",
         )
         try:
@@ -147,14 +152,12 @@ class TrelloIssueProvider:
 
         Returns the translated card, or None for DELETE (which has no card body).
         """
-        key, token = _credentials()
+        headers = _trello_headers()
 
-        query = urlencode({**(params or {}), "key": key, "token": token})
-        request = Request(
-            f"https://api.trello.com/1/cards/{issue_id}?{query}",
-            headers={"Accept": "application/json"},
-            method=method,
-        )
+        url = f"https://api.trello.com/1/cards/{issue_id}"
+        if params:
+            url += f"?{urlencode(params)}"
+        request = Request(url, headers=headers, method=method)
         try:
             with urlopen(request, timeout=10) as response:
                 if method == "DELETE":

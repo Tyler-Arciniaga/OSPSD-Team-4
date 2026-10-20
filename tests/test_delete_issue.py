@@ -1,7 +1,7 @@
 import io
 from email.message import Message
 from urllib.error import HTTPError
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 from urllib.request import Request
 
 import pytest
@@ -50,10 +50,10 @@ def test_delete_sends_one_request_and_returns_no_content(
         assert parsed.scheme == "https"
         assert parsed.netloc == "api.trello.com"
         assert parsed.path == f"/1/cards/{KNOWN_ISSUE_ID}"
-        assert parse_qs(parsed.query) == {
-            "key": ["test-key"],
-            "token": ["test-token"],
-        }
+        assert parsed.query == ""
+        assert request.get_header("Authorization") == (
+            'OAuth oauth_consumer_key="test-key", oauth_token="test-token"'
+        )
         assert request.data is None
         assert timeout == 10
         return trello_response
