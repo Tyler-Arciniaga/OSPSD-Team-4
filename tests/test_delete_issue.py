@@ -1,4 +1,5 @@
 import io
+from collections.abc import Iterator
 from email.message import Message
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
@@ -21,7 +22,14 @@ from tests.expected_errors import (
     error_body,
 )
 
-client = TestClient(main.app)
+
+@pytest.fixture
+def client() -> Iterator[TestClient]:
+    # Run startup and shutdown for each test, giving it a fresh cache.
+    with TestClient(main.app) as test_client:
+        yield test_client
+
+
 KNOWN_ISSUE_ID = "64f1c0a2b3d4e5f607182930"
 
 
@@ -38,7 +46,7 @@ def trello_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.parametrize("body", [b"", b"{}"])
 def test_delete_sends_one_request_and_returns_no_content(
-    monkeypatch: pytest.MonkeyPatch, body: bytes
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, body: bytes
 ) -> None:
     requests: list[Request] = []
     trello_response = io.BytesIO(body)
@@ -70,7 +78,9 @@ def test_delete_sends_one_request_and_returns_no_content(
 @pytest.mark.parametrize(
     "issue_id", ["does-not-exist", "abc123", "A" * 24, "a" * 23, "a" * 25]
 )
-def test_delete_invalid_id_never_contacts_trello(issue_id: str) -> None:
+def test_delete_invalid_id_never_contacts_trello(
+    client: TestClient, issue_id: str
+) -> None:
     response = client.delete(f"/issues/{issue_id}")
 
     assert response.status_code == 404
@@ -79,7 +89,7 @@ def test_delete_invalid_id_never_contacts_trello(issue_id: str) -> None:
 
 @pytest.mark.parametrize("variable", ["TRELLO_API_KEY", "TRELLO_TOKEN"])
 def test_delete_missing_credentials(
-    monkeypatch: pytest.MonkeyPatch, variable: str
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, variable: str
 ) -> None:
     monkeypatch.delenv(variable)
     response = client.delete(f"/issues/{KNOWN_ISSUE_ID}")
@@ -90,7 +100,11 @@ def test_delete_missing_credentials(
 
 @pytest.mark.parametrize(("status", "expected", "body"), ISSUE_HTTP_FAILURES)
 def test_delete_trello_http_errors(
-    monkeypatch: pytest.MonkeyPatch, status: int, expected: int, body: ErrorJson
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    expected: int,
+    body: ErrorJson,
 ) -> None:
     trello_body = io.BytesIO(b"private provider details")
 
@@ -107,7 +121,10 @@ def test_delete_trello_http_errors(
 
 @pytest.mark.parametrize(("error", "body"), NETWORK_FAILURES)
 def test_delete_network_failure_is_not_retried(
-    monkeypatch: pytest.MonkeyPatch, error: Exception, body: ErrorJson
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    body: ErrorJson,
 ) -> None:
     calls: list[Request] = []
 
@@ -124,6 +141,7 @@ def test_delete_network_failure_is_not_retried(
 
 
 def test_delete_uses_injected_provider_and_cannot_be_retrieved_or_deleted_again(
+    client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issues = {KNOWN_ISSUE_ID: Issue(id=KNOWN_ISSUE_ID, title="Disposable issue")}
@@ -174,6 +192,7 @@ def test_delete_uses_injected_provider_and_cannot_be_retrieved_or_deleted_again(
 
 
 def test_delete_invalid_id_does_not_call_injected_provider(
+    client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class UnexpectedCallProvider:
@@ -202,6 +221,7 @@ def test_delete_invalid_id_does_not_call_injected_provider(
 
 
 def test_delete_lost_response_may_follow_a_successful_deletion(
+    client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     deleted_ids: list[str] = []
