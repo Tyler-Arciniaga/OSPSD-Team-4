@@ -75,7 +75,8 @@ A `ServiceError` also carries two values that are only logged:
 ### Trello mapping
 
 `TrelloIssueProvider` translates failures as follows. GET, PATCH and DELETE
-share `_request_card()`; `create_issue()` sends its own request. Both use
+share `_send_card_request()`, and GET and PATCH convert the returned card
+with `_card_to_issue()`; `create_issue()` sends its own request. Both use
 `_translate_http_error()` for HTTP errors and `_translate_request_failure()`
 for everything else.
 

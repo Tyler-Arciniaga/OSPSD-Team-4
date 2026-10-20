@@ -63,7 +63,7 @@ def test_get_issue_returns_id_and_title(monkeypatch: pytest.MonkeyPatch):
     }
 
 
-def test_get_unknown_issue_returns_404():
+def test_get_unknown_issue_returns_404() -> None:
     response = client.get("/issues/does-not-exist")
 
     assert response.status_code == 404

@@ -249,6 +249,9 @@ def test_rejection_before_provider_is_logged_as_not_involving_it(
     ]
 
 
+# Each failure deliberately carries credentials and provider details in its
+# URL or message, whether or not real requests would, to prove that none of
+# them reach the response or the logs.
 @pytest.mark.parametrize(
     ("error", "level", "code", "status", "cause"),
     [

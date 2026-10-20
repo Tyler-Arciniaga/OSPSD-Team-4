@@ -90,25 +90,38 @@ def _translate_http_error(
     return _provider_error("The issue tracker rejected the request", cause)
 
 
+def _card_to_issue(card: Any, issue_id: str) -> Issue:
+    """Convert a Trello card body into an Issue for the requested ID.
+
+    A body that is not a card, or is a different card, is reported as an
+    unusable provider response.
+    """
+    try:
+        issue = Issue(id=card["id"], title=card["name"])
+        if issue.id != issue_id:
+            raise ValueError("Unexpected card ID")
+    except (ValueError, KeyError, TypeError) as exc:
+        raise _translate_request_failure(exc) from None
+    return issue
+
+
 class TrelloIssueProvider:
     def get_issue(self, issue_id: str) -> Issue:
         """Retrieve a Trello card and convert it into an Issue."""
-        issue = self._request_card("GET", issue_id, {"fields": "id,name"})
-        assert issue is not None
-        return issue
+        card = self._send_card_request("GET", issue_id, {"fields": "id,name"})
+        return _card_to_issue(card, issue_id)
 
     def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
         """Update a Trello card and convert the result into an Issue."""
         params: dict[str, str] = {}
         if changes.title is not None:
             params["name"] = changes.title
-        issue = self._request_card("PUT", issue_id, params)
-        assert issue is not None
-        return issue
+        card = self._send_card_request("PUT", issue_id, params)
+        return _card_to_issue(card, issue_id)
 
     def delete_issue(self, issue_id: str) -> None:
         """Permanently delete a Trello card."""
-        self._request_card("DELETE", issue_id)
+        self._send_card_request("DELETE", issue_id)
 
     def create_issue(self, title: str) -> Issue:
         """Create a Trello card in the configured list and convert it into an Issue."""
@@ -145,12 +158,13 @@ class TrelloIssueProvider:
         except (URLError, OSError, ValueError, KeyError, TypeError) as exc:
             raise _translate_request_failure(exc) from None
 
-    def _request_card(
+    def _send_card_request(
         self, method: str, issue_id: str, params: dict[str, str] | None = None
-    ) -> Issue | None:
+    ) -> Any:
         """Send one card request with shared authentication and error mapping.
 
-        Returns the translated card, or None for DELETE (which has no card body).
+        Returns the decoded JSON body, or None for DELETE (which has no card
+        body). Send any returned cards to `_card_to_issue()` to turn a card body into an Issue.
         """
         headers = _trello_headers()
 
@@ -162,12 +176,8 @@ class TrelloIssueProvider:
             with urlopen(request, timeout=10) as response:
                 if method == "DELETE":
                     return None
-                card: Any = json.load(response)
-            issue = Issue(id=card["id"], title=card["name"])
-            if issue.id != issue_id:
-                raise ValueError("Unexpected card ID")
-            return issue
+                return json.load(response)
         except HTTPError as exc:
             raise _translate_http_error(exc, missing_means_not_found=True) from None
-        except (URLError, OSError, ValueError, KeyError, TypeError) as exc:
+        except (URLError, OSError, ValueError) as exc:
             raise _translate_request_failure(exc) from None
