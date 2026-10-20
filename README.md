@@ -76,7 +76,9 @@ and delete its test cards.
 
 1. Sign in to the test account. Create an app in the
    [Trello developer portal](https://trello.com/apps/admin), selecting
-   "My app doesn't use Power-up capabilities." Open **Trello Auth** and
+   "My app doesn't use Power-up capabilities." The app opens on the
+   **OAuth 2.0** page, which asks for a callback URL; this service does not
+   use OAuth 2.0, so skip that page. Open the **Trello Auth** tab instead and
    generate an API key.
 2. In a browser, replace `YOUR_API_KEY` in this URL with that key and approve
    read and write access (the token expires after one day). Write access is
@@ -144,7 +146,10 @@ Expected response body:
 
 Replace the example ID with the full ID of your test card. The returned
 title is that card's current name. Unknown or malformed IDs return
-`404 Not Found`. Errors have the form
+`404 Not Found`. If `TRELLO_API_KEY` or `TRELLO_TOKEN` is not set, any
+otherwise valid request returns `503 Service Unavailable` with code
+`service_not_configured`; complete [Configuration](#configuration) and
+restart the server. Errors have the form
 `{"error": {"code": "...", "message": "..."}}`; see
 [the error model](docs/api.md#error-model) for every code, its status, and
 whether to retry.
