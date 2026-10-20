@@ -4,7 +4,7 @@
 
 The Issue Tracker Service uses a provider-independent interface to separate application logic from Trello-specific operations.
 
-This allows application code to retrieve, create, and delete issues using the service's domain contract without understanding Trello's API or response structure.
+This allows application code to retrieve, create, update, and delete issues using the service's domain contract without understanding Trello's API or response structure.
 
 ## Interface Contract
 
@@ -132,25 +132,83 @@ processing step. The supplied provider performs the actual operation.
 
 ## Provider Selection
 
-`app/dependencies.py` defines `get_issue_provider()`, which creates
-and returns a `TrelloIssueProvider` during normal operation.
+`app/dependencies.py` defines the application's `lifespan()` function.
+`app/main.py` connects it with `FastAPI(lifespan=lifespan, ...)`.
+At startup it creates a `TrelloIssueProvider`, wraps it in a
+`CachedIssueProvider`, and saves the wrapper in `app.state.issue_provider`.
+Shutdown removes that reference; the next startup creates an empty cache.
 
-All four endpoints declare this dependency using
-`Annotated[IssueProvider, Depends(get_issue_provider)]`, so
-all four use the same supplier and the same override mechanism.
-FastAPI calls the supplier and passes the resulting object to the
-endpoint when handling a request.
+All four endpoints declare
+`Annotated[IssueProvider, Depends(get_issue_provider)]`.
+For each request, FastAPI supplies a `Request` to `get_issue_provider()`,
+which returns `request.app.state.issue_provider`. Requests handled by the
+same application process therefore share one wrapper and its cache.
+Tests can still override this dependency to supply another implementation.
 
-The concrete provider choice is kept in `app/dependencies.py`.
-Trello authentication, requests, and response translation remain
-in `app/provider.py`.
+The concrete provider choice and cache settings stay in
+`app/dependencies.py`. Trello authentication, requests, and response
+translation remain in `app/provider.py`. The Trello implementation reads
+credentials and, for creation, the target list from the environment when
+called. A cache hit does not call Trello or recheck credentials. Restart
+the application after configuration changes to discard previously cached data.
 
-A new provider object is created for each request. It stores no
-shared mutable state. The Trello implementation reads credentials
-(and, for creation, the target issue list) from environment variables on
-each call.
+## Cache Behavior
+
+**File:** `app/cache.py`  
+**Implementation:** `CachedIssueProvider`
+
+The wrapper supports the same four methods as `IssueProvider`, so endpoints
+need no cache-specific code. Normal operation uses a 30-second lifetime
+and a limit of 100 entries, configured at startup.
+
+| Operation | Cache behavior |
+| --- | --- |
+| GET hit | Return a separate copy of the saved issue and mark it most recently used. |
+| GET miss or expired entry | Call the underlying provider and cache a copy only if retrieval succeeds. |
+| PATCH | Remove the issue's entry before forwarding the update; do not cache the update response. |
+| DELETE | Remove the issue's entry before forwarding deletion. |
+| POST | Forward creation without reading or changing the cache. |
+
+Entries are keyed by issue ID in an `OrderedDict`. Each contains an
+expiration time and an `Issue`. Expiration uses `monotonic()` and starts
+when retrieval finishes. Hits do not extend it. Expired entries are
+removed during GET processing; there is no background cleanup task.
+When capacity is exceeded, the least recently used entry is removed.
+The limit counts entries, not bytes.
+
+Copies on storage and on cache hits prevent callers from modifying the
+saved object. Exceptions propagate normally and are never cached.
+Invalidation happens before writes because Trello might apply a change
+even if its response fails to reach the service.
+
+One lock protects GET, PATCH, and DELETE, including their provider calls.
+This keeps reads and invalidation consistent within the wrapper, but also
+makes these operations wait for one another even for different issue IDs.
+POST does not acquire this lock because it does not change the cache.
+
+The cache is in memory and local to one application process. Workers do
+not share entries or invalidations. Direct Trello changes and permission
+revocations can remain unnoticed while an entry is valid. A cache hit can
+succeed even while Trello is unavailable; after expiration the service
+must fetch again and may return a provider error. See
+[Read freshness and caching](api.md#read-freshness-and-caching).
 
 ## Testing
+
+Endpoint client fixtures use `with TestClient(...)` so application startup
+and shutdown run for each test and cached data does not leak between tests.
+Tests that override `get_issue_provider()` still bypass the normal wrapper.
+
+### Cache tests
+
+`tests/test_cache.py` uses fake providers and a controlled clock to check
+cache hits, expiration without extending the lifetime on a hit,
+least-recently-used eviction, and isolation from caller mutations.
+It also checks invalidation for updates and deletions, including failed
+writes with uncertain outcomes, and that failed reads are not cached.
+An HTTP-level test verifies that requests reuse the startup-created cache
+and a new application lifespan starts empty. These tests require neither
+Trello access nor real-time waits.
 
 ### Provider tests
 
