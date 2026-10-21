@@ -39,7 +39,7 @@ This allows application code to retrieve, create, update, and delete issues usin
 ### Operation: `delete_issue(issue_id: str) -> None`
 
 - **Purpose:** Permanently delete an existing issue.
-- **Input:** `issue_id` — a string identifying the issue. The HTTP endpoint validates the full ID before calling the provider.
+- **Input:** `issue_id` — a string identifying the issue, passed through unchanged by the endpoint.
 - **Return value:** `None` on success. The endpoint returns HTTP 204 with no body.
 - **External state:** Removes the issue. For Trello this deletes, rather than archives, the card.
 - **Errors:** A missing issue raises `not_found` (HTTP 404); missing credentials raise `service_not_configured` (HTTP 503); a provider rejection or network failure raises `access_denied` or `provider_error`, as for the other operations. See [Errors](#errors).
@@ -67,7 +67,7 @@ A `ServiceError` also carries two values that are only logged:
 
 | Failure | Code | Status |
 | --- | --- | --- |
-| The issue does not exist | `not_found` | 404 |
+| The issue does not exist, or the ID is not one this provider can recognise | `not_found` | 404 |
 | The provider rejects the service's credentials or permissions | `access_denied` | 403 |
 | Provider configuration is missing | `service_not_configured` | 503 |
 | Any other failed provider request or unusable provider response | `provider_error` | 502 |
@@ -75,12 +75,14 @@ A `ServiceError` also carries two values that are only logged:
 ### Trello mapping
 
 `TrelloIssueProvider` translates failures as follows. GET, PATCH and DELETE
-share `_request_card()`; `create_issue()` sends its own request. Both use
+share `_send_card_request()`, and GET and PATCH convert the returned card
+with `_card_to_issue()`; `create_issue()` sends its own request. Both use
 `_translate_http_error()` for HTTP errors and `_translate_request_failure()`
 for everything else.
 
 | Trello failure | Code | Logged `cause` |
 | --- | --- | --- |
+| ID for GET, PATCH or DELETE is not a full card ID (24 lowercase hexadecimal characters); checked before credentials, without a request | `not_found` | `malformed_issue_id` |
 | `TRELLO_API_KEY` or `TRELLO_TOKEN` missing | `service_not_configured` | `missing_credentials` |
 | `TRELLO_LIST_ID` missing (creation only) | `service_not_configured` | `missing_target_list` |
 | HTTP 404 for GET, PATCH or DELETE | `not_found` | `provider_status=404` |
@@ -94,8 +96,8 @@ for everything else.
 | Invalid JSON, missing `id` or `name`, or an unexpected card ID | `provider_error` | exception class name |
 
 Only the HTTP status or the exception's class name is kept. Exception
-messages are discarded, because a Trello request URL carries the API key
-and token in its query string.
+messages and response bodies are discarded, because they may contain
+request URLs or other provider details.
 
 ## Provider Implementation
 
@@ -108,6 +110,7 @@ The Trello implementation is responsible for:
 - Sending requests to the Trello REST API.
 - Managing provider-specific authentication.
 - Retrieving Trello card data.
+- Rejecting IDs that cannot be a full Trello card ID as `not_found` before any request. Issue IDs are opaque to the endpoints, so this format rule belongs to the provider; another provider can accept UUIDs or numeric IDs without changes to the API.
 - Creating Trello cards in the list named by the `TRELLO_LIST_ID` environment variable.
 - Updating Trello cards (`title` is sent as the card's `name` with Trello's Update a Card `PUT` request).
 - Permanently deleting cards using Trello's [Delete a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-delete) operation. Trello's HTTP 200 success is translated into the service's HTTP 204, without parsing a response body.
@@ -122,6 +125,10 @@ The endpoints in `app/main.py` receive an object satisfying the
 `update_issue()`, and `DELETE /issues/{issue_id}` calls `delete_issue()`.
 They do not import or construct `TrelloIssueProvider`.
 All four provider methods share the credential check in `app/provider.py`.
+The key and token are sent in an `Authorization` header
+(`OAuth oauth_consumer_key="...", oauth_token="..."`, as described in
+[Trello's authorization guide](https://developer.atlassian.com/cloud/trello/guides/rest-api/authorization/)),
+never in the query string, so they do not appear in request URLs.
 `get_issue()`, `update_issue()`, and `delete_issue()` also share request
 construction. All four share error translation, except that a Trello 404
 during creation means the configured list is wrong, not that an issue is
@@ -236,7 +243,8 @@ through `app.dependency_overrides`.
 These tests verify that:
 
 - The endpoints use the supplied provider and return its result.
-- Invalid IDs are rejected without calling the provider's retrieval method.
+- GET, PATCH and DELETE pass any ID, such as a UUID or a number, to the
+  supplied provider unchanged: the endpoints define no ID format.
 - Invalid creation bodies are rejected with 422 without calling the
   provider's creation method.
 - A provider's `not_found` error produces the expected 404 response.
@@ -255,13 +263,13 @@ temporary changes are restored automatically by pytest's
 `tests/test_update_issue.py` covers `PATCH /issues/{issue_id}` in both styles:
 
 - With the real Trello implementation and simulated responses: the `PUT`
-  request's method, path, query parameters, and timeout; titles at and over
+  request's method, path, query parameters, `Authorization` header, and timeout; titles at and over
   the 256-character limit; titles sent without trimming; malformed IDs;
   invalid bodies (`422`); Trello `404`, `401`/`403`, rate limiting, server
   errors, network failures and timeouts, and invalid responses; and missing
   credentials.
 - With supplied providers: the endpoint passes the ID and validated changes
-  to `update_issue()` without touching Trello; rejected requests never reach
+  to `update_issue()` without touching Trello; rejected bodies never reach
   the provider; and a provider's `not_found` error becomes a `404`.
 - `test_create_and_update_share_title_rule` checks that `IssueCreate` and
   `IssueUpdate` accept and reject the same titles.
@@ -295,7 +303,7 @@ of those helpers.
 `tests/test_delete_issue.py` checks the following public guarantees:
 
 - Success returns HTTP 204 with no body and sends exactly one authenticated Trello DELETE, with no preliminary GET. Empty and JSON provider success bodies are both accepted, and the connection is closed.
-- Malformed IDs (short links, uppercase, and IDs one character shorter or longer than required) return 404 without calling Trello or an injected provider.
+- Malformed IDs (short links, uppercase, and IDs one character shorter or longer than required) return 404 without calling Trello.
 - Missing credentials, provider rejection, a missing card, and network failures produce the documented errors without leaking provider details. Error responses are closed.
 - A supplied stateful provider supports GET → DELETE → GET and repeated DELETE: the issue is removed once, then both operations report 404. This test runs without credentials.
 - A provider that deletes the card then loses the response produces 502 with no retry. This demonstrates the documented uncertain outcome.
@@ -306,11 +314,11 @@ Existing GET tests protect retrieval behavior after sharing the request code.
 Offline tests establish service behavior, not actual Trello permissions or
 post-deletion state. Verify those separately using the README procedure.
 
-Defect check: replacing `main.require_valid_issue_id` with a no-op in a
-separate Python process made
-`test_delete_invalid_id_does_not_call_injected_provider` fail with
-`AssertionError: Invalid IDs must not reach the provider`. No source was
-changed for that experiment; the test passes with the real validation.
+Defect check: replacing `provider._require_card_id` with a no-op in a
+separate Python process made 25 tests fail, including
+`test_delete_invalid_id_never_contacts_trello` and
+`test_trello_rejects_malformed_id_without_a_request`. No source was changed
+for that experiment; the tests pass with the real check.
 
 ### Live Trello verification
 

@@ -17,7 +17,7 @@ Return one issue by its identifier.
 
 | Name | Location | Type | Required | Description |
 | --- | --- | --- | --- | --- |
-| `issue_id` | path | string | yes | The full Trello card ID of the issue to return (24 lowercase hexadecimal characters). |
+| `issue_id` | path | string | yes | The issue's `id`, exactly as the service returned it. The service does not define an ID format; the current Trello provider accepts only full card IDs (24 lowercase hexadecimal characters). |
 
 ### Successful response
 
@@ -48,7 +48,7 @@ Cache hits make no provider request. Changes made directly in Trello,
 including deletion or revoked permissions, may not be noticed until the
 entry expires. A cached read can also succeed during a provider outage.
 Missing configuration and provider errors are checked when a read reaches
-the underlying provider; malformed IDs are always rejected by the endpoint.
+the underlying provider; the Trello provider rejects malformed IDs before making a network request.
 
 PATCH and DELETE discard the affected entry in the process handling the
 write before contacting the provider, including when the write fails.
@@ -67,7 +67,7 @@ All errors use the shape described in [Error model](#error-model).
 | Situation | Status | Code |
 | --- | --- | --- |
 | No issue exists with the given `issue_id` | `404 Not Found` | `not_found` |
-| Malformed identifier (including a short card link) | `404 Not Found` | `not_found` |
+| Identifier the issue tracker cannot recognise (with Trello, anything other than a full card ID, such as a short card link) | `404 Not Found` | `not_found` |
 | The issue tracker denies the service access | `403 Forbidden` | `access_denied` |
 | Service credentials are missing | `503 Service Unavailable` | `service_not_configured` |
 | The issue tracker cannot be reached, times out, is unavailable, or returns an unusable response | `502 Bad Gateway` | `provider_error` |
@@ -213,7 +213,7 @@ Fields left out of the request body are not changed.
 
 | Name | Location | Type | Required | Description |
 | --- | --- | --- | --- | --- |
-| `issue_id` | path | string | yes | The full Trello card ID of the issue to update (24 lowercase hexadecimal characters). |
+| `issue_id` | path | string | yes | The issue's `id`, exactly as the service returned it. The service does not define an ID format; the current Trello provider accepts only full card IDs (24 lowercase hexadecimal characters). |
 
 ### Request body
 
@@ -252,7 +252,7 @@ All errors use the shape described in [Error model](#error-model).
 | Situation | Status | Code |
 | --- | --- | --- |
 | No issue exists with the given `issue_id` | `404 Not Found` | `not_found` |
-| Malformed identifier (including a short card link) | `404 Not Found` | `not_found` |
+| Identifier the issue tracker cannot recognise (with Trello, anything other than a full card ID, such as a short card link) | `404 Not Found` | `not_found` |
 | Body is missing or not JSON, the object is empty, or `title` is `null`, not a string, empty, whitespace-only, or longer than 256 characters | `422 Unprocessable Content` | `invalid_input`, with `details` |
 | Body contains a field other than `title` | `422 Unprocessable Content` | `invalid_input`, with `details` |
 | The issue tracker denies the service access | `403 Forbidden` | `access_denied` |
@@ -289,7 +289,7 @@ deletes the card, rather than archiving it.
 | --- | --- |
 | Method | `DELETE` |
 | Route | `/issues/{issue_id}` |
-| Parameters | `issue_id`: full Trello card ID (24 lowercase hexadecimal characters) |
+| Parameters | `issue_id`: the issue's `id`, exactly as the service returned it (with the current Trello provider, a full 24-character lowercase hexadecimal card ID) |
 | Request body | None required |
 | Changes state? | Yes. Permanently removes the issue. |
 | Success status | `204 No Content`, with an empty body |
@@ -301,13 +301,13 @@ All errors use the shape described in [Error model](#error-model).
 | Situation | Status | Code |
 | --- | --- | --- |
 | Missing issue, including an issue already deleted | `404 Not Found` | `not_found` |
-| Malformed identifier (including a short card link) | `404 Not Found` | `not_found` |
+| Identifier the issue tracker cannot recognise (with Trello, anything other than a full card ID, such as a short card link) | `404 Not Found` | `not_found` |
 | The issue tracker denies the service access | `403 Forbidden` | `access_denied` |
 | Service credentials are missing | `503 Service Unavailable` | `service_not_configured` |
 | The issue tracker cannot be reached, times out, is unavailable, or rejects the request | `502 Bad Gateway` | `provider_error` |
 
-Malformed IDs are rejected before any provider operation. A `403` or `503`
-requires operator action.
+The Trello provider rejects malformed IDs before making a network request. 
+A `403` or `503` requires operator action.
 
 After a successful deletion, GET requests handled by the same process and
 repeated DELETE requests return 404 when the provider confirms the issue
@@ -431,11 +431,10 @@ every failed request:
 | `provider_involved` | `true` only when the service attempted a request to the issue tracker. Malformed IDs, invalid bodies and missing configuration are rejected before that, so they log `false`. |
 | `cause` | A short internal reason, such as `provider_status=429`, `timeout`, `URLError`, `malformed_issue_id` or `missing_credentials`. It is `null` when nothing more specific is known. |
 
-Logs never contain credentials, authorization data, request URLs (the issue
-tracker URL carries the credentials), request or response bodies, or
-exception messages from the issue tracker client. Expected failures are
-logged without a stack trace. Only `internal_error` includes one, because
-it is needed to find the bug.
+Logs never contain credentials, authorization data, request URLs,
+request or response bodies, or exception messages from the issue tracker client.
+Expected failures are logged without a stack trace.
+Only `internal_error` includes one, because it is needed to find the bug.
 
 The service has no request or correlation identifier.
 

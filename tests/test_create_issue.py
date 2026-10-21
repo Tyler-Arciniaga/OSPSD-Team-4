@@ -57,10 +57,10 @@ def test_create_issue_returns_id_and_title(
         assert parse_qs(parsed.query) == {
             "idList": [LIST_ID],
             "name": [CREATED_ISSUE_TITLE],
-            "key": ["test-key"],
-            "token": ["test-token"],
         }
-        assert request.get_header("Authorization") is None
+        assert request.get_header("Authorization") == (
+            'OAuth oauth_consumer_key="test-key", oauth_token="test-token"'
+        )
         assert timeout == 10
         return io.BytesIO(
             json.dumps(

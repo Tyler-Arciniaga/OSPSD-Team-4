@@ -58,24 +58,32 @@ def test_endpoint_uses_supplied_provider(monkeypatch: pytest.MonkeyPatch) -> Non
     assert requested_ids == [issue_id]
 
 
-def test_invalid_id_does_not_call_provider(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "issue_id", ["3f2b1c9e-8d4a-4f6b-9c1e-2a7d5e8f0b13", "12345", "PROJ-42"]
+)
+def test_endpoints_pass_any_id_to_supplied_provider(
+    monkeypatch: pytest.MonkeyPatch, issue_id: str
 ) -> None:
-    class UnexpectedCallProvider:
+    # IDs are opaque to the service: only the provider decides which it accepts.
+    received: list[tuple[str, str]] = []
+
+    class AnyIdProvider:
         def get_issue(self, issue_id: str) -> Issue:
-            raise AssertionError("Invalid IDs must not reach the provider")
+            received.append(("get", issue_id))
+            return Issue(id=issue_id, title="Issue from the fake provider")
 
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
-            raise AssertionError("Invalid IDs must not reach the provider")
+            received.append(("update", issue_id))
+            return Issue(id=issue_id, title=changes.title or "")
 
         def delete_issue(self, issue_id: str) -> None:
-            raise AssertionError("Invalid IDs must not reach the provider")
+            received.append(("delete", issue_id))
 
         def create_issue(self, title: str) -> Issue:
-            raise AssertionError("Invalid IDs must not reach the provider")
+            raise AssertionError("No issue should be created")
 
     def supply_provider() -> IssueProvider:
-        return UnexpectedCallProvider()
+        return AnyIdProvider()
 
     monkeypatch.setitem(
         app.dependency_overrides,
@@ -84,12 +92,15 @@ def test_invalid_id_does_not_call_provider(
     )
 
     with TestClient(app) as client:
-        response = client.get("/issues/does-not-exist")
+        got = client.get(f"/issues/{issue_id}")
+        updated = client.patch(f"/issues/{issue_id}", json={"title": "Renamed"})
+        deleted = client.delete(f"/issues/{issue_id}")
 
-    assert response.status_code == 404
-    assert response.json() == {
-        "error": {"code": "not_found", "message": "Issue not found"}
-    }
+    assert got.status_code == 200
+    assert got.json()["id"] == issue_id
+    assert updated.status_code == 200
+    assert deleted.status_code == 204
+    assert received == [("get", issue_id), ("update", issue_id), ("delete", issue_id)]
 
 
 def test_provider_missing_issue_returns_404(

@@ -7,7 +7,11 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from app.errors import ErrorCode, ServiceError
-from app.models import ISSUE_ID_PATTERN, Issue, IssueUpdate
+from app.models import Issue, IssueUpdate
+
+# The format of a full Trello card ID. Used to reject IDs that cannot name a
+# card before contacting Trello, and to check the ID of a created card.
+CARD_ID_PATTERN = r"[0-9a-f]{24}"
 
 
 def _credentials() -> tuple[str, str]:
@@ -23,6 +27,30 @@ def _credentials() -> tuple[str, str]:
     return key, token
 
 
+def _require_card_id(issue_id: str) -> None:
+    """Reject an ID that cannot be a full Trello card ID as a missing issue.
+
+    Runs before the credential check, so no request is attempted.
+    """
+    if not re.fullmatch(CARD_ID_PATTERN, issue_id):
+        raise ServiceError(
+            ErrorCode.NOT_FOUND, "Issue not found", cause="malformed_issue_id"
+        )
+
+
+def _trello_headers() -> dict[str, str]:
+    """Return request headers carrying the Trello key and token.
+
+    Credentials go in the Authorization header rather than the query string,
+    so they never appear in request URLs or in HTTPError.url.
+    """
+    key, token = _credentials()
+    return {
+        "Accept": "application/json",
+        "Authorization": f'OAuth oauth_consumer_key="{key}", oauth_token="{token}"',
+    }
+
+
 def _provider_error(message: str, cause: str) -> ServiceError:
     """Report a failed or unusable Trello request without Trello details."""
     return ServiceError(
@@ -34,7 +62,7 @@ def _translate_request_failure(exc: Exception) -> ServiceError:
     """Translate a network failure or unusable Trello response.
 
     Only the exception's class name is kept: its message may contain the
-    request URL, which carries the key and token.
+    request URL or other provider details.
     """
     # A timeout may be raised directly or wrapped in a URLError.
     if isinstance(exc, TimeoutError) or (
@@ -55,8 +83,7 @@ def _translate_http_error(
 ) -> ServiceError:
     """Translate a Trello HTTP rejection into a service error.
 
-    Only the status code is kept: the URL carries the key and token, and the
-    response body is provider data.
+    Only the status code is kept: the response body is provider data.
     """
     exc.close()
     cause = f"provider_status={exc.code}"
@@ -78,30 +105,43 @@ def _translate_http_error(
     return _provider_error("The issue tracker rejected the request", cause)
 
 
+def _card_to_issue(card: Any, issue_id: str) -> Issue:
+    """Convert a Trello card body into an Issue for the requested ID.
+
+    A body that is not a card, or is a different card, is reported as an
+    unusable provider response.
+    """
+    try:
+        issue = Issue(id=card["id"], title=card["name"])
+        if issue.id != issue_id:
+            raise ValueError("Unexpected card ID")
+    except (ValueError, KeyError, TypeError) as exc:
+        raise _translate_request_failure(exc) from None
+    return issue
+
+
 class TrelloIssueProvider:
     def get_issue(self, issue_id: str) -> Issue:
         """Retrieve a Trello card and convert it into an Issue."""
-        issue = self._request_card("GET", issue_id, {"fields": "id,name"})
-        assert issue is not None
-        return issue
+        card = self._send_card_request("GET", issue_id, {"fields": "id,name"})
+        return _card_to_issue(card, issue_id)
 
     def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
         """Update a Trello card and convert the result into an Issue."""
         params: dict[str, str] = {}
         if changes.title is not None:
             params["name"] = changes.title
-        issue = self._request_card("PUT", issue_id, params)
-        assert issue is not None
-        return issue
+        card = self._send_card_request("PUT", issue_id, params)
+        return _card_to_issue(card, issue_id)
 
     def delete_issue(self, issue_id: str) -> None:
         """Permanently delete a Trello card."""
-        self._request_card("DELETE", issue_id)
+        self._send_card_request("DELETE", issue_id)
 
     def create_issue(self, title: str) -> Issue:
         """Create a Trello card in the configured list and convert it into an Issue."""
 
-        key, token = _credentials()
+        headers = _trello_headers()
         list_id = os.environ.get("TRELLO_LIST_ID")
         if not list_id:
             raise ServiceError(
@@ -110,25 +150,17 @@ class TrelloIssueProvider:
                 cause="missing_target_list",
             )
 
-        params = urlencode(
-            {
-                "idList": list_id,
-                "name": title,
-                "key": key,
-                "token": token,
-            }
-        )
+        params = urlencode({"idList": list_id, "name": title})
 
         request = Request(
             f"https://api.trello.com/1/cards?{params}",
-            headers={"Accept": "application/json"},
+            headers=headers,
             method="POST",
         )
         try:
             with urlopen(request, timeout=10) as response:
                 card = json.load(response)
-            # re.fullmatch raises TypeError if the ID is not a string.
-            if not re.fullmatch(ISSUE_ID_PATTERN, card["id"]):
+            if not re.fullmatch(CARD_ID_PATTERN, card["id"]):
                 raise ValueError("Unexpected card ID")
             if not isinstance(card["name"], str):
                 raise TypeError("Unexpected card name")
@@ -140,31 +172,27 @@ class TrelloIssueProvider:
         except (URLError, OSError, ValueError, KeyError, TypeError) as exc:
             raise _translate_request_failure(exc) from None
 
-    def _request_card(
+    def _send_card_request(
         self, method: str, issue_id: str, params: dict[str, str] | None = None
-    ) -> Issue | None:
+    ) -> Any:
         """Send one card request with shared authentication and error mapping.
 
-        Returns the translated card, or None for DELETE (which has no card body).
+        Returns the decoded JSON body, or None for DELETE (which has no card
+        body). Send any returned cards to `_card_to_issue()` to turn a card body into an Issue.
         """
-        key, token = _credentials()
+        _require_card_id(issue_id)
+        headers = _trello_headers()
 
-        query = urlencode({**(params or {}), "key": key, "token": token})
-        request = Request(
-            f"https://api.trello.com/1/cards/{issue_id}?{query}",
-            headers={"Accept": "application/json"},
-            method=method,
-        )
+        url = f"https://api.trello.com/1/cards/{issue_id}"
+        if params:
+            url += f"?{urlencode(params)}"
+        request = Request(url, headers=headers, method=method)
         try:
             with urlopen(request, timeout=10) as response:
                 if method == "DELETE":
                     return None
-                card: Any = json.load(response)
-            issue = Issue(id=card["id"], title=card["name"])
-            if issue.id != issue_id:
-                raise ValueError("Unexpected card ID")
-            return issue
+                return json.load(response)
         except HTTPError as exc:
             raise _translate_http_error(exc, missing_means_not_found=True) from None
-        except (URLError, OSError, ValueError, KeyError, TypeError) as exc:
+        except (URLError, OSError, ValueError) as exc:
             raise _translate_request_failure(exc) from None

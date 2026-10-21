@@ -51,10 +51,10 @@ def test_get_issue_returns_id_and_title(
         assert parsed.path == f"/1/cards/{KNOWN_ISSUE_ID}"
         assert parse_qs(parsed.query) == {
             "fields": ["id,name"],
-            "key": ["test-key"],
-            "token": ["test-token"],
         }
-        assert request.get_header("Authorization") is None
+        assert request.get_header("Authorization") == (
+            'OAuth oauth_consumer_key="test-key", oauth_token="test-token"'
+        )
         assert timeout == 10
         return io.BytesIO(
             json.dumps(
@@ -72,7 +72,7 @@ def test_get_issue_returns_id_and_title(
     }
 
 
-def test_get_unknown_issue_returns_404(client: TestClient):
+def test_get_unknown_issue_returns_404(client: TestClient) -> None:
     response = client.get("/issues/does-not-exist")
 
     assert response.status_code == 404

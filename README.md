@@ -78,7 +78,9 @@ and delete its test cards.
 
 1. Sign in to the test account. Create an app in the
    [Trello developer portal](https://trello.com/apps/admin), selecting
-   "My app doesn't use Power-up capabilities." Open **Trello Auth** and
+   "My app doesn't use Power-up capabilities." The app opens on the
+   **OAuth 2.0** page, which asks for a callback URL; this service does not
+   use OAuth 2.0, so skip that page. Open the **Trello Auth** tab instead and
    generate an API key.
 2. In a browser, replace `YOUR_API_KEY` in this URL with that key and approve
    read and write access (the token expires after one day). Write access is
@@ -147,7 +149,13 @@ Expected response body:
 Replace the example ID with the full ID of your test card. The returned
 title is the card's name from the latest fetch, which may be cached for
 30 seconds. Malformed IDs return `404 Not Found`; missing cards are detected
-when a request reaches Trello. See [Caching](#caching). Errors have the form
+when a request reaches Trello. See [Caching](#caching).
+
+If `TRELLO_API_KEY` or `TRELLO_TOKEN` is not set, requests that need the
+Trello provider return `503 Service Unavailable` with code
+`service_not_configured`, unless the ID is rejected first. Cache hits do
+not recheck credentials. Complete [Configuration](#configuration) and
+restart the server. Errors have the form
 `{"error": {"code": "...", "message": "..."}}`; see
 [the error model](docs/api.md#error-model) for every code, its status, and
 whether to retry.
@@ -262,8 +270,9 @@ Tests cover all four endpoints, request body validation (including the
 shared title rule for POST and PATCH), Trello request construction and
 response translation, missing credentials or target issue list, and provider
 failures. They also verify that the endpoints can use a supplied fake
-provider, invalid IDs and invalid bodies cause no provider call, and deleted
-issues cannot be read or deleted again. Error tests check the full error
+provider, malformed Trello IDs cause no network request, invalid bodies are
+rejected before calling provider methods, and deleted issues cannot be read
+or deleted again. Error tests check the full error
 response and log line for each class of failure, and that neither responses
 nor logs contain credentials or provider details.
 

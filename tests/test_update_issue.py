@@ -68,10 +68,10 @@ def test_patch_updates_title(
         assert parsed.path == f"/1/cards/{KNOWN_ISSUE_ID}"
         assert parse_qs(parsed.query) == {
             "name": [NEW_TITLE],
-            "key": ["test-key"],
-            "token": ["test-token"],
         }
-        assert request.get_header("Authorization") is None
+        assert request.get_header("Authorization") == (
+            'OAuth oauth_consumer_key="test-key", oauth_token="test-token"'
+        )
         assert timeout == 10
         return card_response(
             {"id": KNOWN_ISSUE_ID, "name": NEW_TITLE, "desc": "private"}
@@ -325,10 +325,8 @@ def test_patch_rejected_input_does_not_call_provider(
         main.app.dependency_overrides, get_issue_provider, supply_provider
     )
 
-    bad_id = client.patch("/issues/does-not-exist", json={"title": NEW_TITLE})
     bad_body = client.patch(f"/issues/{KNOWN_ISSUE_ID}", json={})
 
-    assert bad_id.status_code == 404
     assert bad_body.status_code == 422
 
 
