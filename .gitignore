@@ -169,3 +169,6 @@ cython_debug/
 
 # macOS generated files
 .DS_Store
+# Idempotency key store (local default for IDEMPOTENCY_DB_PATH)
+idempotency.sqlite3
+idempotency.sqlite3-*

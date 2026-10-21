@@ -22,7 +22,10 @@ GET, POST, and PATCH translate a card's `id` and `name` into the public `id`
 and `title` fields; PATCH updates an issue's `title`; DELETE permanently
 removes the card. GET and PATCH return an `ETag`; PATCH with `If-Match`
 rejects stale overwrites with `412` (see
-[Conditional updates](docs/api.md#conditional-updates)). Every failure returns one documented, provider-independent
+[Conditional updates](docs/api.md#conditional-updates)). `POST /issues`
+accepts an optional `Idempotency-Key` header, so retries and overlapping
+requests create at most one issue (see
+[Idempotent creation](docs/api.md#idempotent-creation)). Every failure returns one documented, provider-independent
 error format and writes one sanitized log line. Automated tests run without
 credentials or network access.
 
@@ -36,7 +39,8 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 - `app/interface.py`: Provider-independent `IssueProvider` contract.
 - `app/provider.py`: Trello authentication, requests, and translation of Trello responses and failures.
 - `app/cache.py`: Caches successful reads and invalidates saved issues before updates or deletions.
-- `app/dependencies.py`: Creates one cached Trello provider at application startup and supplies it to the endpoints.
+- `app/dependencies.py`: Creates one cached Trello provider and the idempotency key store at application startup and supplies them to the endpoints.
+- `app/idempotency.py`: Durable idempotency key store and the logic that creates each keyed issue at most once.
 - `tests/conftest.py`: Shared per-test client setup and application startup/shutdown.
 - `tests/test_cache.py`: Cache behavior, concurrency, invalidation, and application lifecycle tests.
 - `tests/test_get_issue.py`: Retrieval endpoint tests with simulated Trello responses.
@@ -45,6 +49,7 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 - `tests/test_injected_provider.py`: Endpoint tests using supplied fake providers.
 - `tests/test_update_issue.py`: `PATCH` endpoint tests with simulated Trello responses and supplied providers.
 - `tests/test_delete_issue.py`: DELETE request, failure, and injected-provider workflow tests.
+- `tests/test_idempotency.py`: Repeated, overlapping, conflicting, expired and restarted keyed creations, unknown provider outcomes, and cache and logging integration.
 - `tests/test_errors.py`: Error response and failure-logging tests using a controlled provider.
 - `tests/expected_errors.py`: Expected error bodies shared by the endpoint tests.
 - `docs/api.md`: API contract, error model, examples, and assumptions.
@@ -103,6 +108,11 @@ and delete its test cards.
    append `.json` to its URL, and copy the top-level `idList` value
    (24 hexadecimal characters). Retrieval works without this setting;
    creation returns `503` until it is set.
+
+5. Optionally set `IDEMPOTENCY_DB_PATH` to the file that records idempotency
+   keys (default `idempotency.sqlite3` in the working directory, ignored by
+   Git). It must survive restarts, and every worker must use the same file.
+   Deleting it forgets all keys.
 
 The startup command below loads `.env` into the service environment.
 Existing exported environment variables take precedence over values in

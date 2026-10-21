@@ -1,5 +1,6 @@
 import json
 import logging
+from collections.abc import Mapping
 from enum import StrEnum
 
 from pydantic import BaseModel
@@ -17,6 +18,13 @@ class ErrorCode(StrEnum):
     PRECONDITION_FAILED = "precondition_failed"
     PROVIDER_ERROR = "provider_error"
     INTERNAL_ERROR = "internal_error"
+    IDEMPOTENCY_KEY_REUSED = "idempotency_key_reused"
+    REQUEST_IN_PROGRESS = "request_in_progress"
+
+
+# Codes for which a failed write may still have taken effect, unless the
+# failure says otherwise (see ServiceError.may_have_applied).
+_OUTCOME_UNKNOWN_CODES = frozenset({ErrorCode.PROVIDER_ERROR, ErrorCode.INTERNAL_ERROR})
 
 
 STATUS_FOR_CODE: dict[ErrorCode, int] = {
@@ -27,6 +35,8 @@ STATUS_FOR_CODE: dict[ErrorCode, int] = {
     ErrorCode.PRECONDITION_FAILED: 412,
     ErrorCode.PROVIDER_ERROR: 502,
     ErrorCode.INTERNAL_ERROR: 500,
+    ErrorCode.IDEMPOTENCY_KEY_REUSED: 422,
+    ErrorCode.REQUEST_IN_PROGRESS: 409,
 }
 
 
@@ -37,6 +47,16 @@ class ServiceError(Exception):
     Providers translate their own failures. `message` is shown to the caller;
     `cause` is a short internal reason that is only logged and must never contain credentials,
     URLs, or provider response bodies.
+
+    `may_have_applied` says whether a failed *write* might still have taken
+    effect in the provider (for example, the request was sent but the
+    response was lost). It drives both the logged `write_outcome` and whether
+    idempotent creation can release a key for a fresh attempt. A provider
+    sets it to False only when it knows nothing was written. When it is not
+    given, `provider_error` and `internal_error` count as possibly applied
+    and every other code as not applied.
+
+    `headers` are added to the error response (for example, `Retry-After`).
     """
 
     def __init__(
@@ -46,12 +66,18 @@ class ServiceError(Exception):
         *,
         provider_involved: bool = False,
         cause: str | None = None,
+        may_have_applied: bool | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.provider_involved = provider_involved
         self.cause = cause
+        if may_have_applied is None:
+            may_have_applied = code in _OUTCOME_UNKNOWN_CODES
+        self.may_have_applied = may_have_applied
+        self.headers = dict(headers) if headers else None
 
     @property
     def status(self) -> int:
@@ -86,6 +112,7 @@ def log_failure(
     write: bool,
     cause: str | None = None,
     exc_info: bool = False,
+    may_have_applied: bool | None = None,
 ) -> None:
     """Write one structured JSON line describing a failed operation.
 
@@ -93,11 +120,14 @@ def log_failure(
     only for unexpected exceptions, where the trace helps find the bug.
     For a write, the record says whether the change is known not to have been
     applied, or whether that is unknown (the request may have taken effect).
+    Pass a ServiceError's `may_have_applied` so the log matches what the
+    service did; otherwise the code decides.
     """
     write_outcome = None
     if write:
-        uncertain = code in (ErrorCode.PROVIDER_ERROR, ErrorCode.INTERNAL_ERROR)
-        write_outcome = "unknown" if uncertain else "not_applied"
+        if may_have_applied is None:
+            may_have_applied = code in _OUTCOME_UNKNOWN_CODES
+        write_outcome = "unknown" if may_have_applied else "not_applied"
     record = {
         "level": "ERROR" if status >= 500 else "WARNING",
         "operation": operation,

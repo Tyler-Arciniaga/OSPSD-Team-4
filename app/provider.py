@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import socket
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -36,6 +37,43 @@ def _require_card_id(issue_id: str) -> None:
         raise ServiceError(
             ErrorCode.NOT_FOUND, "Issue not found", cause="malformed_issue_id"
         )
+
+
+def _target_list_id() -> str:
+    """Return the list new cards are created in, or fail if it is missing."""
+    list_id = os.environ.get("TRELLO_LIST_ID")
+    if not list_id:
+        raise ServiceError(
+            ErrorCode.SERVICE_NOT_CONFIGURED,
+            "Issue tracker target list not configured",
+            cause="missing_target_list",
+        )
+    return list_id
+
+
+# Written as a card's description to mark the card a creation produced.
+TOKEN_MARKER_PREFIX = "issue-service-creation-token:"
+CREATION_TOKEN_PATTERN = r"[0-9a-f]{64}"
+
+
+def _require_creation_token(creation_token: str) -> None:
+    """Reject a token the service could not have produced (a programming error)."""
+    if not re.fullmatch(CREATION_TOKEN_PATTERN, creation_token):
+        raise ValueError("Creation token must be 64 lowercase hexadecimal characters")
+
+
+def _token_marker(creation_token: str) -> str:
+    return f"{TOKEN_MARKER_PREFIX}{creation_token}"
+
+
+def _never_sent(exc: Exception) -> bool:
+    """Whether a failure happened before the request could reach Trello.
+
+    Only a failed DNS lookup or a refused connection proves this. A timeout,
+    reset, or unreadable response may follow a card Trello already created.
+    """
+    reason = exc.reason if isinstance(exc, URLError) else exc
+    return isinstance(reason, (socket.gaierror, ConnectionRefusedError))
 
 
 def _trello_headers() -> dict[str, str]:
@@ -105,6 +143,15 @@ def _translate_http_error(
     return _provider_error("The issue tracker rejected the request", cause)
 
 
+def _created_card_to_issue(card: Any) -> Issue:
+    """Convert the body of a newly created (or looked-up) card into an Issue."""
+    if not re.fullmatch(CARD_ID_PATTERN, card["id"]):
+        raise ValueError("Unexpected card ID")
+    if not isinstance(card["name"], str):
+        raise TypeError("Unexpected card name")
+    return Issue(id=card["id"], title=card["name"])
+
+
 def _card_to_issue(card: Any, issue_id: str) -> Issue:
     """Convert a Trello card body into an Issue for the requested ID.
 
@@ -140,17 +187,63 @@ class TrelloIssueProvider:
 
     def create_issue(self, title: str) -> Issue:
         """Create a Trello card in the configured list and convert it into an Issue."""
+        return self._create_card(title)
 
+    def create_tagged_issue(self, title: str, creation_token: str) -> Issue:
+        """Create a card whose description carries the creation token.
+
+        The marker is the card's whole description, so `find_tagged_issue()`
+        can find the card again after a lost response or a restart.
+        """
+        _require_creation_token(creation_token)
+        return self._create_card(title, desc=_token_marker(creation_token))
+
+    def find_tagged_issue(self, creation_token: str) -> Issue | None:
+        """Find the oldest card in the target list marked with the token.
+
+        Archived cards are included: an archived card was still created.
+        """
+        _require_creation_token(creation_token)
         headers = _trello_headers()
-        list_id = os.environ.get("TRELLO_LIST_ID")
-        if not list_id:
-            raise ServiceError(
-                ErrorCode.SERVICE_NOT_CONFIGURED,
-                "Issue tracker target list not configured",
-                cause="missing_target_list",
-            )
+        list_id = _target_list_id()
+        params = urlencode({"fields": "id,name,desc", "filter": "all"})
+        request = Request(
+            f"https://api.trello.com/1/lists/{list_id}/cards?{params}",
+            headers=headers,
+            method="GET",
+        )
+        marker = _token_marker(creation_token)
+        try:
+            with urlopen(request, timeout=10) as response:
+                cards = json.load(response)
+            if not isinstance(cards, list):
+                raise TypeError("Unexpected card list")
+            matches = [
+                _created_card_to_issue(card)
+                for card in cards
+                if isinstance(card, dict)
+                and isinstance(card.get("desc"), str)
+                and marker in card["desc"].splitlines()
+            ]
+        except HTTPError as exc:
+            raise _translate_http_error(exc, missing_means_not_found=False) from None
+        except (URLError, OSError, ValueError, KeyError, TypeError) as exc:
+            raise _translate_request_failure(exc) from None
+        if not matches:
+            return None
+        # Trello card IDs begin with their creation time, so the smallest ID
+        # is the oldest card.
+        return min(matches, key=lambda issue: issue.id)
 
-        params = urlencode({"idList": list_id, "name": title})
+    def _create_card(self, title: str, desc: str | None = None) -> Issue:
+        """Send one card creation request and report whether a failure is certain."""
+        headers = _trello_headers()
+        list_id = _target_list_id()
+
+        fields = {"idList": list_id, "name": title}
+        if desc is not None:
+            fields["desc"] = desc
+        params = urlencode(fields)
 
         request = Request(
             f"https://api.trello.com/1/cards?{params}",
@@ -160,17 +253,19 @@ class TrelloIssueProvider:
         try:
             with urlopen(request, timeout=10) as response:
                 card = json.load(response)
-            if not re.fullmatch(CARD_ID_PATTERN, card["id"]):
-                raise ValueError("Unexpected card ID")
-            if not isinstance(card["name"], str):
-                raise TypeError("Unexpected card name")
-            return Issue(id=card["id"], title=card["name"])
+            return _created_card_to_issue(card)
         except HTTPError as exc:
             # A Trello 404 here means the configured list is wrong, not a
             # missing issue, so it is reported as a provider failure.
-            raise _translate_http_error(exc, missing_means_not_found=False) from None
+            error = _translate_http_error(exc, missing_means_not_found=False)
+            # Trello rejects a 4xx request without creating a card; after a
+            # 5xx it is not known whether the card was stored.
+            error.may_have_applied = exc.code >= 500
+            raise error from None
         except (URLError, OSError, ValueError, KeyError, TypeError) as exc:
-            raise _translate_request_failure(exc) from None
+            error = _translate_request_failure(exc)
+            error.may_have_applied = not _never_sent(exc)
+            raise error from None
 
     def _send_card_request(
         self, method: str, issue_id: str, params: dict[str, str] | None = None

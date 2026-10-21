@@ -2,7 +2,8 @@ from collections import OrderedDict
 from threading import Lock
 from time import monotonic
 
-from app.interface import IssueProvider
+from app.errors import ErrorCode, ServiceError
+from app.interface import IdempotentIssueProvider, IssueProvider
 from app.models import Issue, IssueUpdate
 
 
@@ -87,3 +88,24 @@ class CachedIssueProvider:
     def create_issue(self, title: str) -> Issue:
         """Forward creation without reading or changing the cache."""
         return self._provider.create_issue(title)
+
+    def create_tagged_issue(self, title: str, creation_token: str) -> Issue:
+        """Forward tagged creation without reading or changing the cache."""
+        return self._idempotent_provider().create_tagged_issue(title, creation_token)
+
+    def find_tagged_issue(self, creation_token: str) -> Issue | None:
+        """Forward the lookup uncached: recovery must see the provider's state."""
+        return self._idempotent_provider().find_tagged_issue(creation_token)
+
+    def supports_idempotent_creation(self) -> bool:
+        return isinstance(self._provider, IdempotentIssueProvider)
+
+    def _idempotent_provider(self) -> IdempotentIssueProvider:
+        if not isinstance(self._provider, IdempotentIssueProvider):
+            # Raised before any request, so nothing was written.
+            raise ServiceError(
+                ErrorCode.SERVICE_NOT_CONFIGURED,
+                "Idempotent creation is not available",
+                cause="provider_not_idempotent",
+            )
+        return self._provider
