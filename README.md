@@ -33,7 +33,10 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 - `app/models.py`: Public `Issue` response model, `IssueCreate` and `IssueUpdate` request models, and the shared `IssueTitle` rule.
 - `app/interface.py`: Provider-independent `IssueProvider` contract.
 - `app/provider.py`: Trello authentication, requests, and translation of Trello responses and failures.
-- `app/dependencies.py`: Creates and supplies the Trello provider to the endpoints.
+- `app/cache.py`: Caches successful reads and invalidates saved issues before updates or deletions.
+- `app/dependencies.py`: Creates one cached Trello provider at application startup and supplies it to the endpoints.
+- `tests/conftest.py`: Shared per-test client setup and application startup/shutdown.
+- `tests/test_cache.py`: Cache behavior, concurrency, invalidation, and application lifecycle tests.
 - `tests/test_get_issue.py`: Retrieval endpoint tests with simulated Trello responses.
 - `tests/test_create_issue.py`: Creation endpoint tests with simulated Trello responses.
 - `tests/test_provider.py`: Provider compatibility, translation, and error tests.
@@ -145,10 +148,14 @@ Expected response body:
 ```
 
 Replace the example ID with the full ID of your test card. The returned
-title is that card's current name. Unknown or malformed IDs return
-`404 Not Found`. If `TRELLO_API_KEY` or `TRELLO_TOKEN` is not set, any
-otherwise valid request returns `503 Service Unavailable` with code
-`service_not_configured`; complete [Configuration](#configuration) and
+title is the card's name from the latest fetch, which may be cached for
+30 seconds. Malformed IDs return `404 Not Found`; missing cards are detected
+when a request reaches Trello. See [Caching](#caching).
+
+If `TRELLO_API_KEY` or `TRELLO_TOKEN` is not set, requests that need the
+Trello provider return `503 Service Unavailable` with code
+`service_not_configured`, unless the ID is rejected first. Cache hits do
+not recheck credentials. Complete [Configuration](#configuration) and
 restart the server. Errors have the form
 `{"error": {"code": "...", "message": "..."}}`; see
 [the error model](docs/api.md#error-model) for every code, its status, and
@@ -186,13 +193,36 @@ Permanently delete a disposable test issue:
 curl -i -X DELETE http://127.0.0.1:8000/issues/64f1c0a2b3d4e5f607182930
 ```
 
-Expected status: `204 No Content`, with an empty body. Subsequent GET or
-DELETE requests for that issue return `404`. This deletes the Trello card,
+Expected status: `204 No Content`, with an empty body. Subsequent GET
+requests handled by the same process and repeated DELETE requests return
+`404` when Trello confirms the card is missing. Other processes may still
+have a cached copy until it expires. This deletes the Trello card,
 rather than archiving it. After a `502`, deletion may already have happened;
 check with GET before retrying. The service does not retry requests.
 
 See [the API contract](docs/api.md) for response fields, errors,
 and assumptions.
+
+## Caching
+
+Successful GET results are cached in memory for 30 seconds after retrieval.
+Reading a cached issue does not extend that lifetime. Each application
+process keeps up to 100 issues, evicting the least recently used entry
+when the cache is full. Errors are never cached.
+
+PATCH and DELETE remove the affected cached entry before contacting Trello,
+even if the operation later fails. The next GET fetches the issue again.
+POST forwards creation to Trello without filling the cache.
+
+Changes made directly in Trello, including deletion or permission changes,
+may not be noticed until the cached entry expires. Separate server workers
+have independent caches; an update in one worker does not clear another
+worker's cache. Restarting the server clears its cache. Restart after
+changing credentials or configuration, because cache hits do not recheck
+Trello access.
+
+See [Cache behavior](docs/providers.md#cache-behavior) for implementation
+and concurrency details.
 
 ## Code Checks and Tests
 
@@ -241,10 +271,15 @@ Tests cover all four endpoints, request body validation (including the
 shared title rule for POST and PATCH), Trello request construction and
 response translation, missing credentials or target issue list, and provider
 failures. They also verify that the endpoints can use a supplied fake
-provider, invalid IDs and invalid bodies cause no provider call, and deleted
-issues cannot be read or deleted again. Error tests check the full error
+provider, malformed Trello IDs cause no network request, invalid bodies are
+rejected before calling provider methods, and deleted issues cannot be read
+or deleted again. Error tests check the full error
 response and log line for each class of failure, and that neither responses
 nor logs contain credentials or provider details.
+
+Cache tests cover repeated reads, expiration, least-recently-used eviction,
+returned-copy isolation, invalidation before successful or failed writes,
+uncached failures, and reuse and reset across application lifespans.
 
 The tests use simulated responses or fake providers and require no
 running server, real credentials, or network access. Live Trello
@@ -254,6 +289,9 @@ See [Provider Interface and Dependency Injection](docs/providers.md)
 for the provider setup and the responsibilities of each test file.
 
 ## Trello Verification
+
+Use the documented single-process startup command for this workflow so
+GET, PATCH, and DELETE share the same cache.
 
 1. On the dedicated test board, create a card named `HW1 Level 2 test`.
    Open the card in a browser and append `.json` to its URL. Find the
@@ -268,8 +306,10 @@ for the provider setup and the responsibilities of each test file.
 
    Expect HTTP 200 and exactly `{"id":"<your full card ID>","title":"HW1 Level 2 test"}`.
    Compare both values to the real card.
-3. Rename the card to `HW1 Level 2 renamed` in Trello and repeat the request.
-   Expect HTTP 200 with the new title and the same ID.
+3. Rename the card to `HW1 Level 2 renamed` in Trello. An immediate GET
+   may still return the cached title. Wait at least 30 seconds after the
+   rename, then repeat the request. Expect HTTP 200 with the new title and
+   the same ID. Restarting the server also clears the cache.
 4. Run `curl -i http://127.0.0.1:8000/issues/does-not-exist`.
    Expect HTTP 404 and
    `{"error":{"code":"not_found","message":"Issue not found"}}`.
@@ -327,7 +367,7 @@ for the provider setup and the responsibilities of each test file.
    when finished, stop the server, clear credentials from `.env`, and run
    `unset TRELLO_API_KEY TRELLO_TOKEN TRELLO_LIST_ID` if you also exported them.
 
-Each GET makes one [Get a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-get)
+A GET cache hit makes no provider request. A cache miss makes one [Get a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-get)
 request for `id,name`. Each POST makes one
 [Create a new Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-post)
 request with `idList` and `name`. Each PATCH makes one
@@ -335,7 +375,8 @@ request with `idList` and `name`. Each PATCH makes one
 request. Each DELETE makes one
 [Delete a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-delete)
 request and ignores the successful response body. All four use a 10-second
-socket timeout with no retries or caching. See [the API contract](docs/api.md)
+socket timeout with no automatic retries. Invalid requests or missing
+configuration can fail before any provider request. See [the API contract](docs/api.md)
 for errors and supported IDs.
 
 ## Contributing

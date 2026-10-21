@@ -37,6 +37,29 @@ Status `200 OK`, with a JSON body:
 
 These two fields are the whole public contract. No other fields are promised, and callers must not depend on any others appearing.
 
+### Read freshness and caching
+
+A successful GET may return a saved result for up to 30 seconds after its
+provider fetch finishes. Repeated reads do not extend that lifetime.
+Each application process holds at most 100 entries, evicting the least
+recently used when full. Errors are not cached.
+
+Cache hits make no provider request. Changes made directly in Trello,
+including deletion or revoked permissions, may not be noticed until the
+entry expires. A cached read can also succeed during a provider outage.
+Missing configuration and provider errors are checked when a read reaches
+the underlying provider; the Trello provider rejects malformed IDs before making a network request.
+
+PATCH and DELETE discard the affected entry in the process handling the
+write before contacting the provider, including when the write fails.
+POST does not populate the cache. Other processes have independent caches
+and may continue serving an older result until it expires. Restarting a
+process clears its cache. There is no public cache-bypass parameter.
+
+When checking the result of an uncertain write, account for this freshness
+window or verify directly in Trello. See
+[Cache behavior](providers.md#cache-behavior) for implementation details.
+
 ### Errors
 
 All errors use the shape described in [Error model](#error-model).
@@ -49,7 +72,7 @@ All errors use the shape described in [Error model](#error-model).
 | Service credentials are missing | `503 Service Unavailable` | `service_not_configured` |
 | The issue tracker cannot be reached, times out, is unavailable, or returns an unusable response | `502 Bad Gateway` | `provider_error` |
 
-GET has no side effects, so a caller may retry after a `502`. A `403` or
+GET does not change provider data, so a caller may retry after a `502`. A `403` or
 `503` requires operator action. A `404` requires a corrected ID.
 
 ### Example
@@ -283,10 +306,12 @@ All errors use the shape described in [Error model](#error-model).
 | Service credentials are missing | `503 Service Unavailable` | `service_not_configured` |
 | The issue tracker cannot be reached, times out, is unavailable, or rejects the request | `502 Bad Gateway` | `provider_error` |
 
-Malformed IDs are rejected before any provider operation. A `403` or `503`
-requires operator action.
+The Trello provider rejects malformed IDs before making a network request.
+A `403` or `503` requires operator action.
 
-After a successful deletion, GET and repeated DELETE requests return 404.
+After a successful deletion, GET requests handled by the same process and
+repeated DELETE requests return 404 when the provider confirms the issue
+is missing. Another process may still serve its cached copy until expiry.
 Repeated deletion does not restore or create an issue, although the status
 changes from 204 to 404.
 
@@ -406,18 +431,17 @@ every failed request:
 | `provider_involved` | `true` only when the service attempted a request to the issue tracker. Malformed IDs, invalid bodies and missing configuration are rejected before that, so they log `false`. |
 | `cause` | A short internal reason, such as `provider_status=429`, `timeout`, `URLError`, `malformed_issue_id` or `missing_credentials`. It is `null` when nothing more specific is known. |
 
-Logs never contain credentials, authorization data, request URLs (the issue
-tracker URL carries the credentials), request or response bodies, or
-exception messages from the issue tracker client. Expected failures are
-logged without a stack trace. Only `internal_error` includes one, because
-it is needed to find the bug.
+Logs never contain credentials, authorization data, request URLs,
+request or response bodies, or exception messages from the issue tracker client.
+Expected failures are logged without a stack trace.
+Only `internal_error` includes one, because it is needed to find the bug.
 
 The service has no request or correlation identifier.
 
 ## What callers can rely on
 
 - A GET or PATCH `200` or POST `201` response always contains `id` and `title` and nothing else.
-- Repeating a GET request has no side effects.
+- Repeating a GET request does not change provider data. Results follow the [read freshness policy](#read-freshness-and-caching).
 - Each `201` response means exactly one new issue was created. A `422` or `503` response means none was created.
 - A `PATCH` changes only the fields included in the request body.
 - A successful DELETE returns `204` with no body and removes the issue.
@@ -431,7 +455,7 @@ These affect observable behavior and are not guaranteed by the assignment spec, 
 - **`id` is an opaque string.** Callers should treat it as an identifier to pass back to the service. They should not parse it or assume a format.
 - **`title` is always present.** An issue without a title is not part of this contract.
 - **Real data.** The example ID and title illustrate the response shape; they are not seeded resources. Supply a full card ID accessible to the configured Trello account. Card short links are not supported, ensuring the response ID equals the requested ID.
-- **Provider translation.** GET and POST translate Trello's `id` into `id` and `name` into `title`, without caching. POST creates a Trello card. PATCH sends `title` as the card's `name` and returns the card as Trello reports it afterwards. DELETE permanently removes the Trello card and returns no provider data.
+- **Provider translation.** GET and POST translate Trello's `id` into `id` and `name` into `title`. Successful GET results may be cached as described above. POST creates a Trello card. PATCH sends `title` as the card's `name` and returns the card as Trello reports it afterwards. DELETE permanently removes the Trello card and returns no provider data.
 - **Created and updated titles.** POST and PATCH share one title rule (`IssueTitle` in `app/models.py`). The title is sent to the provider as given, without trimming. The response returns the title as the provider reports it after creation or update.
 - **Title limit.** The 256-character limit is a service rule for a short title, not a provider limit. Any provider must accept titles at least that long.
 - **Where new issues go.** New issues are created in a single target location chosen by the service operator (for Trello, the list named by `TRELLO_LIST_ID`). Callers cannot choose it. Support for more than one location would be added as a provider-independent field, not as a provider ID.

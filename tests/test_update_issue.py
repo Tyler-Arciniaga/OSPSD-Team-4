@@ -24,8 +24,6 @@ from tests.expected_errors import (
     ErrorJson,
 )
 
-client = TestClient(main.app)
-
 KNOWN_ISSUE_ID = "64f1c0a2b3d4e5f607182930"
 NEW_TITLE = "Renamed Trello issue"
 
@@ -48,7 +46,9 @@ def card_response(card: dict[str, str]) -> io.BytesIO:
 # Endpoint with the real Trello provider and simulated Trello responses.
 
 
-def test_patch_updates_title(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_patch_updates_title(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     requests: list[Request] = []
 
     def update_card(request: Request, timeout: int) -> io.BytesIO:
@@ -76,7 +76,9 @@ def test_patch_updates_title(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(requests) == 1
 
 
-def test_patch_accepts_title_at_length_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_patch_accepts_title_at_length_limit(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     title = "x" * MAX_TITLE_LENGTH
 
     def update_card(request: Request, timeout: int) -> io.BytesIO:
@@ -91,7 +93,7 @@ def test_patch_accepts_title_at_length_limit(monkeypatch: pytest.MonkeyPatch) ->
     assert response.json() == {"id": KNOWN_ISSUE_ID, "title": title}
 
 
-def test_patch_rejects_title_over_length_limit() -> None:
+def test_patch_rejects_title_over_length_limit(client: TestClient) -> None:
     # The autouse fixture fails the test if this request reaches Trello.
     response = client.patch(
         f"/issues/{KNOWN_ISSUE_ID}",
@@ -104,7 +106,9 @@ def test_patch_rejects_title_over_length_limit() -> None:
     assert [detail["field"] for detail in error["details"]] == ["title"]
 
 
-def test_patch_keeps_surrounding_whitespace(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_patch_keeps_surrounding_whitespace(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # PATCH follows the same title rule as POST /issues, which does not trim.
     title = f"  {NEW_TITLE}  "
 
@@ -140,7 +144,7 @@ def test_create_and_update_share_title_rule(title: str, valid: bool) -> None:
 
 
 @pytest.mark.parametrize("issue_id", ["does-not-exist", "abc123", "A" * 24])
-def test_patch_malformed_id_returns_404(issue_id: str) -> None:
+def test_patch_malformed_id_returns_404(client: TestClient, issue_id: str) -> None:
     response = client.patch(f"/issues/{issue_id}", json={"title": NEW_TITLE})
 
     assert response.status_code == 404
@@ -158,14 +162,16 @@ def test_patch_malformed_id_returns_404(issue_id: str) -> None:
         {"title": NEW_TITLE, "status": "done"},
     ],
 )
-def test_patch_invalid_body_returns_422(body: dict[str, object]) -> None:
+def test_patch_invalid_body_returns_422(
+    client: TestClient, body: dict[str, object]
+) -> None:
     response = client.patch(f"/issues/{KNOWN_ISSUE_ID}", json=body)
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "invalid_input"
 
 
-def test_patch_missing_body_returns_422() -> None:
+def test_patch_missing_body_returns_422(client: TestClient) -> None:
     response = client.patch(f"/issues/{KNOWN_ISSUE_ID}")
 
     assert response.status_code == 422
@@ -174,7 +180,11 @@ def test_patch_missing_body_returns_422() -> None:
 
 @pytest.mark.parametrize(("status", "expected", "body"), ISSUE_HTTP_FAILURES)
 def test_patch_trello_http_errors(
-    monkeypatch: pytest.MonkeyPatch, status: int, expected: int, body: ErrorJson
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    expected: int,
+    body: ErrorJson,
 ) -> None:
     def fail(request: Request, timeout: int) -> None:
         raise HTTPError(request.full_url, status, "error", Message(), None)
@@ -188,7 +198,10 @@ def test_patch_trello_http_errors(
 
 @pytest.mark.parametrize(("error", "body"), NETWORK_FAILURES)
 def test_patch_trello_network_failure(
-    monkeypatch: pytest.MonkeyPatch, error: Exception, body: ErrorJson
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    body: ErrorJson,
 ) -> None:
     def fail(request: Request, timeout: int) -> None:
         raise error
@@ -209,7 +222,7 @@ def test_patch_trello_network_failure(
     ],
 )
 def test_patch_invalid_trello_response(
-    monkeypatch: pytest.MonkeyPatch, payload: bytes
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, payload: bytes
 ) -> None:
     monkeypatch.setattr(
         provider, "urlopen", lambda request, timeout: io.BytesIO(payload)
@@ -222,7 +235,7 @@ def test_patch_invalid_trello_response(
 
 @pytest.mark.parametrize("variable", ["TRELLO_API_KEY", "TRELLO_TOKEN"])
 def test_patch_missing_credentials(
-    monkeypatch: pytest.MonkeyPatch, variable: str
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, variable: str
 ) -> None:
     monkeypatch.delenv(variable)
     response = client.patch(f"/issues/{KNOWN_ISSUE_ID}", json={"title": NEW_TITLE})
@@ -234,7 +247,9 @@ def test_patch_missing_credentials(
 # Endpoint with supplied providers (dependency injection).
 
 
-def test_patch_uses_supplied_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_patch_uses_supplied_provider(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     received: list[tuple[str, IssueUpdate]] = []
 
     class FakeIssueProvider:
@@ -278,6 +293,7 @@ def test_patch_uses_supplied_provider(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_patch_rejected_input_does_not_call_provider(
+    client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class UnexpectedCallProvider:
@@ -306,6 +322,7 @@ def test_patch_rejected_input_does_not_call_provider(
 
 
 def test_patch_provider_missing_issue_returns_404(
+    client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class MissingIssueProvider:
