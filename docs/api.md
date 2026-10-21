@@ -17,7 +17,7 @@ Return one issue by its identifier.
 
 | Name | Location | Type | Required | Description |
 | --- | --- | --- | --- | --- |
-| `issue_id` | path | string | yes | The full Trello card ID of the issue to return (24 lowercase hexadecimal characters). |
+| `issue_id` | path | string | yes | The issue's `id`, exactly as the service returned it. The service does not define an ID format; the current Trello provider accepts only full card IDs (24 lowercase hexadecimal characters). |
 
 ### Successful response
 
@@ -44,7 +44,7 @@ All errors use the shape described in [Error model](#error-model).
 | Situation | Status | Code |
 | --- | --- | --- |
 | No issue exists with the given `issue_id` | `404 Not Found` | `not_found` |
-| Malformed identifier (including a short card link) | `404 Not Found` | `not_found` |
+| Identifier the issue tracker cannot recognise (with Trello, anything other than a full card ID, such as a short card link) | `404 Not Found` | `not_found` |
 | The issue tracker denies the service access | `403 Forbidden` | `access_denied` |
 | Service credentials are missing | `503 Service Unavailable` | `service_not_configured` |
 | The issue tracker cannot be reached, times out, is unavailable, or returns an unusable response | `502 Bad Gateway` | `provider_error` |
@@ -190,7 +190,7 @@ Fields left out of the request body are not changed.
 
 | Name | Location | Type | Required | Description |
 | --- | --- | --- | --- | --- |
-| `issue_id` | path | string | yes | The full Trello card ID of the issue to update (24 lowercase hexadecimal characters). |
+| `issue_id` | path | string | yes | The issue's `id`, exactly as the service returned it. The service does not define an ID format; the current Trello provider accepts only full card IDs (24 lowercase hexadecimal characters). |
 
 ### Request body
 
@@ -229,7 +229,7 @@ All errors use the shape described in [Error model](#error-model).
 | Situation | Status | Code |
 | --- | --- | --- |
 | No issue exists with the given `issue_id` | `404 Not Found` | `not_found` |
-| Malformed identifier (including a short card link) | `404 Not Found` | `not_found` |
+| Identifier the issue tracker cannot recognise (with Trello, anything other than a full card ID, such as a short card link) | `404 Not Found` | `not_found` |
 | Body is missing or not JSON, the object is empty, or `title` is `null`, not a string, empty, whitespace-only, or longer than 256 characters | `422 Unprocessable Content` | `invalid_input`, with `details` |
 | Body contains a field other than `title` | `422 Unprocessable Content` | `invalid_input`, with `details` |
 | The issue tracker denies the service access | `403 Forbidden` | `access_denied` |
@@ -266,7 +266,7 @@ deletes the card, rather than archiving it.
 | --- | --- |
 | Method | `DELETE` |
 | Route | `/issues/{issue_id}` |
-| Parameters | `issue_id`: full Trello card ID (24 lowercase hexadecimal characters) |
+| Parameters | `issue_id`: the issue's `id`, exactly as the service returned it (with the current Trello provider, a full 24-character lowercase hexadecimal card ID) |
 | Request body | None required |
 | Changes state? | Yes. Permanently removes the issue. |
 | Success status | `204 No Content`, with an empty body |
@@ -278,7 +278,7 @@ All errors use the shape described in [Error model](#error-model).
 | Situation | Status | Code |
 | --- | --- | --- |
 | Missing issue, including an issue already deleted | `404 Not Found` | `not_found` |
-| Malformed identifier (including a short card link) | `404 Not Found` | `not_found` |
+| Identifier the issue tracker cannot recognise (with Trello, anything other than a full card ID, such as a short card link) | `404 Not Found` | `not_found` |
 | The issue tracker denies the service access | `403 Forbidden` | `access_denied` |
 | Service credentials are missing | `503 Service Unavailable` | `service_not_configured` |
 | The issue tracker cannot be reached, times out, is unavailable, or rejects the request | `502 Bad Gateway` | `provider_error` |

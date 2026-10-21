@@ -14,6 +14,10 @@ class IssueProvider(Protocol):
     `access_denied` when the provider rejects the service's credentials or
     permissions, `service_not_configured` for missing provider configuration,
     and `provider_error` for any other failed or unusable provider response.
+
+    Issue IDs are opaque to the service and are passed through unchanged.
+    A provider that receives an ID it cannot recognise reports it as
+    `not_found` without contacting the provider.
     """
 
     def get_issue(self, issue_id: str) -> Issue:
