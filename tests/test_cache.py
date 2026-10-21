@@ -18,7 +18,7 @@ class FakeIssueProvider:
     def __init__(self) -> None:
         self.get_calls: list[str] = []
 
-    def get_issue(self, issue_id: str) -> Issue:
+    def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
         self.get_calls.append(issue_id)
         return Issue(id=issue_id, title="Test issue")
 
@@ -119,7 +119,7 @@ def test_update_invalidates_cached_issue(
             super().__init__()
             self.title = "Original title"
 
-        def get_issue(self, issue_id: str) -> Issue:
+        def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
             self.get_calls.append(issue_id)
             return Issue(id=issue_id, title=self.title)
 
@@ -160,7 +160,7 @@ def test_delete_invalidates_cached_issue(
             super().__init__()
             self.deleted = False
 
-        def get_issue(self, issue_id: str) -> Issue:
+        def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
             self.get_calls.append(issue_id)
             if self.deleted:
                 raise ServiceError(ErrorCode.NOT_FOUND, "Issue not found")
@@ -190,7 +190,7 @@ def test_failed_read_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.cache.monotonic", lambda: 100.0)
 
     class RecoveringProvider(FakeIssueProvider):
-        def get_issue(self, issue_id: str) -> Issue:
+        def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
             self.get_calls.append(issue_id)
 
             # Fail the first call, then succeed.
@@ -260,7 +260,7 @@ def test_failed_write_invalidates_cached_issue(
             self.title = "Original title"
             self.deleted = False
 
-        def get_issue(self, issue_id: str) -> Issue:
+        def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
             self.get_calls.append(issue_id)
             if self.deleted:
                 raise ServiceError(ErrorCode.NOT_FOUND, "Issue not found")
@@ -360,7 +360,7 @@ def test_slow_fetch_does_not_block_another_stripe(
     slow_id = "slow"
 
     class SlowProvider(FakeIssueProvider):
-        def get_issue(self, issue_id: str) -> Issue:
+        def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
             if issue_id == slow_id:
                 started.set()
                 assert release.wait(5), "Test did not release the slow fetch"
@@ -404,7 +404,7 @@ def test_same_issue_operations_wait_for_fetch(
         title = "Original"
         deleted = False
 
-        def get_issue(self, issue_id: str) -> Issue:
+        def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
             self.get_calls.append(issue_id)
             if self.deleted:
                 raise ServiceError(ErrorCode.NOT_FOUND, "Issue not found")

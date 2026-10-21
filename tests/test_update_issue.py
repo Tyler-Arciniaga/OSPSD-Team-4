@@ -253,7 +253,7 @@ def test_patch_uses_supplied_provider(
     received: list[tuple[str, IssueUpdate]] = []
 
     class FakeIssueProvider:
-        def get_issue(self, issue_id: str) -> Issue:
+        def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
             raise AssertionError("PATCH must not call get_issue")
 
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
@@ -297,7 +297,7 @@ def test_patch_rejected_input_does_not_call_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class UnexpectedCallProvider:
-        def get_issue(self, issue_id: str) -> Issue:
+        def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
             raise AssertionError("Rejected requests must not reach the provider")
 
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
@@ -326,7 +326,7 @@ def test_patch_provider_missing_issue_returns_404(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class MissingIssueProvider:
-        def get_issue(self, issue_id: str) -> Issue:
+        def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
             raise AssertionError("PATCH must not call get_issue")
 
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:

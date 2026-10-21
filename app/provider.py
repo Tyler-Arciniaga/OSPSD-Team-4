@@ -121,8 +121,8 @@ def _card_to_issue(card: Any, issue_id: str) -> Issue:
 
 
 class TrelloIssueProvider:
-    def get_issue(self, issue_id: str) -> Issue:
-        """Retrieve a Trello card and convert it into an Issue."""
+    def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
+        """Retrieve a Trello card; reads are always fresh with this provider."""
         card = self._send_card_request("GET", issue_id, {"fields": "id,name"})
         return _card_to_issue(card, issue_id)
 

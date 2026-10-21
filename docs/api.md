@@ -37,6 +37,10 @@ Status `200 OK`, with a JSON body:
 
 These two fields are the whole public contract. No other fields are promised, and callers must not depend on any others appearing.
 
+The response also carries an `ETag` header naming the issue's current
+version. Pass it to [Update an issue](#update-an-issue) as `If-Match` to
+avoid overwriting someone else's change.
+
 ### Read freshness and caching
 
 A successful GET may return a saved result for up to 30 seconds after its
@@ -214,6 +218,7 @@ Fields left out of the request body are not changed.
 | Name | Location | Type | Required | Description |
 | --- | --- | --- | --- | --- |
 | `issue_id` | path | string | yes | The issue's `id`, exactly as the service returned it. The service does not define an ID format; the current Trello provider accepts only full card IDs (24 lowercase hexadecimal characters). |
+| `If-Match` | header | string | no | An `ETag` from an earlier GET or PATCH. The update is applied only if the issue still has that version. Omitted or `*` means update unconditionally. |
 
 ### Request body
 
@@ -245,6 +250,37 @@ Status `200 OK`, with the updated issue in the same shape as
 }
 ```
 
+The response carries an `ETag` header with the issue's new version.
+
+### Conditional updates
+
+Two callers who read the same version cannot both overwrite it:
+
+1. Both `GET` the issue and receive the same `ETag`.
+2. The first `PATCH` with `If-Match: <etag>` succeeds and the issue gets a new `ETag`.
+3. The second `PATCH` with the old `ETag` is rejected with `412` and changes nothing. That caller should `GET` again, review the change, and retry with the new `ETag`.
+
+The version is a hash of the issue's public fields (`id`, `title`). It is
+computed by the service, so it works with any provider. An update that sets
+a title back to an earlier value restores the earlier version too; this
+cannot overwrite a change the caller has not seen, because the public fields
+are then identical.
+
+**How the check and the write stay consistent:** the service reads the
+current issue using a fresh provider read that bypasses the cache, compares
+versions, and writes, all while holding a lock that
+every PATCH takes. Another PATCH through the same service process therefore
+cannot run between the check and the write.
+
+**Limits:**
+
+- The lock lives in one process. Running several workers or instances lets
+  their checks and writes interleave.
+- Edits made directly in Trello between the check and the write (a window of
+  one Trello request) are not detected. Trello offers no conditional write
+  to close this gap.
+- Every PATCH waits for the lock, so updates run one at a time per process.
+
 ### Errors
 
 All errors use the shape described in [Error model](#error-model).
@@ -253,6 +289,7 @@ All errors use the shape described in [Error model](#error-model).
 | --- | --- | --- |
 | No issue exists with the given `issue_id` | `404 Not Found` | `not_found` |
 | Identifier the issue tracker cannot recognise (with Trello, anything other than a full card ID, such as a short card link) | `404 Not Found` | `not_found` |
+| `If-Match` was sent and the issue's current version differs | `412 Precondition Failed` | `precondition_failed` |
 | Body is missing or not JSON, the object is empty, or `title` is `null`, not a string, empty, whitespace-only, or longer than 256 characters | `422 Unprocessable Content` | `invalid_input`, with `details` |
 | Body contains a field other than `title` | `422 Unprocessable Content` | `invalid_input`, with `details` |
 | The issue tracker denies the service access | `403 Forbidden` | `access_denied` |
@@ -376,6 +413,7 @@ A `422` response lists every problem with the body:
 | `not_found` | `404 Not Found` | No issue exists with the given ID (including one already deleted), the ID is malformed, or the route does not exist. | No. |
 | `access_denied` | `403 Forbidden` | The issue tracker rejected the service's credentials or does not allow it to access the issue. | No. The service operator must fix the credentials or permissions. |
 | `service_not_configured` | `503 Service Unavailable` | The service is missing its issue tracker credentials, or (for creation) its target issue list. | No. The service operator must complete the configuration. |
+| `precondition_failed` | `412 Precondition Failed` | A PATCH sent `If-Match` with a version that is no longer current. Nothing was changed. | Only after reading the issue again with GET and sending its new `ETag`. |
 | `provider_error` | `502 Bad Gateway` | The issue tracker could not be reached, timed out, rate-limited the service, was unavailable, rejected the request for another reason, or returned a response the service could not use. | Reads: yes, after a short wait. Writes: only after checking with GET, because the change may already have been applied. |
 | `internal_error` | `500 Internal Server Error` | An unexpected failure inside the service. This indicates a bug. | Possibly, but report it if it repeats. |
 
@@ -419,7 +457,7 @@ The service writes one structured JSON line to the `app.errors` logger for
 every failed request:
 
 ```json
-{"level": "WARNING", "operation": "get_issue", "error": "not_found", "status": 404, "provider_involved": true, "cause": "provider_status=404"}
+{"level": "WARNING", "operation": "get_issue", "error": "not_found", "status": 404, "provider_involved": true, "cause": "provider_status=404", "write_outcome": null}
 ```
 
 | Field | Description |
@@ -429,6 +467,7 @@ every failed request:
 | `error` | The error code returned to the caller. |
 | `status` | The HTTP status returned to the caller. |
 | `provider_involved` | `true` only when the service attempted a request to the issue tracker. Malformed IDs, invalid bodies and missing configuration are rejected before that, so they log `false`. |
+| `write_outcome` | `null` for reads. For POST, PATCH and DELETE: `not_applied` when the service rejected the request before sending it, or the issue tracker refused it (`not_found`, `access_denied`); `unknown` for `provider_error` and `internal_error`, because the request may have been processed even though no usable answer came back. |
 | `cause` | A short internal reason, such as `provider_status=429`, `timeout`, `URLError`, `malformed_issue_id` or `missing_credentials`. It is `null` when nothing more specific is known. |
 
 Logs never contain credentials, authorization data, request URLs,
@@ -444,6 +483,7 @@ The service has no request or correlation identifier.
 - Repeating a GET request does not change provider data. Results follow the [read freshness policy](#read-freshness-and-caching).
 - Each `201` response means exactly one new issue was created. A `422` or `503` response means none was created.
 - A `PATCH` changes only the fields included in the request body.
+- A `PATCH` with a stale `If-Match` changes nothing and returns `412`.
 - A successful DELETE returns `204` with no body and removes the issue.
 - Every error response has the shape in [Error model](#error-model), and its `error.code` is one of the codes listed there. A failed operation is never reported with a success status.
 - The routes, methods, and response shapes above will not change without an update to this document.

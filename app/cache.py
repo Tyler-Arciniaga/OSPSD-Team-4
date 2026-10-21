@@ -32,12 +32,15 @@ class CachedIssueProvider:
         # same lock; different IDs may collide and also have to take turns.
         self._stripes = [Lock() for _ in range(64)]
 
-    def get_issue(self, issue_id: str) -> Issue:
+    def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
         """Return a valid cached copy, or fetch and save a fresh issue."""
         # Always acquire the stripe before the dictionary lock. Keep the
         # stripe during retrieval so a write cannot race with saving a read.
         with self._stripes[hash(issue_id) % len(self._stripes)]:
             with self._entries_lock:
+                # A fresh read must not fall back to stale data if retrieval fails.
+                if fresh:
+                    self._entries.pop(issue_id, None)
                 cached = self._entries.get(issue_id)
                 if cached is not None:
                     expires_at, issue = cached
@@ -50,7 +53,11 @@ class CachedIssueProvider:
             # Release the dictionary lock while waiting for the provider.
             # Requests on other stripes can still use the cache.
             # Failures propagate normally and are never cached.
-            issue = self._provider.get_issue(issue_id)
+            issue = (
+                self._provider.get_issue(issue_id, fresh=True)
+                if fresh
+                else self._provider.get_issue(issue_id)
+            )
             expires_at = monotonic() + self._ttl_seconds
 
             with self._entries_lock:

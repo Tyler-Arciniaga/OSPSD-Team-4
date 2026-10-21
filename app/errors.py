@@ -14,6 +14,7 @@ class ErrorCode(StrEnum):
     NOT_FOUND = "not_found"
     ACCESS_DENIED = "access_denied"
     SERVICE_NOT_CONFIGURED = "service_not_configured"
+    PRECONDITION_FAILED = "precondition_failed"
     PROVIDER_ERROR = "provider_error"
     INTERNAL_ERROR = "internal_error"
 
@@ -23,6 +24,7 @@ STATUS_FOR_CODE: dict[ErrorCode, int] = {
     ErrorCode.NOT_FOUND: 404,
     ErrorCode.ACCESS_DENIED: 403,
     ErrorCode.SERVICE_NOT_CONFIGURED: 503,
+    ErrorCode.PRECONDITION_FAILED: 412,
     ErrorCode.PROVIDER_ERROR: 502,
     ErrorCode.INTERNAL_ERROR: 500,
 }
@@ -81,6 +83,7 @@ def log_failure(
     status: int,
     *,
     provider_involved: bool,
+    write: bool,
     cause: str | None = None,
     exc_info: bool = False,
 ) -> None:
@@ -88,7 +91,13 @@ def log_failure(
 
     Expected failures are logged without a stack trace. Pass `exc_info=True`
     only for unexpected exceptions, where the trace helps find the bug.
+    For a write, the record says whether the change is known not to have been
+    applied, or whether that is unknown (the request may have taken effect).
     """
+    write_outcome = None
+    if write:
+        uncertain = code in (ErrorCode.PROVIDER_ERROR, ErrorCode.INTERNAL_ERROR)
+        write_outcome = "unknown" if uncertain else "not_applied"
     record = {
         "level": "ERROR" if status >= 500 else "WARNING",
         "operation": operation,
@@ -96,6 +105,7 @@ def log_failure(
         "status": status,
         "provider_involved": provider_involved,
         "cause": cause,
+        "write_outcome": write_outcome,
     }
     level = logging.ERROR if status >= 500 else logging.WARNING
     logger.log(level, json.dumps(record), exc_info=exc_info)
