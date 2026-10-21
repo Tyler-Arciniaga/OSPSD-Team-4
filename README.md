@@ -337,7 +337,7 @@ for the provider setup and the responsibilities of each test file.
    `curl -i "http://127.0.0.1:8000/issues/<new ID>"`. Expect HTTP 403 and
    `{"error":{"code":"access_denied","message":"The issue tracker denied access to this issue"}}`.
    The server terminal should show one log line like
-   `{"level": "WARNING", "operation": "get_issue", "error": "access_denied", "status": 403, "provider_involved": true, "cause": "provider_status=401"}`,
+   `{"level": "WARNING", "operation": "get_issue", "error": "access_denied", "status": 403, "provider_involved": true, "cause": "provider_status=401", "write_outcome": null}`,
    with no key, token, URL, or stack trace.
 10. Delete any remaining disposable cards (including the card created in
    step 5) and any board created only for this check.

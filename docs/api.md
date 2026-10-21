@@ -431,7 +431,7 @@ The service writes one structured JSON line to the `app.errors` logger for
 every failed request:
 
 ```json
-{"level": "WARNING", "operation": "get_issue", "error": "not_found", "status": 404, "provider_involved": true, "cause": "provider_status=404"}
+{"level": "WARNING", "operation": "get_issue", "error": "not_found", "status": 404, "provider_involved": true, "cause": "provider_status=404", "write_outcome": null}
 ```
 
 | Field | Description |
@@ -441,6 +441,7 @@ every failed request:
 | `error` | The error code returned to the caller. |
 | `status` | The HTTP status returned to the caller. |
 | `provider_involved` | `true` only when the service attempted a request to the issue tracker. Malformed IDs, invalid bodies and missing configuration are rejected before that, so they log `false`. |
+| `write_outcome` | `null` for reads. For POST, PATCH and DELETE: `not_applied` when the service rejected the request before sending it, or the issue tracker refused it (`not_found`, `access_denied`); `unknown` for `provider_error` and `internal_error`, because the request may have been processed even though no usable answer came back. |
 | `cause` | A short internal reason, such as `provider_status=429`, `timeout`, `URLError`, `malformed_issue_id` or `missing_credentials`. It is `null` when nothing more specific is known. |
 
 Logs never contain credentials, authorization data, request URLs (the issue

@@ -44,6 +44,10 @@ def _operation(request: Request) -> str:
     return getattr(endpoint, "__name__", "unknown")
 
 
+def _is_write(request: Request) -> bool:
+    return request.method not in ("GET", "HEAD")
+
+
 def _error_response(
     status: int,
     code: ErrorCode,
@@ -67,6 +71,7 @@ def handle_service_error(request: Request, exc: ServiceError) -> JSONResponse:
         exc.code,
         exc.status,
         provider_involved=exc.provider_involved,
+        write=_is_write(request),
         cause=exc.cause,
     )
     return _error_response(exc.status, exc.code, exc.message)
@@ -84,7 +89,11 @@ def handle_validation_error(
         field = ".".join(str(part) for part in error["loc"][1:]) or "body"
         details.append(ErrorDetail(field=field, message=error["msg"]))
     log_failure(
-        _operation(request), ErrorCode.INVALID_INPUT, 422, provider_involved=False
+        _operation(request),
+        ErrorCode.INVALID_INPUT,
+        422,
+        provider_involved=False,
+        write=_is_write(request),
     )
     return _error_response(
         422, ErrorCode.INVALID_INPUT, "Request body is invalid", details
@@ -98,7 +107,13 @@ def handle_http_error(request: Request, exc: StarletteHTTPException) -> JSONResp
         code, message = ErrorCode.NOT_FOUND, "Resource not found"
     else:
         code, message = ErrorCode.INVALID_INPUT, "Request not supported"
-    log_failure(_operation(request), code, exc.status_code, provider_involved=False)
+    log_failure(
+        _operation(request),
+        code,
+        exc.status_code,
+        provider_involved=False,
+        write=_is_write(request),
+    )
     # Keep routing headers such as a 405 response's Allow header.
     return _error_response(exc.status_code, code, message, headers=exc.headers)
 
@@ -111,6 +126,7 @@ def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
         ErrorCode.INTERNAL_ERROR,
         500,
         provider_involved=False,
+        write=_is_write(request),
         cause=type(exc).__name__,
         exc_info=True,
     )

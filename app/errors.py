@@ -83,6 +83,7 @@ def log_failure(
     status: int,
     *,
     provider_involved: bool,
+    write: bool,
     cause: str | None = None,
     exc_info: bool = False,
 ) -> None:
@@ -90,7 +91,13 @@ def log_failure(
 
     Expected failures are logged without a stack trace. Pass `exc_info=True`
     only for unexpected exceptions, where the trace helps find the bug.
+    For a write, the record says whether the change is known not to have been
+    applied, or whether that is unknown (the request may have taken effect).
     """
+    write_outcome = None
+    if write:
+        uncertain = code in (ErrorCode.PROVIDER_ERROR, ErrorCode.INTERNAL_ERROR)
+        write_outcome = "unknown" if uncertain else "not_applied"
     record = {
         "level": "ERROR" if status >= 500 else "WARNING",
         "operation": operation,
@@ -98,6 +105,7 @@ def log_failure(
         "status": status,
         "provider_involved": provider_involved,
         "cause": cause,
+        "write_outcome": write_outcome,
     }
     level = logging.ERROR if status >= 500 else logging.WARNING
     logger.log(level, json.dumps(record), exc_info=exc_info)

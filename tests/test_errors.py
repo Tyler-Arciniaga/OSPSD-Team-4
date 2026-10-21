@@ -181,6 +181,7 @@ def test_unexpected_exception_hides_internals(
             "status": 500,
             "provider_involved": False,
             "cause": "RuntimeError",
+            "write_outcome": "unknown",
         }
     ]
     # A bug is logged with its stack trace so it can be found.
@@ -226,6 +227,7 @@ def test_failure_is_logged_once_without_stack_trace(
             "status": 404,
             "provider_involved": True,
             "cause": "provider_status=404",
+            "write_outcome": None,
         }
     ]
     [record] = [r for r in caplog.records if r.name == "app.errors"]
@@ -245,6 +247,7 @@ def test_rejection_before_provider_is_logged_as_not_involving_it(
             "status": 404,
             "provider_involved": False,
             "cause": "malformed_issue_id",
+            "write_outcome": None,
         }
     ]
 
@@ -327,6 +330,7 @@ def test_real_provider_failures_are_sanitized(
             "status": status,
             "provider_involved": True,
             "cause": cause,
+            "write_outcome": None,
         }
     ]
 
@@ -353,5 +357,45 @@ def test_missing_configuration_does_not_involve_provider(
             "status": 503,
             "provider_involved": False,
             "cause": "missing_credentials",
+            "write_outcome": None,
         }
     ]
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        # Sent, but no usable answer: the write may have been applied.
+        (
+            ServiceError(ErrorCode.PROVIDER_ERROR, "x", provider_involved=True),
+            "unknown",
+        ),
+        # The provider refused the write.
+        (ServiceError(ErrorCode.NOT_FOUND, "x", provider_involved=True), "not_applied"),
+    ],
+)
+def test_write_failure_logs_whether_change_was_applied(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    outcome: ServiceError,
+    expected: str,
+) -> None:
+    use_provider(monkeypatch, ControlledProvider(outcome))
+
+    client.delete(f"/issues/{KNOWN_ISSUE_ID}")
+
+    [record] = failure_logs(caplog)
+    assert record["write_outcome"] == expected
+
+
+def test_locally_rejected_write_logs_not_applied(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    supplied = ControlledProvider()
+    use_provider(monkeypatch, supplied)
+
+    client.post("/issues", json={"title": ""})
+
+    [record] = failure_logs(caplog)
+    assert record["write_outcome"] == "not_applied"
+    assert supplied.calls == 0
