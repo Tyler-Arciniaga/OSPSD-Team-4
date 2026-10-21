@@ -20,25 +20,40 @@ The service implements `GET /issues/{issue_id}`, `POST /issues`,
 `PATCH /issues/{issue_id}`, and `DELETE /issues/{issue_id}` against Trello.
 GET, POST, and PATCH translate a card's `id` and `name` into the public `id`
 and `title` fields; PATCH updates an issue's `title`; DELETE permanently
-removes the card. Automated tests run without credentials or network access.
+removes the card. GET and PATCH return an `ETag`; PATCH with `If-Match`
+rejects stale overwrites with `412` (see
+[Conditional updates](docs/api.md#conditional-updates)). `POST /issues`
+accepts an optional `Idempotency-Key` header, so retries and overlapping
+requests create at most one issue (see
+[Idempotent creation](docs/api.md#idempotent-creation)). Every failure returns one documented, provider-independent
+error format and writes one sanitized log line. Automated tests run without
+credentials or network access.
 
 GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests.
 
 ## Project Structure
 
-- `app/main.py`: FastAPI endpoints, which validate input and call the supplied provider.
+- `app/main.py`: FastAPI endpoints, which validate input and call the supplied provider, and the handlers that turn failures into error responses and log lines.
+- `app/errors.py`: Error codes, the `ServiceError` raised by providers and endpoints, the error response models, and failure logging.
 - `app/models.py`: Public `Issue` response model, `IssueCreate` and `IssueUpdate` request models, and the shared `IssueTitle` rule.
 - `app/interface.py`: Provider-independent `IssueProvider` contract.
-- `app/provider.py`: Trello authentication, requests, and response translation.
-- `app/dependencies.py`: Creates and supplies the Trello provider to the endpoints.
+- `app/provider.py`: Trello authentication, requests, and translation of Trello responses and failures.
+- `app/cache.py`: Caches successful reads and invalidates saved issues before updates or deletions.
+- `app/dependencies.py`: Creates one cached Trello provider and the idempotency key store at application startup and supplies them to the endpoints.
+- `app/idempotency.py`: Durable idempotency key store and the logic that creates each keyed issue at most once.
+- `tests/conftest.py`: Shared per-test client setup and application startup/shutdown.
+- `tests/test_cache.py`: Cache behavior, concurrency, invalidation, and application lifecycle tests.
 - `tests/test_get_issue.py`: Retrieval endpoint tests with simulated Trello responses.
 - `tests/test_create_issue.py`: Creation endpoint tests with simulated Trello responses.
 - `tests/test_provider.py`: Provider compatibility, translation, and error tests.
 - `tests/test_injected_provider.py`: Endpoint tests using supplied fake providers.
 - `tests/test_update_issue.py`: `PATCH` endpoint tests with simulated Trello responses and supplied providers.
 - `tests/test_delete_issue.py`: DELETE request, failure, and injected-provider workflow tests.
-- `docs/api.md`: API contract, examples, and assumptions.
-- `docs/providers.md`: Provider interface, dependency setup, and testing approach.
+- `tests/test_idempotency.py`: Repeated, overlapping, conflicting, expired and restarted keyed creations, unknown provider outcomes, and cache and logging integration.
+- `tests/test_errors.py`: Error response and failure-logging tests using a controlled provider.
+- `tests/expected_errors.py`: Expected error bodies shared by the endpoint tests.
+- `docs/api.md`: API contract, error model, examples, and assumptions.
+- `docs/providers.md`: Provider interface, error translation, dependency setup, and testing approach.
 - `pyproject.toml`: Python requirement, dependencies, and tool configuration.
 - `uv.lock`: Locked dependency versions for reproducible installation.
 - `.github/workflows/ci.yml`: Automated linting, formatting, type checking, and tests.
@@ -71,7 +86,9 @@ and delete its test cards.
 
 1. Sign in to the test account. Create an app in the
    [Trello developer portal](https://trello.com/apps/admin), selecting
-   "My app doesn't use Power-up capabilities." Open **Trello Auth** and
+   "My app doesn't use Power-up capabilities." The app opens on the
+   **OAuth 2.0** page, which asks for a callback URL; this service does not
+   use OAuth 2.0, so skip that page. Open the **Trello Auth** tab instead and
    generate an API key.
 2. In a browser, replace `YOUR_API_KEY` in this URL with that key and approve
    read and write access (the token expires after one day). Write access is
@@ -91,6 +108,11 @@ and delete its test cards.
    append `.json` to its URL, and copy the top-level `idList` value
    (24 hexadecimal characters). Retrieval works without this setting;
    creation returns `503` until it is set.
+
+5. Optionally set `IDEMPOTENCY_DB_PATH` to the file that records idempotency
+   keys (default `idempotency.sqlite3` in the working directory, ignored by
+   Git). It must survive restarts, and every worker must use the same file.
+   Deleting it forgets all keys.
 
 The startup command below loads `.env` into the service environment.
 Existing exported environment variables take precedence over values in
@@ -138,8 +160,18 @@ Expected response body:
 ```
 
 Replace the example ID with the full ID of your test card. The returned
-title is that card's current name. Unknown or malformed IDs return
-`404 Not Found`; Trello rejection or unavailability produces HTTP 502.
+title is the card's name from the latest fetch, which may be cached for
+30 seconds. Malformed IDs return `404 Not Found`; missing cards are detected
+when a request reaches Trello. See [Caching](#caching).
+
+If `TRELLO_API_KEY` or `TRELLO_TOKEN` is not set, requests that need the
+Trello provider return `503 Service Unavailable` with code
+`service_not_configured`, unless the ID is rejected first. Cache hits do
+not recheck credentials. Complete [Configuration](#configuration) and
+restart the server. Errors have the form
+`{"error": {"code": "...", "message": "..."}}`; see
+[the error model](docs/api.md#error-model) for every code, its status, and
+whether to retry.
 
 To create an issue:
 
@@ -173,13 +205,36 @@ Permanently delete a disposable test issue:
 curl -i -X DELETE http://127.0.0.1:8000/issues/64f1c0a2b3d4e5f607182930
 ```
 
-Expected status: `204 No Content`, with an empty body. Subsequent GET or
-DELETE requests for that issue return `404`. This deletes the Trello card,
+Expected status: `204 No Content`, with an empty body. Subsequent GET
+requests handled by the same process and repeated DELETE requests return
+`404` when Trello confirms the card is missing. Other processes may still
+have a cached copy until it expires. This deletes the Trello card,
 rather than archiving it. After a `502`, deletion may already have happened;
 check with GET before retrying. The service does not retry requests.
 
 See [the API contract](docs/api.md) for response fields, errors,
 and assumptions.
+
+## Caching
+
+Successful GET results are cached in memory for 30 seconds after retrieval.
+Reading a cached issue does not extend that lifetime. Each application
+process keeps up to 100 issues, evicting the least recently used entry
+when the cache is full. Errors are never cached.
+
+PATCH and DELETE remove the affected cached entry before contacting Trello,
+even if the operation later fails. The next GET fetches the issue again.
+POST forwards creation to Trello without filling the cache.
+
+Changes made directly in Trello, including deletion or permission changes,
+may not be noticed until the cached entry expires. Separate server workers
+have independent caches; an update in one worker does not clear another
+worker's cache. Restarting the server clears its cache. Restart after
+changing credentials or configuration, because cache hits do not recheck
+Trello access.
+
+See [Cache behavior](docs/providers.md#cache-behavior) for implementation
+and concurrency details.
 
 ## Code Checks and Tests
 
@@ -228,8 +283,15 @@ Tests cover all four endpoints, request body validation (including the
 shared title rule for POST and PATCH), Trello request construction and
 response translation, missing credentials or target issue list, and provider
 failures. They also verify that the endpoints can use a supplied fake
-provider, invalid IDs and invalid bodies cause no provider call, and deleted
-issues cannot be read or deleted again.
+provider, malformed Trello IDs cause no network request, invalid bodies are
+rejected before calling provider methods, and deleted issues cannot be read
+or deleted again. Error tests check the full error
+response and log line for each class of failure, and that neither responses
+nor logs contain credentials or provider details.
+
+Cache tests cover repeated reads, expiration, least-recently-used eviction,
+returned-copy isolation, invalidation before successful or failed writes,
+uncached failures, and reuse and reset across application lifespans.
 
 The tests use simulated responses or fake providers and require no
 running server, real credentials, or network access. Live Trello
@@ -239,6 +301,9 @@ See [Provider Interface and Dependency Injection](docs/providers.md)
 for the provider setup and the responsibilities of each test file.
 
 ## Trello Verification
+
+Use the documented single-process startup command for this workflow so
+GET, PATCH, and DELETE share the same cache.
 
 1. On the dedicated test board, create a card named `HW1 Level 2 test`.
    Open the card in a browser and append `.json` to its URL. Find the
@@ -253,10 +318,13 @@ for the provider setup and the responsibilities of each test file.
 
    Expect HTTP 200 and exactly `{"id":"<your full card ID>","title":"HW1 Level 2 test"}`.
    Compare both values to the real card.
-3. Rename the card to `HW1 Level 2 renamed` in Trello and repeat the request.
-   Expect HTTP 200 with the new title and the same ID.
+3. Rename the card to `HW1 Level 2 renamed` in Trello. An immediate GET
+   may still return the cached title. Wait at least 30 seconds after the
+   rename, then repeat the request. Expect HTTP 200 with the new title and
+   the same ID. Restarting the server also clears the cache.
 4. Run `curl -i http://127.0.0.1:8000/issues/does-not-exist`.
-   Expect HTTP 404 and `{"detail":"Issue not found"}`.
+   Expect HTTP 404 and
+   `{"error":{"code":"not_found","message":"Issue not found"}}`.
 5. With `TRELLO_LIST_ID` set to the test card's `idList`, create an issue:
 
    ```bash
@@ -283,6 +351,22 @@ for the provider setup and the responsibilities of each test file.
    Expect HTTP 200 with the same ID and the new title. Confirm in Trello
    that the card's name changed, then repeat the step 2 `GET` and expect
    the new title.
+
+   Check that a stale overwrite is rejected. Copy the `ETag` header from
+   the step 2 `GET` (repeat it now), then send two updates with it:
+
+   ```bash
+   curl -i -X PATCH "http://127.0.0.1:8000/issues/$TRELLO_TEST_CARD_ID" \
+     -H "Content-Type: application/json" -H 'If-Match: "<etag>"' \
+     -d '{"title": "HW1 client A"}'
+   curl -i -X PATCH "http://127.0.0.1:8000/issues/$TRELLO_TEST_CARD_ID" \
+     -H "Content-Type: application/json" -H 'If-Match: "<etag>"' \
+     -d '{"title": "HW1 client B"}'
+   ```
+
+   Expect HTTP 200 for the first and HTTP 412 with
+   `{"error":{"code":"precondition_failed","message":"The issue has changed since it was read"}}`
+   for the second. Confirm in Trello that the card is named `HW1 client A`.
 8. Delete the disposable test card through the service:
 
    ```bash
@@ -291,22 +375,36 @@ for the provider setup and the responsibilities of each test file.
 
    Expect HTTP 204 with an empty body. Confirm the card is gone in Trello.
    Repeat GET and DELETE for the same ID; both should return HTTP 404 and
-   `{"detail":"Issue not found"}`. Record the observed results in the PR.
-9. Delete any remaining disposable cards (including the card created in
+   `{"error":{"code":"not_found","message":"Issue not found"}}`.
+9. Check that a real provider failure is translated. Stop the server and
+   restart it with an invalid token, keeping the key from `.env`:
+
+   ```bash
+   TRELLO_TOKEN=invalid-token uv run --locked uvicorn app.main:app --env-file .env
+   ```
+
+   Request the issue created in step 5, which still exists:
+   `curl -i "http://127.0.0.1:8000/issues/<new ID>"`. Expect HTTP 403 and
+   `{"error":{"code":"access_denied","message":"The issue tracker denied access to this issue"}}`.
+   The server terminal should show one log line like
+   `{"level": "WARNING", "operation": "get_issue", "error": "access_denied", "status": 403, "provider_involved": true, "cause": "provider_status=401", "write_outcome": null}`,
+   with no key, token, URL, or stack trace.
+10. Delete any remaining disposable cards (including the card created in
    step 5) and any board created only for this check.
    Revoke the token from the test account's Settings > Applications page
    when finished, stop the server, clear credentials from `.env`, and run
    `unset TRELLO_API_KEY TRELLO_TOKEN TRELLO_LIST_ID` if you also exported them.
 
-Each GET makes one [Get a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-get)
+A GET cache hit makes no provider request. A cache miss makes one [Get a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-get)
 request for `id,name`. Each POST makes one
 [Create a new Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-post)
 request with `idList` and `name`. Each PATCH makes one
 [Update a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-put)
-request. Each DELETE makes one
+request (a conditional PATCH adds one Get a Card request first). Each DELETE makes one
 [Delete a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-delete)
 request and ignores the successful response body. All four use a 10-second
-socket timeout with no retries or caching. See [the API contract](docs/api.md)
+socket timeout with no automatic retries. Invalid requests or missing
+configuration can fail before any provider request. See [the API contract](docs/api.md)
 for errors and supported IDs.
 
 ## Contributing

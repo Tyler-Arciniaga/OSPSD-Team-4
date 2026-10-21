@@ -2,10 +2,6 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-# The format of a full issue ID, shared by request validation and
-# provider response checks.
-ISSUE_ID_PATTERN = r"[0-9a-f]{24}"
-
 # The longest title a caller may set. This is a service rule, not a
 # provider limit.
 MAX_TITLE_LENGTH = 256

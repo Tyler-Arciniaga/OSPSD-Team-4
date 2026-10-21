@@ -1,16 +1,22 @@
 import io
 import json
 from email.message import Message
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
 from urllib.request import Request
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main, provider
-
-client = TestClient(main.app)
+from app import provider
+from tests.expected_errors import (
+    CREDENTIALS_NOT_CONFIGURED,
+    ISSUE_HTTP_FAILURES,
+    NETWORK_FAILURES,
+    NOT_FOUND,
+    UNEXPECTED_RESPONSE,
+    ErrorJson,
+)
 
 KNOWN_ISSUE_ID = "64f1c0a2b3d4e5f607182930"
 KNOWN_ISSUE_TITLE = "Fetched Trello issue"
@@ -27,17 +33,19 @@ def trello_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(provider, "urlopen", forbid_network)
 
 
-def test_get_issue_returns_id_and_title(monkeypatch: pytest.MonkeyPatch):
+def test_get_issue_returns_id_and_title(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
     def get_card(request: Request, timeout: int) -> io.BytesIO:
         parsed = urlsplit(request.full_url)
 
         assert parsed.path == f"/1/cards/{KNOWN_ISSUE_ID}"
         assert parse_qs(parsed.query) == {
             "fields": ["id,name"],
-            "key": ["test-key"],
-            "token": ["test-token"],
         }
-        assert request.get_header("Authorization") is None
+        assert request.get_header("Authorization") == (
+            'OAuth oauth_consumer_key="test-key", oauth_token="test-token"'
+        )
         assert timeout == 10
         return io.BytesIO(
             json.dumps(
@@ -55,18 +63,20 @@ def test_get_issue_returns_id_and_title(monkeypatch: pytest.MonkeyPatch):
     }
 
 
-def test_get_unknown_issue_returns_404():
+def test_get_unknown_issue_returns_404(client: TestClient) -> None:
     response = client.get("/issues/does-not-exist")
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "Issue not found"}
+    assert response.json() == NOT_FOUND
 
 
-@pytest.mark.parametrize(
-    "status, expected", [(404, 404), (401, 502), (403, 502), (429, 502), (500, 502)]
-)
+@pytest.mark.parametrize(("status", "expected", "body"), ISSUE_HTTP_FAILURES)
 def test_trello_http_errors(
-    monkeypatch: pytest.MonkeyPatch, status: int, expected: int
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    expected: int,
+    body: ErrorJson,
 ):
     def fail(request: Request, timeout: int) -> None:
         raise HTTPError(
@@ -76,37 +86,44 @@ def test_trello_http_errors(
     monkeypatch.setattr(provider, "urlopen", fail)
     response = client.get(f"/issues/{KNOWN_ISSUE_ID}")
     assert response.status_code == expected
-    assert response.json() == {
-        "detail": "Issue not found" if expected == 404 else "Trello request failed"
-    }
+    assert response.json() == body
 
 
-@pytest.mark.parametrize("error", [URLError("private"), TimeoutError("private")])
-def test_trello_network_failure(monkeypatch: pytest.MonkeyPatch, error: Exception):
+@pytest.mark.parametrize(("error", "body"), NETWORK_FAILURES)
+def test_trello_network_failure(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    body: ErrorJson,
+):
     def fail(request: Request, timeout: int) -> None:
         raise error
 
     monkeypatch.setattr(provider, "urlopen", fail)
     response = client.get(f"/issues/{KNOWN_ISSUE_ID}")
     assert response.status_code == 502
-    assert response.json() == {"detail": "Trello request failed"}
+    assert response.json() == body
 
 
 @pytest.mark.parametrize(
     "payload", [b"not json", b"{}", b"[]", b'{"id":"wrong","name":"Title"}']
 )
-def test_invalid_trello_response(monkeypatch: pytest.MonkeyPatch, payload: bytes):
+def test_invalid_trello_response(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, payload: bytes
+):
     monkeypatch.setattr(
         provider, "urlopen", lambda request, timeout: io.BytesIO(payload)
     )
     response = client.get(f"/issues/{KNOWN_ISSUE_ID}")
     assert response.status_code == 502
-    assert response.json() == {"detail": "Trello request failed"}
+    assert response.json() == UNEXPECTED_RESPONSE
 
 
 @pytest.mark.parametrize("variable", ["TRELLO_API_KEY", "TRELLO_TOKEN"])
-def test_missing_credentials(monkeypatch: pytest.MonkeyPatch, variable: str):
+def test_missing_credentials(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, variable: str
+):
     monkeypatch.delenv(variable)
     response = client.get(f"/issues/{KNOWN_ISSUE_ID}")
     assert response.status_code == 503
-    assert response.json() == {"detail": "Trello credentials not configured"}
+    assert response.json() == CREDENTIALS_NOT_CONFIGURED
