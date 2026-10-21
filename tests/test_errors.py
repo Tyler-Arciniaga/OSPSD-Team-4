@@ -15,8 +15,11 @@ from app.models import Issue, IssueUpdate
 
 KNOWN_ISSUE_ID = "64f1c0a2b3d4e5f607182930"
 
+
 # Keep server errors as responses so the 500 contract can be checked.
-client = TestClient(main.app, raise_server_exceptions=False)
+@pytest.fixture
+def raise_server_exceptions() -> bool:
+    return False
 
 
 class ControlledProvider:
@@ -65,7 +68,7 @@ def failure_logs(caplog: pytest.LogCaptureFixture) -> list[dict[str, object]]:
 # The four cases the error contract must cover, using a controlled provider.
 
 
-def test_success(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_success(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     use_provider(monkeypatch, ControlledProvider())
 
     response = client.get(f"/issues/{KNOWN_ISSUE_ID}")
@@ -74,7 +77,7 @@ def test_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert response.json() == {"id": KNOWN_ISSUE_ID, "title": "Controlled issue"}
 
 
-def test_invalid_input(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_invalid_input(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     supplied = ControlledProvider()
     use_provider(monkeypatch, supplied)
 
@@ -97,7 +100,7 @@ def test_invalid_input(monkeypatch: pytest.MonkeyPatch) -> None:
     assert supplied.calls == 0
 
 
-def test_missing_resource(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_missing_resource(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     use_provider(
         monkeypatch,
         ControlledProvider(
@@ -113,7 +116,7 @@ def test_missing_resource(monkeypatch: pytest.MonkeyPatch) -> None:
     }
 
 
-def test_provider_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_provider_failure(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     use_provider(
         monkeypatch,
         ControlledProvider(
@@ -139,7 +142,7 @@ def test_provider_failure(monkeypatch: pytest.MonkeyPatch) -> None:
 # Further classes of failure.
 
 
-def test_access_denied(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_access_denied(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     use_provider(
         monkeypatch,
         ControlledProvider(
@@ -163,7 +166,9 @@ def test_access_denied(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_unexpected_exception_hides_internals(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     use_provider(monkeypatch, ControlledProvider(RuntimeError("private bug details")))
 
@@ -190,7 +195,7 @@ def test_unexpected_exception_hides_internals(
     assert record.exc_info
 
 
-def test_unknown_route_uses_error_shape() -> None:
+def test_unknown_route_uses_error_shape(client: TestClient) -> None:
     response = client.get("/no-such-route")
 
     assert response.status_code == 404
@@ -203,7 +208,9 @@ def test_unknown_route_uses_error_shape() -> None:
 
 
 def test_failure_is_logged_once_without_stack_trace(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     use_provider(
         monkeypatch,
@@ -235,6 +242,7 @@ def test_failure_is_logged_once_without_stack_trace(
 
 
 def test_rejection_before_provider_is_logged_as_not_involving_it(
+    client: TestClient,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     client.get("/issues/does-not-exist")
@@ -297,6 +305,7 @@ def test_rejection_before_provider_is_logged_as_not_involving_it(
     ],
 )
 def test_real_provider_failures_are_sanitized(
+    client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     error: Exception,
@@ -336,7 +345,9 @@ def test_real_provider_failures_are_sanitized(
 
 
 def test_missing_configuration_does_not_involve_provider(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.delenv("TRELLO_API_KEY", raising=False)
 

@@ -8,7 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.dependencies import get_issue_provider
+from app.dependencies import get_issue_provider, lifespan
 from app.errors import (
     ErrorBody,
     ErrorCode,
@@ -20,7 +20,10 @@ from app.errors import (
 from app.interface import IssueProvider
 from app.models import Issue, IssueCreate, IssueUpdate
 
-app = FastAPI(title="Issue Tracking Service")
+app = FastAPI(
+    title="Issue Tracking Service",
+    lifespan=lifespan,
+)
 
 # Makes each PATCH's version check and write one step, so two callers cannot
 # both pass the check. shortcut: one lock per process, serializing every PATCH;

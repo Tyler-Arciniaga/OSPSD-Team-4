@@ -8,7 +8,7 @@ from urllib.request import Request
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main, provider
+from app import provider
 from tests.expected_errors import (
     CREDENTIALS_NOT_CONFIGURED,
     ISSUE_HTTP_FAILURES,
@@ -17,8 +17,6 @@ from tests.expected_errors import (
     UNEXPECTED_RESPONSE,
     ErrorJson,
 )
-
-client = TestClient(main.app)
 
 KNOWN_ISSUE_ID = "64f1c0a2b3d4e5f607182930"
 KNOWN_ISSUE_TITLE = "Fetched Trello issue"
@@ -35,7 +33,9 @@ def trello_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(provider, "urlopen", forbid_network)
 
 
-def test_get_issue_returns_id_and_title(monkeypatch: pytest.MonkeyPatch):
+def test_get_issue_returns_id_and_title(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
     def get_card(request: Request, timeout: int) -> io.BytesIO:
         parsed = urlsplit(request.full_url)
 
@@ -63,7 +63,7 @@ def test_get_issue_returns_id_and_title(monkeypatch: pytest.MonkeyPatch):
     }
 
 
-def test_get_unknown_issue_returns_404() -> None:
+def test_get_unknown_issue_returns_404(client: TestClient) -> None:
     response = client.get("/issues/does-not-exist")
 
     assert response.status_code == 404
@@ -72,7 +72,11 @@ def test_get_unknown_issue_returns_404() -> None:
 
 @pytest.mark.parametrize(("status", "expected", "body"), ISSUE_HTTP_FAILURES)
 def test_trello_http_errors(
-    monkeypatch: pytest.MonkeyPatch, status: int, expected: int, body: ErrorJson
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    expected: int,
+    body: ErrorJson,
 ):
     def fail(request: Request, timeout: int) -> None:
         raise HTTPError(
@@ -87,7 +91,10 @@ def test_trello_http_errors(
 
 @pytest.mark.parametrize(("error", "body"), NETWORK_FAILURES)
 def test_trello_network_failure(
-    monkeypatch: pytest.MonkeyPatch, error: Exception, body: ErrorJson
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    body: ErrorJson,
 ):
     def fail(request: Request, timeout: int) -> None:
         raise error
@@ -101,7 +108,9 @@ def test_trello_network_failure(
 @pytest.mark.parametrize(
     "payload", [b"not json", b"{}", b"[]", b'{"id":"wrong","name":"Title"}']
 )
-def test_invalid_trello_response(monkeypatch: pytest.MonkeyPatch, payload: bytes):
+def test_invalid_trello_response(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, payload: bytes
+):
     monkeypatch.setattr(
         provider, "urlopen", lambda request, timeout: io.BytesIO(payload)
     )
@@ -111,7 +120,9 @@ def test_invalid_trello_response(monkeypatch: pytest.MonkeyPatch, payload: bytes
 
 
 @pytest.mark.parametrize("variable", ["TRELLO_API_KEY", "TRELLO_TOKEN"])
-def test_missing_credentials(monkeypatch: pytest.MonkeyPatch, variable: str):
+def test_missing_credentials(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, variable: str
+):
     monkeypatch.delenv(variable)
     response = client.get(f"/issues/{KNOWN_ISSUE_ID}")
     assert response.status_code == 503
