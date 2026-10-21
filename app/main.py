@@ -1,7 +1,9 @@
+import hashlib
 from collections.abc import Mapping
+from threading import Lock
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Header, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -19,6 +21,16 @@ from app.interface import IssueProvider
 from app.models import Issue, IssueCreate, IssueUpdate
 
 app = FastAPI(title="Issue Tracking Service")
+
+# Makes each PATCH's version check and write one step, so two callers cannot
+# both pass the check. shortcut: one lock per process, serializing every PATCH;
+# move to a shared store (e.g. Redis) before running several workers.
+_update_lock = Lock()
+
+
+def _etag(issue: Issue) -> str:
+    """Return a version tag that changes whenever the issue's public fields change."""
+    return f'"{hashlib.sha256(issue.model_dump_json().encode()).hexdigest()[:16]}"'
 
 
 def _error_responses(*statuses: int) -> dict[int | str, dict[str, Any]]:
@@ -112,24 +124,41 @@ def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
 )
 def get_issue(
     issue_id: str,
+    response: Response,
     provider: Annotated[IssueProvider, Depends(get_issue_provider)],
 ) -> Issue:
     """Retrieve an issue by its ID using the supplied provider."""
-    return provider.get_issue(issue_id)
+    issue = provider.get_issue(issue_id)
+    response.headers["ETag"] = _etag(issue)
+    return issue
 
 
 @app.patch(
     "/issues/{issue_id}",
     response_model=Issue,
-    responses=_error_responses(403, 404, 422, 502, 503),
+    responses=_error_responses(403, 404, 412, 422, 502, 503),
 )
 def update_issue(
     issue_id: str,
     changes: IssueUpdate,
+    response: Response,
     provider: Annotated[IssueProvider, Depends(get_issue_provider)],
+    if_match: Annotated[str | None, Header()] = None,
 ) -> Issue:
-    """Partially update an issue by its ID using the supplied provider."""
-    return provider.update_issue(issue_id, changes)
+    """Partially update an issue, rejecting the change if If-Match is stale."""
+    with _update_lock:
+        if (
+            if_match not in (None, "*")
+            and _etag(provider.get_issue(issue_id)) != if_match
+        ):
+            raise ServiceError(
+                ErrorCode.PRECONDITION_FAILED,
+                "The issue has changed since it was read",
+                cause="version_mismatch",
+            )
+        issue = provider.update_issue(issue_id, changes)
+    response.headers["ETag"] = _etag(issue)
+    return issue
 
 
 @app.delete(

@@ -20,7 +20,9 @@ The service implements `GET /issues/{issue_id}`, `POST /issues`,
 `PATCH /issues/{issue_id}`, and `DELETE /issues/{issue_id}` against Trello.
 GET, POST, and PATCH translate a card's `id` and `name` into the public `id`
 and `title` fields; PATCH updates an issue's `title`; DELETE permanently
-removes the card. Every failure returns one documented, provider-independent
+removes the card. GET and PATCH return an `ETag`; PATCH with `If-Match`
+rejects stale overwrites with `412` (see
+[Conditional updates](docs/api.md#conditional-updates)). Every failure returns one documented, provider-independent
 error format and writes one sanitized log line. Automated tests run without
 credentials or network access.
 
@@ -299,6 +301,22 @@ for the provider setup and the responsibilities of each test file.
    Expect HTTP 200 with the same ID and the new title. Confirm in Trello
    that the card's name changed, then repeat the step 2 `GET` and expect
    the new title.
+
+   Check that a stale overwrite is rejected. Copy the `ETag` header from
+   the step 2 `GET` (repeat it now), then send two updates with it:
+
+   ```bash
+   curl -i -X PATCH "http://127.0.0.1:8000/issues/$TRELLO_TEST_CARD_ID" \
+     -H "Content-Type: application/json" -H 'If-Match: "<etag>"' \
+     -d '{"title": "HW1 client A"}'
+   curl -i -X PATCH "http://127.0.0.1:8000/issues/$TRELLO_TEST_CARD_ID" \
+     -H "Content-Type: application/json" -H 'If-Match: "<etag>"' \
+     -d '{"title": "HW1 client B"}'
+   ```
+
+   Expect HTTP 200 for the first and HTTP 412 with
+   `{"error":{"code":"precondition_failed","message":"The issue has changed since it was read"}}`
+   for the second. Confirm in Trello that the card is named `HW1 client A`.
 8. Delete the disposable test card through the service:
 
    ```bash
@@ -332,7 +350,7 @@ request for `id,name`. Each POST makes one
 [Create a new Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-post)
 request with `idList` and `name`. Each PATCH makes one
 [Update a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-put)
-request. Each DELETE makes one
+request (a conditional PATCH adds one Get a Card request first). Each DELETE makes one
 [Delete a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-delete)
 request and ignores the successful response body. All four use a 10-second
 socket timeout with no retries or caching. See [the API contract](docs/api.md)

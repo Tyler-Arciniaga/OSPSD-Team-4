@@ -14,6 +14,7 @@ class ErrorCode(StrEnum):
     NOT_FOUND = "not_found"
     ACCESS_DENIED = "access_denied"
     SERVICE_NOT_CONFIGURED = "service_not_configured"
+    PRECONDITION_FAILED = "precondition_failed"
     PROVIDER_ERROR = "provider_error"
     INTERNAL_ERROR = "internal_error"
 
@@ -23,6 +24,7 @@ STATUS_FOR_CODE: dict[ErrorCode, int] = {
     ErrorCode.NOT_FOUND: 404,
     ErrorCode.ACCESS_DENIED: 403,
     ErrorCode.SERVICE_NOT_CONFIGURED: 503,
+    ErrorCode.PRECONDITION_FAILED: 412,
     ErrorCode.PROVIDER_ERROR: 502,
     ErrorCode.INTERNAL_ERROR: 500,
 }
