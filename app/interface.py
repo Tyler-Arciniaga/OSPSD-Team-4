@@ -20,8 +20,8 @@ class IssueProvider(Protocol):
     `not_found` without contacting the provider.
     """
 
-    def get_issue(self, issue_id: str) -> Issue:
-        """Retrieve an issue by its ID."""
+    def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
+        """Retrieve an issue; fresh=True must bypass any saved result."""
         ...
 
     def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:

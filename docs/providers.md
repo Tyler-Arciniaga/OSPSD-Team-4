@@ -347,3 +347,18 @@ can supply controlled implementations without changing endpoint code.
 
 No additional real provider or runtime provider-selection feature
 is implemented.
+
+
+### Fresh reads for conditional updates
+
+`IssueProvider.get_issue(issue_id, fresh=True)` requires retrieval from the
+underlying provider instead of a saved result. The default remains `False`,
+so ordinary GET requests continue to use the cache. Trello reads are always
+fresh; in-memory test providers return their current state.
+
+Before comparing an `If-Match` version, PATCH requests a fresh read. The cache
+removes the old entry, forwards the fresh-read requirement, and caches the
+successful response. A failed fresh read leaves the old entry invalidated.
+This detects changes already present in Trello when the comparison read runs.
+It does not make the separate provider read and write atomic: external changes
+between them and writes from other service processes remain a limitation.

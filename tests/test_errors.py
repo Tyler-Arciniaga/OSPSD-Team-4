@@ -35,7 +35,7 @@ class ControlledProvider:
             raise self.outcome
         return issue
 
-    def get_issue(self, issue_id: str) -> Issue:
+    def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
         return self._run(Issue(id=issue_id, title="Controlled issue"))
 
     def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:

@@ -14,7 +14,7 @@ def test_endpoint_uses_supplied_provider(monkeypatch: pytest.MonkeyPatch) -> Non
     requested_ids: list[str] = []
 
     class FakeIssueProvider:
-        def get_issue(self, issue_id: str) -> Issue:
+        def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
             requested_ids.append(issue_id)
             return Issue(id=issue_id, title="Issue from the fake provider")
 
@@ -68,7 +68,7 @@ def test_endpoints_pass_any_id_to_supplied_provider(
     received: list[tuple[str, str]] = []
 
     class AnyIdProvider:
-        def get_issue(self, issue_id: str) -> Issue:
+        def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
             received.append(("get", issue_id))
             return Issue(id=issue_id, title="Issue from the fake provider")
 
@@ -107,7 +107,7 @@ def test_provider_missing_issue_returns_404(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class MissingIssueProvider:
-        def get_issue(self, issue_id: str) -> Issue:
+        def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
             raise ServiceError(
                 ErrorCode.NOT_FOUND, "Issue not found", provider_involved=True
             )
@@ -144,7 +144,7 @@ def test_create_uses_supplied_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     requested_titles: list[str] = []
 
     class FakeIssueProvider:
-        def get_issue(self, issue_id: str) -> Issue:
+        def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
             raise AssertionError("POST must not retrieve an issue")
 
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
@@ -202,7 +202,7 @@ def test_invalid_create_body_does_not_call_provider(
     monkeypatch: pytest.MonkeyPatch, body: dict[str, object]
 ) -> None:
     class UnexpectedCallProvider:
-        def get_issue(self, issue_id: str) -> Issue:
+        def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
             raise AssertionError("Invalid bodies must not reach the provider")
 
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
@@ -234,7 +234,7 @@ def test_create_accepts_maximum_title_length(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class EchoProvider:
-        def get_issue(self, issue_id: str) -> Issue:
+        def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
             raise AssertionError("POST must not retrieve an issue")
 
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
@@ -266,7 +266,7 @@ def test_provider_create_failure_is_passed_through(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FailingProvider:
-        def get_issue(self, issue_id: str) -> Issue:
+        def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
             raise AssertionError("POST must not retrieve an issue")
 
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:

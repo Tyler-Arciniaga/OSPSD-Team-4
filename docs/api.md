@@ -267,7 +267,8 @@ cannot overwrite a change the caller has not seen, because the public fields
 are then identical.
 
 **How the check and the write stay consistent:** the service reads the
-current issue, compares versions, and writes, all while holding a lock that
+current issue using a fresh provider read that bypasses the cache, compares
+versions, and writes, all while holding a lock that
 every PATCH takes. Another PATCH through the same service process therefore
 cannot run between the check and the write.
 

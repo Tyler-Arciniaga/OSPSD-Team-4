@@ -132,7 +132,7 @@ def test_trello_rejects_malformed_id_without_a_request(
 
 def test_provider_interchangeability() -> None:
     class FakeIssueProvider:
-        def get_issue(self, issue_id: str) -> Issue:
+        def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
             return Issue(id=issue_id, title="Fake issue")
 
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:

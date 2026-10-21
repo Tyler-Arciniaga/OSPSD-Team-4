@@ -139,7 +139,7 @@ def test_delete_uses_injected_provider_and_cannot_be_retrieved_or_deleted_again(
     deleted_ids: list[str] = []
 
     class FakeIssueProvider:
-        def get_issue(self, issue_id: str) -> Issue:
+        def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
             if issue_id not in issues:
                 raise ServiceError(
                     ErrorCode.NOT_FOUND, "Issue not found", provider_involved=True

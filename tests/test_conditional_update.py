@@ -3,6 +3,7 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
+from app.cache import CachedIssueProvider
 from app.dependencies import get_issue_provider
 from app.errors import ErrorCode, ServiceError
 from app.main import app
@@ -18,7 +19,7 @@ class InMemoryProvider:
         self.issue = Issue(id=ISSUE_ID, title="Original")
         self.updates = 0
 
-    def get_issue(self, issue_id: str) -> Issue:
+    def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
         if issue_id != ISSUE_ID:
             raise ServiceError(ErrorCode.NOT_FOUND, "Issue not found")
         return self.issue
@@ -99,3 +100,62 @@ def test_conditional_patch_of_missing_issue_returns_404(
     )
     assert response.status_code == 404
     assert store.updates == 0
+
+
+def test_conditional_patch_checks_provider_even_when_cached(
+    monkeypatch: pytest.MonkeyPatch, store: InMemoryProvider
+) -> None:
+    cached = CachedIssueProvider(store)
+    monkeypatch.setitem(app.dependency_overrides, get_issue_provider, lambda: cached)
+    with TestClient(app) as client:
+        old_tag = client.get(f"/issues/{ISSUE_ID}").headers["ETag"]
+        # Simulate an edit directly in Trello while the cached result is valid.
+        store.issue = Issue(id=ISSUE_ID, title="Changed outside this service")
+        assert client.get(f"/issues/{ISSUE_ID}").headers["ETag"] == old_tag
+        rejected = client.patch(
+            f"/issues/{ISSUE_ID}",
+            json={"title": "Overwrite"},
+            headers={"If-Match": old_tag},
+        )
+        assert rejected.status_code == 412
+        assert store.updates == 0
+        assert store.issue.title == "Changed outside this service"
+        # The comparison refreshed the cache, so a caller can read and retry.
+        new_tag = client.get(f"/issues/{ISSUE_ID}").headers["ETag"]
+        assert new_tag != old_tag
+        accepted = client.patch(
+            f"/issues/{ISSUE_ID}",
+            json={"title": "Reviewed update"},
+            headers={"If-Match": new_tag},
+        )
+        assert accepted.status_code == 200
+        assert store.updates == 1
+
+
+@pytest.mark.parametrize(
+    "code,status", [(ErrorCode.NOT_FOUND, 404), (ErrorCode.PROVIDER_ERROR, 502)]
+)
+def test_failed_fresh_read_prevents_conditional_write(
+    monkeypatch: pytest.MonkeyPatch,
+    store: InMemoryProvider,
+    code: ErrorCode,
+    status: int,
+) -> None:
+    cached = CachedIssueProvider(store)
+    monkeypatch.setitem(app.dependency_overrides, get_issue_provider, lambda: cached)
+    with TestClient(app) as client:
+        tag = client.get(f"/issues/{ISSUE_ID}").headers["ETag"]
+
+        def fail(issue_id: str, *, fresh: bool = False) -> Issue:
+            raise ServiceError(code, "Read failed", provider_involved=True)
+
+        monkeypatch.setattr(store, "get_issue", fail)
+        response = client.patch(
+            f"/issues/{ISSUE_ID}",
+            json={"title": "Overwrite"},
+            headers={"If-Match": tag},
+        )
+        assert response.status_code == status
+        assert store.updates == 0
+        # A failed refresh must not leave the old successful value available.
+        assert client.get(f"/issues/{ISSUE_ID}").status_code == status

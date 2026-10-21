@@ -168,7 +168,7 @@ def update_issue(
     with _update_lock:
         if (
             if_match not in (None, "*")
-            and _etag(provider.get_issue(issue_id)) != if_match
+            and _etag(provider.get_issue(issue_id, fresh=True)) != if_match
         ):
             raise ServiceError(
                 ErrorCode.PRECONDITION_FAILED,
