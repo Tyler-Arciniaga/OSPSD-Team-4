@@ -386,6 +386,7 @@ def test_missing_configuration_does_not_involve_provider(
     ],
 )
 def test_write_failure_logs_whether_change_was_applied(
+    client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     outcome: ServiceError,
@@ -400,7 +401,9 @@ def test_write_failure_logs_whether_change_was_applied(
 
 
 def test_locally_rejected_write_logs_not_applied(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     supplied = ControlledProvider()
     use_provider(monkeypatch, supplied)
