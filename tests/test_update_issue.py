@@ -1,6 +1,5 @@
 import io
 import json
-from collections.abc import Iterator
 from email.message import Message
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
@@ -24,14 +23,6 @@ from tests.expected_errors import (
     UNEXPECTED_RESPONSE,
     ErrorJson,
 )
-
-
-@pytest.fixture
-def client() -> Iterator[TestClient]:
-    # Run startup and shutdown for each test, giving it a fresh cache.
-    with TestClient(main.app) as test_client:
-        yield test_client
-
 
 KNOWN_ISSUE_ID = "64f1c0a2b3d4e5f607182930"
 NEW_TITLE = "Renamed Trello issue"

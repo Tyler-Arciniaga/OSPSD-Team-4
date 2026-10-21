@@ -1,6 +1,5 @@
 import json
 import logging
-from collections.abc import Iterator
 from email.message import Message
 from urllib.error import HTTPError, URLError
 from urllib.request import Request
@@ -19,10 +18,8 @@ KNOWN_ISSUE_ID = "64f1c0a2b3d4e5f607182930"
 
 # Keep server errors as responses so the 500 contract can be checked.
 @pytest.fixture
-def client() -> Iterator[TestClient]:
-    # Run startup and shutdown for each test, giving it a fresh cache.
-    with TestClient(main.app, raise_server_exceptions=False) as test_client:
-        yield test_client
+def raise_server_exceptions() -> bool:
+    return False
 
 
 class ControlledProvider:

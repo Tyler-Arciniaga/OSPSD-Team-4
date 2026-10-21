@@ -178,8 +178,9 @@ and a limit of 100 entries, configured at startup.
 
 Entries are keyed by issue ID in an `OrderedDict`. Each contains an
 expiration time and an `Issue`. Expiration uses `monotonic()` and starts
-when retrieval finishes. Hits do not extend it. Expired entries are
-removed during GET processing; there is no background cleanup task.
+when retrieval finishes. Hits do not extend it. Each GET checks only its
+requested entry and removes it if expired; there is no full-cache scan or
+background cleanup task. Other expired entries remain until accessed or evicted.
 When capacity is exceeded, the least recently used entry is removed.
 The limit counts entries, not bytes.
 
@@ -188,10 +189,14 @@ saved object. Exceptions propagate normally and are never cached.
 Invalidation happens before writes because Trello might apply a change
 even if its response fails to reach the service.
 
-One lock protects GET, PATCH, and DELETE, including their provider calls.
-This keeps reads and invalidation consistent within the wrapper, but also
-makes these operations wait for one another even for different issue IDs.
-POST does not acquire this lock because it does not change the cache.
+A fixed pool of 64 striped locks coordinates GET, PATCH, and DELETE.
+`hash(issue_id) % 64` selects the stripe, which stays locked for the whole
+operation, including the provider call. Operations on the same ID take turns;
+different IDs can proceed concurrently unless they share a stripe.
+A separate short lock protects every access to the shared `OrderedDict`
+and its LRU order. It is never held during provider calls. Locks are always
+acquired in stripe-then-dictionary order to avoid deadlocks.
+POST acquires neither lock because it does not change the cache.
 
 The cache is in memory and local to one application process. Workers do
 not share entries or invalidations. Direct Trello changes and permission
@@ -202,8 +207,10 @@ must fetch again and may return a provider error. See
 
 ## Testing
 
-Endpoint client fixtures use `with TestClient(...)` so application startup
+The shared client fixture in `tests/conftest.py` uses `with TestClient(...)` so application startup
 and shutdown run for each test and cached data does not leak between tests.
+Error tests override the `raise_server_exceptions` fixture to inspect 500
+responses; other tests keep unexpected exceptions visible.
 Tests that override `get_issue_provider()` still bypass the normal wrapper.
 
 ### Cache tests
@@ -215,7 +222,11 @@ It also checks invalidation for updates and deletions, including failed
 writes with uncertain outcomes, and that failed reads are not cached.
 An HTTP-level test verifies that requests reuse the startup-created cache
 and a new application lifespan starts empty. These tests require neither
-Trello access nor real-time waits.
+Trello access nor waits for TTL expiration. Threaded tests use events to
+verify that slow fetches do not block hits or misses on other stripes,
+concurrent reads share a fetch, and updates/deletions wait for an in-flight
+read before invalidating its result. Timeouts bound test waits; no sleeps
+are used to arrange thread ordering.
 
 ### Provider tests
 

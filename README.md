@@ -35,7 +35,8 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 - `app/provider.py`: Trello authentication, requests, and translation of Trello responses and failures.
 - `app/cache.py`: Caches successful reads and invalidates saved issues before updates or deletions.
 - `app/dependencies.py`: Creates one cached Trello provider at application startup and supplies it to the endpoints.
-- `tests/test_cache.py`: Cache behavior, invalidation, and application lifecycle tests.
+- `tests/conftest.py`: Shared per-test client setup and application startup/shutdown.
+- `tests/test_cache.py`: Cache behavior, concurrency, invalidation, and application lifecycle tests.
 - `tests/test_get_issue.py`: Retrieval endpoint tests with simulated Trello responses.
 - `tests/test_create_issue.py`: Creation endpoint tests with simulated Trello responses.
 - `tests/test_provider.py`: Provider compatibility, translation, and error tests.

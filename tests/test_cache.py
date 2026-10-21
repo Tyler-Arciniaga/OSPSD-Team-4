@@ -1,3 +1,8 @@
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import AbstractContextManager, contextmanager
+from threading import Event
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -343,3 +348,133 @@ def test_application_shares_cache_and_resets_it_on_restart(
         assert response.status_code == 200
         assert response.json() == expected
         assert underlying.get_calls == [issue_id, issue_id]
+
+
+@pytest.mark.parametrize("warm_cache", [False, True])
+def test_slow_fetch_does_not_block_another_stripe(
+    monkeypatch: pytest.MonkeyPatch, warm_cache: bool
+) -> None:
+    monkeypatch.setattr("app.cache.monotonic", lambda: 100.0)
+    started = Event()
+    release = Event()
+    slow_id = "slow"
+
+    class SlowProvider(FakeIssueProvider):
+        def get_issue(self, issue_id: str) -> Issue:
+            if issue_id == slow_id:
+                started.set()
+                assert release.wait(5), "Test did not release the slow fetch"
+            return super().get_issue(issue_id)
+
+    underlying = SlowProvider()
+    cached = CachedIssueProvider(underlying)
+    # Python randomizes string hashes: choose different stripes explicitly.
+    fast_id = next(
+        str(i)
+        for i in range(1000)
+        if hash(str(i)) % len(cached._stripes) != hash(slow_id) % len(cached._stripes)
+    )
+    if warm_cache:
+        cached.get_issue(fast_id)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        slow = pool.submit(cached.get_issue, slow_id)
+        try:
+            assert started.wait(5)
+            fast = pool.submit(cached.get_issue, fast_id)
+            # Must finish while the first provider call is still blocked.
+            assert fast.result(timeout=2).id == fast_id
+            assert underlying.get_calls.count(fast_id) == 1
+        finally:
+            release.set()
+        assert slow.result(timeout=5).id == slow_id
+
+
+@pytest.mark.parametrize("operation", ["read", "update", "delete"])
+def test_same_issue_operations_wait_for_fetch(
+    monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    monkeypatch.setattr("app.cache.monotonic", lambda: 100.0)
+    started = Event()
+    release = Event()
+    waiting = Event()
+    issue_id = "same-issue"
+
+    class BlockingProvider(FakeIssueProvider):
+        title = "Original"
+        deleted = False
+
+        def get_issue(self, issue_id: str) -> Issue:
+            self.get_calls.append(issue_id)
+            if self.deleted:
+                raise ServiceError(ErrorCode.NOT_FOUND, "Issue not found")
+            issue = Issue(id=issue_id, title=self.title)
+            if len(self.get_calls) == 1:
+                started.set()
+                assert release.wait(5)
+            return issue
+
+        def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
+            assert changes.title is not None
+            self.title = changes.title
+            return Issue(id=issue_id, title=self.title)
+
+        def delete_issue(self, issue_id: str) -> None:
+            self.deleted = True
+
+    underlying = BlockingProvider()
+    cached = CachedIssueProvider(underlying)
+    stripe_index = hash(issue_id) % len(cached._stripes)
+    real_lock = cached._stripes[stripe_index]
+
+    # Signal when the second operation actually attempts the held lock.
+    # This avoids relying on sleeps or thread scheduling for the assertion.
+    @contextmanager
+    def observed_stripe() -> Iterator[None]:
+        if not real_lock.acquire(blocking=False):
+            waiting.set()
+            real_lock.acquire()
+        try:
+            yield
+        finally:
+            real_lock.release()
+
+    class ObservedStripes:
+        def __len__(self) -> int:
+            return 64
+
+        def __getitem__(self, index: int) -> AbstractContextManager[None]:
+            assert index == stripe_index
+            return observed_stripe()
+
+    monkeypatch.setattr(cached, "_stripes", ObservedStripes())
+
+    def second_operation() -> Issue | None:
+        if operation == "read":
+            return cached.get_issue(issue_id)
+        if operation == "update":
+            return cached.update_issue(issue_id, IssueUpdate(title="Updated"))
+        cached.delete_issue(issue_id)
+        return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(cached.get_issue, issue_id)
+        try:
+            assert started.wait(5)
+            second = pool.submit(second_operation)
+            assert waiting.wait(2), "Second operation did not wait on the stripe"
+            assert not second.done()
+        finally:
+            release.set()
+        assert first.result(timeout=5).title == "Original"
+        second.result(timeout=5)
+
+    if operation == "delete":
+        with pytest.raises(ServiceError) as exc_info:
+            cached.get_issue(issue_id)
+        assert exc_info.value.code == ErrorCode.NOT_FOUND
+    else:
+        expected_title = "Updated" if operation == "update" else "Original"
+        assert cached.get_issue(issue_id).title == expected_title
+    # Concurrent reads share one fetch; writes invalidate the fetched result.
+    assert len(underlying.get_calls) == (1 if operation == "read" else 2)

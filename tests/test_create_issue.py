@@ -1,6 +1,5 @@
 import io
 import json
-from collections.abc import Iterator
 from email.message import Message
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
@@ -9,7 +8,7 @@ from urllib.request import Request
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main, provider
+from app import provider
 from tests.expected_errors import (
     ACCESS_DENIED_MESSAGE,
     CREDENTIALS_NOT_CONFIGURED,
@@ -19,14 +18,6 @@ from tests.expected_errors import (
     ErrorJson,
     error_body,
 )
-
-
-@pytest.fixture
-def client() -> Iterator[TestClient]:
-    # Run startup and shutdown for each test, giving it a fresh cache.
-    with TestClient(main.app) as test_client:
-        yield test_client
-
 
 CREATED_ISSUE_ID = "64f1c0a2b3d4e5f607182930"
 CREATED_ISSUE_TITLE = "Created Trello issue"

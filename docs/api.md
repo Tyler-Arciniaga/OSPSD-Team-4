@@ -306,7 +306,7 @@ All errors use the shape described in [Error model](#error-model).
 | Service credentials are missing | `503 Service Unavailable` | `service_not_configured` |
 | The issue tracker cannot be reached, times out, is unavailable, or rejects the request | `502 Bad Gateway` | `provider_error` |
 
-The Trello provider rejects malformed IDs before making a network request. 
+The Trello provider rejects malformed IDs before making a network request.
 A `403` or `503` requires operator action.
 
 After a successful deletion, GET requests handled by the same process and
