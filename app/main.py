@@ -8,7 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.dependencies import get_issue_provider, lifespan
+from app.dependencies import get_idempotency_store, get_issue_provider, lifespan
 from app.errors import (
     ErrorBody,
     ErrorCode,
@@ -17,7 +17,13 @@ from app.errors import (
     ServiceError,
     log_failure,
 )
-from app.interface import IssueProvider
+from app.idempotency import (
+    IDEMPOTENCY_KEY_PATTERN,
+    MAX_IDEMPOTENCY_KEY_LENGTH,
+    IdempotencyStore,
+    create_issue_idempotently,
+)
+from app.interface import IdempotentIssueProvider, IssueProvider
 from app.models import Issue, IssueCreate, IssueUpdate
 
 app = FastAPI(
@@ -76,8 +82,9 @@ def handle_service_error(request: Request, exc: ServiceError) -> JSONResponse:
         provider_involved=exc.provider_involved,
         write=_is_write(request),
         cause=exc.cause,
+        may_have_applied=exc.may_have_applied,
     )
-    return _error_response(exc.status, exc.code, exc.message)
+    return _error_response(exc.status, exc.code, exc.message, headers=exc.headers)
 
 
 @app.exception_handler(RequestValidationError)
@@ -197,18 +204,62 @@ def delete_issue(
     return Response(status_code=204)
 
 
+IdempotencyKey = Annotated[
+    str | None,
+    Header(
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=MAX_IDEMPOTENCY_KEY_LENGTH,
+        pattern=IDEMPOTENCY_KEY_PATTERN,
+        description=(
+            "Optional. Requests with the same key create at most one issue "
+            "within 24 hours of the key's first use. Use a new UUID per "
+            "logical creation."
+        ),
+    ),
+]
+
+
+def _supports_idempotent_creation(provider: IssueProvider) -> bool:
+    supports = getattr(provider, "supports_idempotent_creation", None)
+    if callable(supports):
+        # A wrapper (such as the cache) answers for the provider it wraps.
+        return bool(supports())
+    return isinstance(provider, IdempotentIssueProvider)
+
+
 @app.post(
     "/issues",
     response_model=Issue,
     status_code=201,
-    responses=_error_responses(403, 422, 502, 503),
+    responses=_error_responses(403, 409, 422, 502, 503),
 )
 def create_issue(
     body: IssueCreate,
     response: Response,
     provider: Annotated[IssueProvider, Depends(get_issue_provider)],
+    store: Annotated[IdempotencyStore, Depends(get_idempotency_store)],
+    idempotency_key: IdempotencyKey = None,
 ) -> Issue:
-    """Create an issue using the supplied provider."""
-    issue = provider.create_issue(body.title)
+    """Create an issue using the supplied provider.
+
+    With an `Idempotency-Key`, repeated and overlapping requests create at
+    most one issue, and repeats return that issue.
+    """
+    if idempotency_key is None:
+        issue = provider.create_issue(body.title)
+    else:
+        if not _supports_idempotent_creation(provider):
+            # Refuse rather than silently ignore a key we cannot honour.
+            raise ServiceError(
+                ErrorCode.SERVICE_NOT_CONFIGURED,
+                "Idempotent creation is not available",
+                cause="provider_not_idempotent",
+            )
+        assert isinstance(provider, IdempotentIssueProvider)
+        result = create_issue_idempotently(provider, store, idempotency_key, body)
+        issue = result.issue
+        if result.replayed:
+            response.headers["Idempotency-Replayed"] = "true"
     response.headers["Location"] = f"/issues/{issue.id}"
     return issue

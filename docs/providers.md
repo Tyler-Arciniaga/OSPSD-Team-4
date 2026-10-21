@@ -45,6 +45,29 @@ This allows application code to retrieve, create, update, and delete issues usin
 - **Errors:** A missing issue raises `not_found` (HTTP 404); missing credentials raise `service_not_configured` (HTTP 503); a provider rejection or network failure raises `access_denied` or `provider_error`, as for the other operations. See [Errors](#errors).
 - **Assumptions:** Repeated deletion reports a missing issue. A provider failure can follow a completed deletion if the response is lost; no automatic retry occurs.
 
+### Optional extension: `IdempotentIssueProvider`
+
+Idempotent creation ([API contract](api.md#idempotent-creation)) needs two
+more operations, declared in `app/interface.py` as `IdempotentIssueProvider`.
+A provider that lacks them still serves every request without an
+`Idempotency-Key`; a request with a key is refused with `503` rather than
+silently treated as non-idempotent.
+
+- **`create_tagged_issue(title, creation_token) -> Issue`:** like
+  `create_issue()`, but marks the issue with an opaque 64-character
+  hexadecimal token. On failure it must set `ServiceError.may_have_applied`
+  to `False` only when the issue certainly was not created.
+- **`find_tagged_issue(creation_token) -> Issue | None`:** a read that
+  returns the oldest issue carrying the token, or `None`.
+
+The token is a SHA-256 hash of the key and its scope. Providers never see
+the caller's key.
+
+The idempotency logic lives in `app/idempotency.py`, not in the provider:
+`IdempotencyStore` keeps keys durably in SQLite, and
+`create_issue_idempotently()` decides between creating, replaying,
+refusing an overlap and recovering an unknown outcome.
+
 ## Errors
 
 **File:** `app/errors.py`
@@ -61,6 +84,13 @@ A `ServiceError` also carries two values that are only logged:
 - `provider_involved`: set to `True` only when a request to the provider was
   attempted. Configuration checks that fail before any request leave it
   `False`.
+- `may_have_applied`: whether a failed write might still have taken effect.
+  A provider sets it to `False` only when it knows nothing was written.
+  When it is not set, `provider_error` and `internal_error` count as `True`
+  and every other code as `False`. It decides the logged `write_outcome`
+  and, for creation with an idempotency key, whether the key is released at
+  once (`False`) or held so the next attempt looks the issue up first
+  (`True`).
 - `cause`: a short internal reason, such as `provider_status=429` or
   `timeout`. It must never contain credentials, URLs, provider messages or
   response bodies.
@@ -94,6 +124,26 @@ for everything else.
 | Timeout, raised directly or wrapped in `URLError` | `provider_error` | `timeout` |
 | Other connection failure (`URLError`, `OSError`) | `provider_error` | exception class name |
 | Invalid JSON, missing `id` or `name`, or an unexpected card ID | `provider_error` | exception class name |
+
+For creation, `create_issue()` and `create_tagged_issue()` share
+`_create_card()` and also set `may_have_applied`:
+
+| Trello creation failure | `may_have_applied` |
+| --- | --- |
+| HTTP 4xx (including 401, 403, 404 and 429): Trello rejected the request | `False` |
+| HTTP 5xx | `True` |
+| DNS failure or refused connection: the request never reached Trello | `False` |
+| Timeout, reset or other connection failure | `True` |
+| Success status with an unreadable body: the card exists | `True` |
+| Missing credentials or target list: no request sent | `False` |
+
+`create_tagged_issue()` writes `issue-service-creation-token:<token>` as the
+card's description. `find_tagged_issue()` reads
+`GET /1/lists/{TRELLO_LIST_ID}/cards?fields=id,name,desc&filter=all`, so
+archived cards are found too, and returns the matching card with the
+smallest ID. Trello IDs begin with their creation time, so that is the
+oldest. A line in the description must equal the marker exactly. The
+lookup's failures are translated like creation's.
 
 Only the HTTP status or the exception's class name is kept. Exception
 messages and response bodies are discarded, because they may contain
@@ -159,6 +209,13 @@ credentials and, for creation, the target list from the environment when
 called. A cache hit does not call Trello or recheck credentials. Restart
 the application after configuration changes to discard previously cached data.
 
+Startup also saves an `IdempotencyStore` in `app.state.idempotency_store`,
+using the file named by `IDEMPOTENCY_DB_PATH` (default
+`idempotency.sqlite3`). `POST /issues` receives it through
+`get_idempotency_store()`. Unlike the cache, the store keeps nothing in
+memory: every process using the same file shares the same keys, and a
+restart forgets none of them.
+
 ## Cache Behavior
 
 **File:** `app/cache.py`  
@@ -175,6 +232,7 @@ and a limit of 100 entries, configured at startup.
 | PATCH | Remove the issue's entry before forwarding the update; do not cache the update response. |
 | DELETE | Remove the issue's entry before forwarding deletion. |
 | POST | Forward creation without reading or changing the cache. |
+| POST with `Idempotency-Key` | Forward `create_tagged_issue()` and `find_tagged_issue()` uncached, so recovery always sees the provider's current cards. If the wrapped provider lacks them, raise `service_not_configured` before any request. |
 
 Entries are keyed by issue ID in an `OrderedDict`. Each contains an
 expiration time and an `Issue`. Expiration uses `monotonic()` and starts
@@ -212,6 +270,39 @@ and shutdown run for each test and cached data does not leak between tests.
 Error tests override the `raise_server_exceptions` fixture to inspect 500
 responses; other tests keep unexpected exceptions visible.
 Tests that override `get_issue_provider()` still bypass the normal wrapper.
+
+### Idempotency tests
+
+`tests/test_idempotency.py` shows that a key never yields a second issue. Its
+fake provider records cards on a shared in-memory board, so each test counts
+the issues that really exist. The board and the SQLite file outlive the
+provider and store objects, which is how a restart is simulated. It covers:
+
+- Repeats (replay with `Idempotency-Replayed`), distinct keys, requests
+  without a key, and a reused key with a different body (`422`, nothing
+  created, original still replayed).
+- Overlap: a second request while the first is in the provider gets `409`
+  with `Retry-After`; 16 simultaneous attempts produce one provider call.
+  A claim is shown to hold SQLite's write lock while it decides, so two
+  claims can never both see an unused key.
+- Unknown outcomes: a lost response, a timeout that created nothing, an
+  unexpected exception, a failed lookup, and five lost responses in a row
+  each end with one issue. Certain rejections release the key immediately.
+- Restarts: replay after restart without contacting the provider; recovery
+  after a crash before and after the provider write; a failed result write.
+- Retention at 24 hours, purge of expired keys, header validation, and that
+  the raw key is stored nowhere.
+- With the real Trello provider and simulated HTTP: the card description
+  marker, a lost response end to end with exactly one Trello `POST`, lookup
+  matching, and the `may_have_applied` mapping above.
+- Integration: with no overrides, startup supplies the cached Trello
+  provider and a store at `IDEMPOTENCY_DB_PATH`, and the cache passes tagged
+  calls through; a cache over a provider without the extension refuses keys;
+  and the logged `write_outcome` matches whether the key was released.
+
+Removing any one safeguard (the lookup, the lease, the certainty check, the
+body fingerprint, the 5xx classification, or the locking transaction) makes
+at least one of these tests fail.
 
 ### Cache tests
 
