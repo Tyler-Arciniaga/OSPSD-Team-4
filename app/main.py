@@ -170,6 +170,8 @@ def update_issue(
             raise ServiceError(
                 ErrorCode.PRECONDITION_FAILED,
                 "The issue has changed since it was read",
+                # The current version was read from the provider.
+                provider_involved=True,
                 cause="version_mismatch",
             )
         issue = provider.update_issue(issue_id, changes)

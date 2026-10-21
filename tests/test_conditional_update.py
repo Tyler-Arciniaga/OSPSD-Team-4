@@ -43,7 +43,9 @@ def store(monkeypatch: pytest.MonkeyPatch) -> Iterator[InMemoryProvider]:
     yield fake
 
 
-def test_stale_overwrite_is_rejected(store: InMemoryProvider) -> None:
+def test_stale_overwrite_is_rejected(
+    store: InMemoryProvider, caplog: pytest.LogCaptureFixture
+) -> None:
     client = TestClient(app)
     # Two clients read the same version.
     etag_a = client.get(f"/issues/{ISSUE_ID}").headers["ETag"]
@@ -63,6 +65,8 @@ def test_stale_overwrite_is_rejected(store: InMemoryProvider) -> None:
     assert second.json()["error"]["code"] == "precondition_failed"
     assert store.issue.title == "From A"
     assert store.updates == 1
+    assert '"provider_involved": true' in caplog.text
+    assert '"write_outcome": "not_applied"' in caplog.text
 
     # Client B re-reads and retries with the current version.
     fresh = client.get(f"/issues/{ISSUE_ID}").headers["ETag"]
