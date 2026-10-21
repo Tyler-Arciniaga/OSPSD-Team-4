@@ -35,60 +35,51 @@ We would revisit this decision if the service needed to support multiple provide
 
 ## 6.2 / Rubric 12.2: Explain the Cost of One Operation (1 Point)
 
-`GET /issues/{issue_id}`
+`POST /issues`
 
 **1. Input size and relevant data structures**
 
-The operation retrieves a single issue using its identifier. The endpoint calls `get_issue()` on the provider supplied by `get_issue_provider()`. During normal operation, that is one `CachedIssueProvider` per application process, wrapping a `TrelloIssueProvider`.
+The operation creates one issue from a JSON body containing a `title`. FastAPI parses the body, and the `IssueCreate` model validates the title (1 to 256 characters, at least one non-whitespace character, no other fields). The endpoint then calls `create_issue(title)` on the supplied provider.
 
-The cache stores entries in an `OrderedDict` keyed by issue ID. Each entry holds an expiration time and an `Issue`. The dictionary holds at most 100 entries, ordered from least to most recently used. A fixed list of 64 locks ("stripes") coordinates operations on the same ID.
+During normal operation the provider is a `CachedIssueProvider`, which forwards creation directly to `TrelloIssueProvider` without reading or changing the cache. The cache therefore plays no part in this cost.
 
-On a cache miss, the Trello implementation requests only the card's `id` and `name` fields (`fields=id,name`). It parses the JSON response into a Python object and constructs an `Issue` model containing the public `id` and `title` fields.
+`TrelloIssueProvider.create_issue()` URL-encodes the configured list ID and the title into the query string, sends one request, parses the JSON response, checks the returned card's `id` and `name`, and constructs an `Issue`. The endpoint returns that `Issue` with a `Location` header.
 
 Sizes considered:
 
-- **k**: the length of the requested ID. For a valid Trello card ID, k is fixed at 24.
-- **t**: the length of the issue's title.
-- **n**: the size of the JSON response received from Trello. Because only `id` and `name` are requested, n grows with t plus the small constant k.
+- **b**: the size of the request body sent by the caller.
+- **t**: the length of the title. Validation caps a successful request at t ≤ 256.
+- **n**: the size of the JSON response from Trello. The request does not limit the returned fields, so Trello returns its full representation of the new card, not just `id` and `name`.
 
-The number of cached entries does not affect per-request work, because the cache never scans its entries.
+**2. Time complexity: O(b + n)**
 
-**2. Time complexity**
+- **Request parsing and validation: O(b).** The whole body is read and parsed as JSON before any field rule runs. The length and non-whitespace checks then take O(t). The 256-character limit bounds t for accepted requests, but it does not bound b: an oversized title or body is fully read and parsed before being rejected with `422`. The service sets no request-body size limit of its own.
+- **Building the request: O(t).** URL-encoding the title and the fixed-length list ID is linear in the title length.
+- **Handling the response: O(n).** Parsing Trello's JSON is linear in the response size. Checking the card ID against the 24-character pattern is O(1), and building the `Issue` and the `Location` header is O(t).
 
-Both paths begin by hashing the ID to select a stripe, which takes O(k) time. Python caches a string's hash, so later dictionary operations on the same ID do not recompute it.
+For an accepted request, t ≤ 256, so local work is dominated by reading the request body and parsing Trello's response: **O(b + n)**. These bounds exclude network latency and Trello's internal processing.
 
-- **Cache hit: O(t).** The dictionary lookup, expiration check, and `move_to_end()` take O(1) on average. Returning a deep copy of the cached `Issue` takes O(t).
-- **Cache miss or expired entry: O(n).** An expired entry is removed in O(1). The provider checks the ID format in O(k), which is O(1) for valid IDs. Parsing the response takes O(n). Storing a copy takes O(t). Thus, the miss path is **O(n)**.
+**3. Space complexity: O(b + n)**
 
-These bounds measure local processing only. They exclude network latency, Trello's internal processing, and time spent waiting for a stripe lock held by another operation on an ID that maps to the same stripe.
-
-**3. Space complexity**
-
-- **Per request:** O(n) on a miss, for the parsed response and the copied `Issue`, and O(t) on a hit, for the returned copy.
-- **Shared cache:** at most 100 entries per process, so cache storage is O(100 · t_max), where t_max is the longest cached title. The limit counts entries, not bytes.
+The parsed request body takes O(b) space and the parsed Trello response takes O(n). The returned `Issue` and the encoded request URL take O(t). Nothing is retained after the request finishes: POST does not populate the cache.
 
 **4. Provider calls and assumptions**
 
-In every case, the operation returns one record. The number of records fetched from Trello depends on the path:
+Each request creates at most one issue and returns one record. The number of Trello requests does not depend on the title length or body size:
 
 | Situation | Trello requests |
 | --- | --- |
-| Cache hit (entry younger than 30 seconds) | 0 |
-| Cache miss or expired entry, valid card ID, credentials set | 1 (`GET /1/cards/{id}?fields=id,name`) |
-| ID that is not a full Trello card ID | 0 (rejected as `not_found` before any request) |
-| Cache miss with credentials missing | 0 (`503 service_not_configured`) |
+| Valid body, credentials and `TRELLO_LIST_ID` set | 1 (`POST /1/cards` with `idList` and `name`) |
+| Invalid body (`422 invalid_input`) | 0 (rejected before the provider is called) |
+| Credentials or `TRELLO_LIST_ID` missing (`503 service_not_configured`) | 0 |
 
-Failed reads are never cached, so each repeated failing request costs another Trello request.
-
-The implementation uses a 10-second request timeout and does not automatically retry failed requests. A conditional `PATCH` (with `If-Match`) makes one additional fresh read that bypasses the cache. That cost belongs to PATCH, not to GET.
+The implementation uses a 10-second request timeout and never retries. Creation is not idempotent: after a `502`, especially a timeout, the card may already exist, so a caller who retries can create a duplicate.
 
 **5. Delegated work and remaining uncertainty**
 
-Trello performs the actual card lookup and returns the requested data. Our service does not control Trello's internal search algorithms, storage structures, or processing complexity.
+Trello stores the card, assigns its ID, and places it in the configured list. We cannot determine Trello's internal time or space complexity from our implementation, and network latency is separate from this local analysis.
 
-Therefore, we cannot determine Trello's internal time or space complexity from our implementation. Network latency and provider processing time also affect real-world performance but are separate from our local asymptotic analysis.
-
-We have not measured the cache hit rate. The share of GETs costing zero Trello requests depends on how often callers re-read the same issue within 30 seconds.
+We have not measured n. We assume a newly created card's response is small and roughly constant apart from the title, because the card has no description, labels, or other content yet. We have not verified how large Trello's create response is, or whether its size changes with board configuration.
 
 ## 6.3. Extend a Teammate's Feature
 
