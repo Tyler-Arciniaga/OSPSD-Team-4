@@ -448,18 +448,14 @@ No open question affects the shared contract. Everything which previously blocke
 - [x] Turki  
 - [x] Joseph
 
-**Outside consumer review.** The review itself happens via comments left in the Github repo. This only records who reviewed this design doc.
-
-| Name | Team | Date | Signed off |
-| :---- | :---- | :---- | :---- |
-| | | | \[ \] |
-
-&nbsp;
-
 **Accepted risks and scope of approval.** Record here anything the team knowingly accepted and what the approvals cover.
 
-- Risks accepted: *none recorded yet*  
-- Scope of approval: *to be filled in when the design is accepted*
+- Risks accepted:
+  - Deleted-issue detection on Linear is unverified. If Linear exposes no reliable deleted indicator, repeated deletes and later reads of deleted issues may need adapter-side tracking (open question 1).
+  - There are no automatic provider retries. Callers handle 502 and re-read before retrying a write that may have applied.
+  - The service runs as a single instance. The update lock, read cache and idempotency file assume one process, so scaling out is out of scope.
+  - Linear’s 30-day soft-delete window is documented but untested, so test deletions may accumulate in the test team.
+- Scope of approval: Approval means the team has reviewed this design and agrees the plan in sections 1 to 8 can go ahead as the Milestone 2 implementation plan.
 
 ## 9\. <!-- gdoc_comment_begin: c4 -->Next A<!-- gdoc_comment_end: c4 -->ctions
 
