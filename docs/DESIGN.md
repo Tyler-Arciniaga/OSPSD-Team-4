@@ -369,7 +369,7 @@ Each change is one pull request. After change is completed a link to the PR will
 | 5 | Conformance suite in `contract/tests/conformance/`, run against both adapters. | Turki and Chan | 1 (needs 2 to run against Linear) | The suite passes against Trello and Linear (see section 7). |
 | 6 | Documentation updates listed in 6.2. | Whole team | 2, 3, 5 | The docs describe what the merged code does. A teammate reads them against the code. |
 
-6.5 Early end-to-end integration step
+### 6.5 Early end-to-end integration step
 
 Before the full Linear adapter is written, we run one thin slice through the whole stack: after change 1 merges, build the Linear `create_issue` and `get_issue` first, start the service with `ISSUE_PROVIDER=linear` pointed at the test team, create an issue through `POST /issues`, read it back with `GET /issues/{id}`, and request a missing ID. This exposes the assumptions most likely to be wrong early: that Linear errors arrive as HTTP 200 and must be read from the body, that a missing and a malformed ID look the same, and that the create target is configured correctly. If it breaks an assumption, we change the plan and this document before building rename and delete.
 
