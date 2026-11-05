@@ -7,10 +7,10 @@ from urllib.request import Request
 import pytest
 
 from app import provider as provider_module
-from app.errors import ErrorCode, ServiceError
-from app.interface import IssueProvider
-from app.models import Issue, IssueUpdate
 from app.provider import TrelloIssueProvider
+from issue_tracker_contract.errors import ErrorCode, ServiceError
+from issue_tracker_contract.interface import IssueProvider
+from issue_tracker_contract.models import Issue, IssueUpdate
 
 
 def test_trello_implements_issue_provider() -> None:

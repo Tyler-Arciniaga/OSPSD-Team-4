@@ -2,11 +2,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.dependencies import get_issue_provider
-from app.errors import ErrorCode, ServiceError
-from app.interface import IssueProvider
 from app.main import app
-from app.models import Issue, IssueUpdate
 from app.provider import TrelloIssueProvider
+from issue_tracker_contract.errors import ErrorCode, ServiceError
+from issue_tracker_contract.interface import IssueProvider
+from issue_tracker_contract.models import Issue, IssueUpdate
 
 
 def test_endpoint_uses_supplied_provider(monkeypatch: pytest.MonkeyPatch) -> None:

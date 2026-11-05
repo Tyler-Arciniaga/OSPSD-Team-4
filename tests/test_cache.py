@@ -8,8 +8,8 @@ from fastapi.testclient import TestClient
 
 from app import dependencies, main
 from app.cache import CachedIssueProvider
-from app.errors import ErrorCode, ServiceError
-from app.models import Issue, IssueUpdate
+from issue_tracker_contract.errors import ErrorCode, ServiceError
+from issue_tracker_contract.models import Issue, IssueUpdate
 
 
 class FakeIssueProvider:

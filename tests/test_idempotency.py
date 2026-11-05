@@ -29,7 +29,6 @@ from fastapi.testclient import TestClient
 from app import main, provider
 from app.cache import CachedIssueProvider
 from app.dependencies import get_idempotency_store, get_issue_provider
-from app.errors import ErrorCode, ServiceError
 from app.idempotency import (
     ATTEMPT_LEASE_SECONDS,
     KEY_RETENTION_SECONDS,
@@ -39,8 +38,10 @@ from app.idempotency import (
     key_digest,
     request_fingerprint,
 )
-from app.interface import IdempotentIssueProvider, IssueProvider
-from app.models import Issue, IssueCreate, IssueUpdate
+from app.interface import IdempotentIssueProvider
+from issue_tracker_contract.errors import ErrorCode, ServiceError
+from issue_tracker_contract.interface import IssueProvider
+from issue_tracker_contract.models import Issue, IssueCreate, IssueUpdate
 
 KEY = "3f2b1c9e-8d4a-4f6b-9c1e-2a7d5e8f0b13"
 OTHER_KEY = "8a1d6e0c-2b7f-4c3a-9e5d-1f0b2c3d4e5f"
