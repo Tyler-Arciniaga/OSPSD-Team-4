@@ -2,9 +2,10 @@ from collections import OrderedDict
 from threading import Lock
 from time import monotonic
 
-from app.errors import ErrorCode, ServiceError
-from app.interface import IdempotentIssueProvider, IssueProvider
-from app.models import Issue, IssueUpdate
+from app.interface import IdempotentIssueProvider
+from issue_tracker_contract.errors import ErrorCode, ServiceError
+from issue_tracker_contract.interface import IssueProvider
+from issue_tracker_contract.models import Issue, IssueUpdate
 
 
 class CachedIssueProvider:

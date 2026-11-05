@@ -33,9 +33,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from app.errors import ErrorCode, ServiceError
 from app.interface import IdempotentIssueProvider
-from app.models import Issue, IssueCreate
+from issue_tracker_contract.errors import ErrorCode, ServiceError
+from issue_tracker_contract.models import Issue, IssueCreate
 
 logger = logging.getLogger("app.idempotency")
 

@@ -7,8 +7,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from app.errors import ErrorCode, ServiceError
-from app.models import Issue, IssueUpdate
+from issue_tracker_contract.errors import ErrorCode, ServiceError
+from issue_tracker_contract.models import Issue, IssueUpdate
 
 # The format of a full Trello card ID. Used to reject IDs that cannot name a
 # card before contacting Trello, and to check the ID of a created card.
