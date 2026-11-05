@@ -1,0 +1,12 @@
+[project]
+name = "issue-tracker-contract"
+version = "1.0.0"
+description = "Shared issue tracker contract: models, provider interface, and error types."
+requires-python = ">=3.11.5"
+dependencies = [
+    "pydantic>=2",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13"]
+build-backend = "uv_build"
