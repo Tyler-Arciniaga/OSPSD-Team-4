@@ -34,9 +34,14 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 ## Project Structure
 
 - `app/main.py`: FastAPI endpoints, which validate input and call the supplied provider, and the handlers that turn failures into error responses and log lines.
-- `app/errors.py`: Error codes, the `ServiceError` raised by providers and endpoints, the error response models, and failure logging.
-- `app/models.py`: Public `Issue` response model, `IssueCreate` and `IssueUpdate` request models, and the shared `IssueTitle` rule.
-- `app/interface.py`: Provider-independent `IssueProvider` contract.
+- `contract/`: The shared contract package, `issue_tracker_contract`. It must not import anything from `app/`, a web framework, or a provider SDK.
+  - `contract/src/issue_tracker_contract/models.py`: Public `Issue` response model, `IssueCreate` and `IssueUpdate` request models, and the shared `IssueTitle` rule.
+  - `contract/src/issue_tracker_contract/interface.py`: Provider-independent `IssueProvider` interface.
+  - `contract/src/issue_tracker_contract/errors.py`: Error codes, the `ServiceError` raised by providers and endpoints, the code-to-status mapping, and the error response models.
+  - `contract/tests/test_import_boundary.py`: Fails if the contract package imports service, framework, or provider code.
+  - `contract/tests/conformance/`: Shared conformance suite (planned).
+- `app/errors.py`: Failure logging.
+- `app/interface.py`: The optional `IdempotentIssueProvider` capability used for idempotent creation.
 - `app/provider.py`: Trello authentication, requests, and translation of Trello responses and failures.
 - `app/cache.py`: Caches successful reads and invalidates saved issues before updates or deletions.
 - `app/dependencies.py`: Creates one cached Trello provider and the idempotency key store at application startup and supplies them to the endpoints.
@@ -268,7 +273,7 @@ uv run --locked ruff format --check .
 Check for inconsistencies between type annotations and how values are used:
 
 ```bash
-uv run --locked mypy app tests
+uv run --locked mypy app tests contract/src contract/tests
 ```
 
 ### Automated Tests

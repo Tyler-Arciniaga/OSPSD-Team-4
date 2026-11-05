@@ -4,7 +4,15 @@ version = "0.1.0"
 requires-python = ">=3.11.5"
 dependencies = [
     "fastapi[standard]>=0.142.2",
+    "issue-tracker-contract",
 ]
+
+# The shared contract lives in contract/ and is installed from this repository.
+[tool.uv.sources]
+issue-tracker-contract = { workspace = true }
+
+[tool.uv.workspace]
+members = ["contract"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
@@ -16,6 +24,10 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.16.10",
 ]
+
+[tool.ruff]
+# Treat both the service and the contract package as first-party code.
+src = [".", "contract/src"]
 
 [tool.ruff.lint]
 # Use Ruff's default rules as a baseline for common coding mistakes.

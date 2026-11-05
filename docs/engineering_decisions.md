@@ -15,7 +15,7 @@ An alternative would be to generate service-owned issue identifiers and maintain
 
 **2. Give evidence supporting the selected approach and connect it to the implementation. Distinguish observations from assumptions.**
 
-Our `IssueProvider` interface (`app/interface.py`) defines `get_issue(issue_id: str, *, fresh: bool = False) -> Issue`, `update_issue()`, and `delete_issue()` with an `issue_id: str`, and treats issue IDs as opaque strings. The endpoints pass these identifiers to the provider unchanged, without enforcing Trello-specific formatting rules.
+Our `IssueProvider` interface (`contract/src/issue_tracker_contract/interface.py`) defines `get_issue(issue_id: str, *, fresh: bool = False) -> Issue`, `update_issue()`, and `delete_issue()` with an `issue_id: str`, and treats issue IDs as opaque strings. The endpoints pass these identifiers to the provider unchanged, without enforcing Trello-specific formatting rules.
 
 Within `TrelloIssueProvider`, `_require_card_id()` validates the supplied identifier against Trello's card ID format before any request, and `_card_to_issue()` translates Trello's `id` and `name` fields into our public `Issue` model.
 

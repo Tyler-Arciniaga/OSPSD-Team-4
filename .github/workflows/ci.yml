@@ -44,7 +44,7 @@ jobs:
 
       # Check type annotations against how values are used.
       - name: Run type checks
-        run: uv run --locked mypy app tests
+        run: uv run --locked mypy app tests contract/src contract/tests
 
       # Run the project's tests inside that environment.
       - name: Run tests
