@@ -149,9 +149,67 @@ Only the HTTP status or the exception's class name is kept. Exception
 messages and response bodies are discarded, because they may contain
 request URLs or other provider details.
 
+### Linear mapping
+
+`LinearIssueProvider` (`app/providers/linear_provider.py`) implements
+`get_issue()` and `create_issue()` over Linear's GraphQL API
+(`https://api.linear.app/graphql`), requesting only `id`, `title` and, for
+reads, `trashed`. It holds one `httpx.Client` (10-second timeout) that
+`close()` releases (see [Adapter lifecycle](#adapter-lifecycle)).
+`update_issue()` and `delete_issue()` are not implemented yet and refuse
+with `service_not_configured` before any request.
+
+The service accepts only Linear's full issue ID, a lowercase UUID, which is
+the `id` it returns. Linear itself also accepts short identifiers such as
+`TYL-5`, but this service reports them as `not_found` without contacting
+Linear, as Trello short links are. This keeps the guarantee that a returned
+issue's `id` equals the requested ID, so cache entries and ETags always refer
+to one ID per issue.
+
+`LINEAR_API_KEY` is sent as-is in the `Authorization` header (personal API
+keys take no `Bearer` prefix). `LINEAR_TEAM_ID` names the team new issues are
+created in; `LINEAR_STATE_ID` optionally sets their workflow state. All are
+read from the environment on each call.
+
+Linear can answer HTTP 200 with an `errors` array, so the body is always
+checked. Only the HTTP status and a recognised `extensions.code` are kept.
+
+| Linear failure | Code | Logged `cause` |
+| --- | --- | --- |
+| ID for GET is not a lowercase UUID; checked before credentials, without a request | `not_found` | `malformed_issue_id` |
+| `LINEAR_API_KEY` missing | `service_not_configured` | `missing_credentials` |
+| `LINEAR_TEAM_ID` missing (creation only) | `service_not_configured` | `missing_target_team` |
+| GET answered HTTP 200 with `INPUT_ERROR` (missing issue) | `not_found` | `graphql_code=INPUT_ERROR` |
+| GET returned an issue with `trashed: true` | `not_found` | `issue_trashed` |
+| Creation answered with `INPUT_ERROR` (configuration such as the team is wrong) | `provider_error` | `graphql_code=INPUT_ERROR` |
+| HTTP 401, or `AUTHENTICATION_ERROR` | `access_denied` | `provider_status=401` or `graphql_code=AUTHENTICATION_ERROR` |
+| HTTP 429, or `RATELIMITED` | `provider_error` | `provider_status=429` or `graphql_code=RATELIMITED` |
+| HTTP 5xx | `provider_error` | `provider_status=<status>` |
+| Any other error (including HTTP 403 and `FORBIDDEN`, not yet observed) | `provider_error` | `graphql_error` or `provider_status=<status>` |
+| Timeout | `provider_error` | `timeout` |
+| Other connection failure | `provider_error` | exception class name |
+| Invalid JSON, missing fields, a non-UUID ID, a different issue than requested, or `success` not `true` | `provider_error` | exception class name |
+
+For creation, `may_have_applied` is `False` for HTTP 4xx, for HTTP 200 whose
+errors are all `INPUT_ERROR`, `AUTHENTICATION_ERROR` or `RATELIMITED`, for a
+failed connection, connect timeout or pool timeout, and for missing
+configuration. It is `True` for HTTP 5xx, any other GraphQL error, read or
+write timeouts, dropped connections, and an unusable success body.
+
+### Shared by every adapter
+
+`app/providers/common.py` holds what does not depend on a provider's API:
+the 10-second `REQUEST_TIMEOUT_SECONDS` and constructors for the
+caller-facing errors (`not_found()`, `access_denied()`,
+`credentials_not_configured()`, `target_not_configured()`,
+`provider_error()` and the message constants it is used with). Both adapters
+use them, so the same outcome produces the same `ServiceError` whichever
+provider is configured. Deciding which outcome a provider response means
+stays in each adapter, because the two APIs signal failures differently.
+
 ## Provider Implementation
 
-**File:** `app/provider.py`
+**File:** `app/providers/trello_provider.py`
 
 **Implementation:** `TrelloIssueProvider`
 
@@ -174,7 +232,7 @@ The endpoints in `app/main.py` receive an object satisfying the
 `POST /issues` calls `create_issue()`, `PATCH /issues/{issue_id}` calls
 `update_issue()`, and `DELETE /issues/{issue_id}` calls `delete_issue()`.
 They do not import or construct `TrelloIssueProvider`.
-All four provider methods share the credential check in `app/provider.py`.
+All four provider methods share the credential check in `app/providers/trello_provider.py`.
 The key and token are sent in an `Authorization` header
 (`OAuth oauth_consumer_key="...", oauth_token="..."`, as described in
 [Trello's authorization guide](https://developer.atlassian.com/cloud/trello/guides/rest-api/authorization/)),
@@ -191,9 +249,27 @@ processing step. The supplied provider performs the actual operation.
 
 `app/dependencies.py` defines the application's `lifespan()` function.
 `app/main.py` connects it with `FastAPI(lifespan=lifespan, ...)`.
-At startup it creates a `TrelloIssueProvider`, wraps it in a
+At startup it builds the one adapter named by `ISSUE_PROVIDER`
+(`TrelloIssueProvider` when unset or `trello`, `LinearIssueProvider` for
+`linear`; any other value stops startup), wraps it in a
 `CachedIssueProvider`, and saves the wrapper in `app.state.issue_provider`.
-Shutdown removes that reference; the next startup creates an empty cache.
+Shutdown removes that reference and closes the adapter; the next startup
+creates an empty cache.
+
+### Adapter lifecycle
+
+Every adapter startup builds satisfies `ClosableIssueProvider`
+(`app/interface.py`): the `IssueProvider` operations plus `close()`.
+Shutdown always calls `close()`, so no provider needs special handling and a
+new adapter only has to implement the method. `LinearIssueProvider.close()`
+closes its HTTP client; `TrelloIssueProvider.close()` does nothing, because
+each Trello request opens and closes its own connection.
+
+`close()` is deliberately not part of the shared `IssueProvider` contract
+(DESIGN.md section 2.2). Consumers of the contract use a provider; only the
+code that created it closes it. Adding it to the contract would also be an
+incompatible contract change: every implementation, including test fakes and
+any outside consumer's, would have to add it.
 
 All four endpoints declare
 `Annotated[IssueProvider, Depends(get_issue_provider)]`.
@@ -203,8 +279,8 @@ same application process therefore share one wrapper and its cache.
 Tests can still override this dependency to supply another implementation.
 
 The concrete provider choice and cache settings stay in
-`app/dependencies.py`. Trello authentication, requests, and response
-translation remain in `app/provider.py`. The Trello implementation reads
+`app/dependencies.py`. Provider authentication, requests, and response
+translation remain in `app/providers/`. The Trello implementation reads
 credentials and, for creation, the target list from the environment when
 called. A cache hit does not call Trello or recheck credentials. Restart
 the application after configuration changes to discard previously cached data.
@@ -321,19 +397,19 @@ are used to arrange thread ordering.
 
 ### Provider tests
 
-`tests/test_provider.py` checks the provider's interface compatibility,
+`tests/trello/test_provider.py` checks the provider's interface compatibility,
 response translation for retrieval and creation, and handling of
 missing issues and invalid responses. Its runtime protocol check confirms the required method
 is present; it does not establish full behavioral correctness.
 
 ### Endpoint tests with simulated Trello responses
 
-`tests/test_get_issue.py` exercises the endpoint and real Trello
+`tests/trello/test_get_issue.py` exercises the endpoint and real Trello
 implementation while replacing network calls with controlled
 responses. These tests cover request construction, translation,
 credentials, and provider failures without contacting Trello.
 
-`tests/test_create_issue.py` does the same for `POST /issues`,
+`tests/trello/test_create_issue.py` does the same for `POST /issues`,
 including the request sent to Trello, the `201` response and
 `Location` header, a missing target issue list, and provider failures.
 
@@ -362,7 +438,7 @@ temporary changes are restored automatically by pytest's
 
 ### Update endpoint tests
 
-`tests/test_update_issue.py` covers `PATCH /issues/{issue_id}` in both styles:
+`tests/trello/test_update_issue.py` covers `PATCH /issues/{issue_id}` in both styles:
 
 - With the real Trello implementation and simulated responses: the `PUT`
   request's method, path, query parameters, `Authorization` header, and timeout; titles at and over
@@ -402,7 +478,7 @@ of those helpers.
 
 ### DELETE testing strategy
 
-`tests/test_delete_issue.py` checks the following public guarantees:
+`tests/trello/test_delete_issue.py` checks the following public guarantees:
 
 - Success returns HTTP 204 with no body and sends exactly one authenticated Trello DELETE, with no preliminary GET. Empty and JSON provider success bodies are both accepted, and the connection is closed.
 - Malformed IDs (short links, uppercase, and IDs one character shorter or longer than required) return 404 without calling Trello.
@@ -411,7 +487,7 @@ of those helpers.
 - A provider that deletes the card then loses the response produces 502 with no retry. This demonstrates the documented uncertain outcome.
 - The generated OpenAPI contract has no DELETE request body or 204 response body.
 
-Run these cases with `uv run --locked pytest tests/test_delete_issue.py`.
+Run these cases with `uv run --locked pytest tests/trello/test_delete_issue.py`.
 Existing GET tests protect retrieval behavior after sharing the request code.
 Offline tests establish service behavior, not actual Trello permissions or
 post-deletion state. Verify those separately using the README procedure.
@@ -436,16 +512,42 @@ deletion.
 Trello remains the provider during normal operation, while tests
 can supply controlled implementations without changing endpoint code.
 
-No additional real provider or runtime provider-selection feature
-is implemented.
+`ISSUE_PROVIDER=linear` selects the Linear adapter at startup (unset or
+`trello` selects Trello; any other value stops startup). The Linear adapter
+supports retrieval and creation only, and does not support
+`Idempotency-Key`, so a keyed creation returns `503`.
+
+### Linear tests
+
+`tests/linear/` mirrors `tests/trello/`, one file per endpoint. Its
+`conftest.py` starts the service through the real `lifespan` with
+`ISSUE_PROVIDER=linear` and routes the adapter's HTTP client to the
+simulated API in `tests/linear/fake_linear.py`, so requests pass through the
+real cache, routes and error handlers.
+
+- `test_get_issue.py`: the GraphQL request (URL, `Authorization` without
+  `Bearer`, query, timeout); HTTP 200 carrying `INPUT_ERROR` and trashed
+  issues as `404`; malformed and short IDs rejected without a request;
+  failure translation and logged `cause`; unusable responses; and that
+  neither responses nor logs contain the key or Linear's wording.
+- `test_create_issue.py`: the mutation and optional workflow state; `201`
+  with `Location` and a read-back; invalid bodies and missing configuration
+  sending nothing; the logged `write_outcome` for every failure; and `503`
+  for an `Idempotency-Key`.
+- `test_provider.py`: protocol compatibility, every read querying Linear,
+  unimplemented operations, and `close()`.
+
+`tests/test_provider_selection.py` checks the `ISSUE_PROVIDER` choices and
+that shutdown closes the adapter once for each provider.
 
 
 ### Fresh reads for conditional updates
 
 `IssueProvider.get_issue(issue_id, fresh=True)` requires retrieval from the
 underlying provider instead of a saved result. The default remains `False`,
-so ordinary GET requests continue to use the cache. Trello reads are always
-fresh; in-memory test providers return their current state.
+so ordinary GET requests continue to use the cache. Neither adapter saves
+results, so every Trello or Linear read is sent to the provider and `fresh`
+needs no handling there; in-memory test providers return their current state.
 
 Before comparing an `If-Match` version, PATCH requests a fresh read. The cache
 removes the old entry, forwards the fresh-read requirement, and caches the

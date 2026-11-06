@@ -6,8 +6,9 @@ from urllib.request import Request
 
 import pytest
 
-from app import provider as provider_module
-from app.provider import TrelloIssueProvider
+from app.interface import ClosableIssueProvider
+from app.providers import trello_provider as provider_module
+from app.providers.trello_provider import TrelloIssueProvider
 from issue_tracker_contract.errors import ErrorCode, ServiceError
 from issue_tracker_contract.interface import IssueProvider
 from issue_tracker_contract.models import Issue, IssueUpdate
@@ -17,6 +18,18 @@ def test_trello_implements_issue_provider() -> None:
     # Abstraction test
     provider = TrelloIssueProvider()
     assert isinstance(provider, IssueProvider)
+
+
+def test_trello_close_needs_no_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Trello opens a connection per request, so close() has nothing to release.
+    def forbid_network(request: Request, timeout: int) -> io.BytesIO:
+        raise AssertionError("close() must not contact Trello")
+
+    monkeypatch.setattr(provider_module, "urlopen", forbid_network)
+    trello = TrelloIssueProvider()
+
+    assert isinstance(trello, ClosableIssueProvider)
+    trello.close()
 
 
 def test_trello_translates_card_to_issue(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,14 +1,29 @@
 """Provider capabilities the service uses beyond the shared contract.
 
 The core `IssueProvider` interface lives in the `issue_tracker_contract`
-package. Idempotent creation is an optional, service-specific extension, so
-its capability is defined here.
+package. Closing an adapter at shutdown and idempotent creation are
+service-specific needs, so their protocols are defined here.
 """
 
 from typing import Protocol, runtime_checkable
 
 from issue_tracker_contract.interface import IssueProvider
 from issue_tracker_contract.models import Issue
+
+
+@runtime_checkable
+class ClosableIssueProvider(IssueProvider, Protocol):
+    """An adapter the service can release at shutdown.
+
+    Every adapter that startup builds implements this, so shutdown is the
+    same for all of them. `close()` releases whatever the adapter holds (for
+    example a long-lived HTTP client); an adapter holding nothing does
+    nothing.
+    """
+
+    def close(self) -> None:
+        """Release the adapter's resources. Called once, at shutdown."""
+        ...
 
 
 @runtime_checkable

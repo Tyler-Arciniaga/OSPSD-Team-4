@@ -7,7 +7,22 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from issue_tracker_contract.errors import ErrorCode, ServiceError
+from app.providers.common import (
+    RATE_LIMITED_MESSAGE,
+    REJECTED_MESSAGE,
+    REQUEST_TIMEOUT_SECONDS,
+    TIMEOUT_MESSAGE,
+    UNAVAILABLE_MESSAGE,
+    UNEXPECTED_RESPONSE_MESSAGE,
+    UNREACHABLE_MESSAGE,
+    access_denied,
+    credentials_not_configured,
+    malformed_issue_id,
+    not_found,
+    provider_error,
+    target_not_configured,
+)
+from issue_tracker_contract.errors import ServiceError
 from issue_tracker_contract.models import Issue, IssueUpdate
 
 # The format of a full Trello card ID. Used to reject IDs that cannot name a
@@ -20,11 +35,7 @@ def _credentials() -> tuple[str, str]:
     key = os.environ.get("TRELLO_API_KEY")
     token = os.environ.get("TRELLO_TOKEN")
     if not key or not token:
-        raise ServiceError(
-            ErrorCode.SERVICE_NOT_CONFIGURED,
-            "Issue tracker credentials not configured",
-            cause="missing_credentials",
-        )
+        raise credentials_not_configured()
     return key, token
 
 
@@ -34,20 +45,14 @@ def _require_card_id(issue_id: str) -> None:
     Runs before the credential check, so no request is attempted.
     """
     if not re.fullmatch(CARD_ID_PATTERN, issue_id):
-        raise ServiceError(
-            ErrorCode.NOT_FOUND, "Issue not found", cause="malformed_issue_id"
-        )
+        raise malformed_issue_id()
 
 
 def _target_list_id() -> str:
     """Return the list new cards are created in, or fail if it is missing."""
     list_id = os.environ.get("TRELLO_LIST_ID")
     if not list_id:
-        raise ServiceError(
-            ErrorCode.SERVICE_NOT_CONFIGURED,
-            "Issue tracker target list not configured",
-            cause="missing_target_list",
-        )
+        raise target_not_configured("list")
     return list_id
 
 
@@ -89,13 +94,6 @@ def _trello_headers() -> dict[str, str]:
     }
 
 
-def _provider_error(message: str, cause: str) -> ServiceError:
-    """Report a failed or unusable Trello request without Trello details."""
-    return ServiceError(
-        ErrorCode.PROVIDER_ERROR, message, provider_involved=True, cause=cause
-    )
-
-
 def _translate_request_failure(exc: Exception) -> ServiceError:
     """Translate a network failure or unusable Trello response.
 
@@ -106,14 +104,10 @@ def _translate_request_failure(exc: Exception) -> ServiceError:
     if isinstance(exc, TimeoutError) or (
         isinstance(exc, URLError) and isinstance(exc.reason, TimeoutError)
     ):
-        return _provider_error("The issue tracker did not respond in time", "timeout")
+        return provider_error(TIMEOUT_MESSAGE, "timeout")
     if isinstance(exc, OSError):
-        return _provider_error(
-            "The issue tracker could not be reached", type(exc).__name__
-        )
-    return _provider_error(
-        "The issue tracker returned an unexpected response", type(exc).__name__
-    )
+        return provider_error(UNREACHABLE_MESSAGE, type(exc).__name__)
+    return provider_error(UNEXPECTED_RESPONSE_MESSAGE, type(exc).__name__)
 
 
 def _translate_http_error(
@@ -126,21 +120,14 @@ def _translate_http_error(
     exc.close()
     cause = f"provider_status={exc.code}"
     if exc.code == 404 and missing_means_not_found:
-        return ServiceError(
-            ErrorCode.NOT_FOUND, "Issue not found", provider_involved=True, cause=cause
-        )
+        return not_found(cause)
     if exc.code in (401, 403):
-        return ServiceError(
-            ErrorCode.ACCESS_DENIED,
-            "The issue tracker denied access to this issue",
-            provider_involved=True,
-            cause=cause,
-        )
+        return access_denied(cause)
     if exc.code == 429:
-        return _provider_error("The issue tracker is rate limiting requests", cause)
+        return provider_error(RATE_LIMITED_MESSAGE, cause)
     if exc.code >= 500:
-        return _provider_error("The issue tracker is currently unavailable", cause)
-    return _provider_error("The issue tracker rejected the request", cause)
+        return provider_error(UNAVAILABLE_MESSAGE, cause)
+    return provider_error(REJECTED_MESSAGE, cause)
 
 
 def _created_card_to_issue(card: Any) -> Issue:
@@ -168,8 +155,20 @@ def _card_to_issue(card: Any, issue_id: str) -> Issue:
 
 
 class TrelloIssueProvider:
+    """`IssueProvider` backed by Trello's REST API.
+
+    Opens one connection per request, so it holds nothing to release.
+    """
+
+    def close(self) -> None:
+        """Nothing to release: each request opens and closes its own connection."""
+
     def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
-        """Retrieve a Trello card; reads are always fresh with this provider."""
+        """Retrieve a Trello card.
+
+        This adapter saves no results, so every call reads from Trello and
+        `fresh` needs no handling.
+        """
         card = self._send_card_request("GET", issue_id, {"fields": "id,name"})
         return _card_to_issue(card, issue_id)
 
@@ -214,7 +213,7 @@ class TrelloIssueProvider:
         )
         marker = _token_marker(creation_token)
         try:
-            with urlopen(request, timeout=10) as response:
+            with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
                 cards = json.load(response)
             if not isinstance(cards, list):
                 raise TypeError("Unexpected card list")
@@ -251,7 +250,7 @@ class TrelloIssueProvider:
             method="POST",
         )
         try:
-            with urlopen(request, timeout=10) as response:
+            with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
                 card = json.load(response)
             return _created_card_to_issue(card)
         except HTTPError as exc:
@@ -283,7 +282,7 @@ class TrelloIssueProvider:
             url += f"?{urlencode(params)}"
         request = Request(url, headers=headers, method=method)
         try:
-            with urlopen(request, timeout=10) as response:
+            with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
                 if method == "DELETE":
                     return None
                 return json.load(response)

@@ -755,7 +755,7 @@ The service has no request or correlation identifier.
 
 These affect observable behavior and are not guaranteed by the assignment spec, so we are stating them here.
 
-- **`id` is an opaque string.** Callers should treat it as an identifier to pass back to the service. They should not parse it or assume a format.
+- **`id` is an opaque string.** Callers should treat it as an identifier to pass back to the service. They should not parse it or assume a format. Only the `id` the service returned is accepted: with Linear, short identifiers such as `TYL-5` return `404`, although Linear itself accepts them.
 - **`title` is always present.** An issue without a title is not part of this contract.
 - **Real data.** The example ID and title illustrate the response shape; they are not seeded resources. Supply a full card ID accessible to the configured Trello account. Card short links are not supported, ensuring the response ID equals the requested ID.
 - **Provider translation.** GET and POST translate Trello's `id` into `id` and `name` into `title`. Successful GET results may be cached as described above. POST creates a Trello card. PATCH sends `title` as the card's `name` and returns the card as Trello reports it afterwards. DELETE permanently removes the Trello card and returns no provider data.

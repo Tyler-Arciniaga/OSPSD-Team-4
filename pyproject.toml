@@ -4,6 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.11.5"
 dependencies = [
     "fastapi[standard]>=0.142.2",
+    "httpx>=0.28.1",
     "issue-tracker-contract",
 ]
 
@@ -19,7 +20,6 @@ pythonpath = ["."]
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
     "mypy>=2.4.0",
     "pytest>=9.1.1",
     "ruff>=0.16.10",

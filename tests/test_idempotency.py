@@ -26,7 +26,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main, provider
+from app import main
 from app.cache import CachedIssueProvider
 from app.dependencies import get_idempotency_store, get_issue_provider
 from app.idempotency import (
@@ -39,6 +39,7 @@ from app.idempotency import (
     request_fingerprint,
 )
 from app.interface import IdempotentIssueProvider
+from app.providers import trello_provider as provider
 from issue_tracker_contract.errors import ErrorCode, ServiceError
 from issue_tracker_contract.interface import IssueProvider
 from issue_tracker_contract.models import Issue, IssueCreate, IssueUpdate
