@@ -7,8 +7,9 @@ from urllib.request import Request
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main, provider
+from app import main
 from app.dependencies import get_issue_provider
+from app.providers import trello_provider as provider
 from issue_tracker_contract.errors import ErrorCode, ServiceError
 from issue_tracker_contract.interface import IssueProvider
 from issue_tracker_contract.models import Issue, IssueUpdate

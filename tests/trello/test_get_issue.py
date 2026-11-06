@@ -8,7 +8,7 @@ from urllib.request import Request
 import pytest
 from fastapi.testclient import TestClient
 
-from app import provider
+from app.providers import trello_provider as provider
 from tests.expected_errors import (
     CREDENTIALS_NOT_CONFIGURED,
     ISSUE_HTTP_FAILURES,
