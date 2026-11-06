@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 
 from app.cache import CachedIssueProvider
 from app.idempotency import IdempotencyStore
+from app.linear_provider import LinearIssueProvider
 from app.provider import TrelloIssueProvider
 from issue_tracker_contract.interface import IssueProvider
 
@@ -13,15 +14,29 @@ from issue_tracker_contract.interface import IssueProvider
 DEFAULT_IDEMPOTENCY_DB_PATH = "idempotency.sqlite3"
 
 
+def _build_adapter() -> TrelloIssueProvider | LinearIssueProvider:
+    """Build the one adapter named by ISSUE_PROVIDER (default: trello).
+
+    Construction sends no request to the provider.
+    """
+    choice = os.environ.get("ISSUE_PROVIDER") or "trello"
+    if choice == "trello":
+        return TrelloIssueProvider()
+    if choice == "linear":
+        return LinearIssueProvider()
+    raise ValueError("ISSUE_PROVIDER must be 'trello' or 'linear'")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Create the shared provider at startup and release it at shutdown."""
 
-    # Create one Trello provider wrapped in a cache.
-    # Creating these objects does not send a request to Trello.
+    # Create one provider adapter wrapped in a cache.
+    # Creating these objects does not send a request to the provider.
     # Each application process gets its own provider and cache.
+    adapter = _build_adapter()
     app.state.issue_provider = CachedIssueProvider(
-        TrelloIssueProvider(),
+        adapter,
         ttl_seconds=30,
         max_entries=100,
     )
@@ -39,9 +54,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         # During shutdown, remove the application's reference to it.
-        # This does not delete any cards or other data from Trello.
+        # This does not delete any issues or other data from the provider.
         del app.state.issue_provider
         del app.state.idempotency_store
+        # Linear holds an HTTP client; Trello opens a connection per request.
+        if isinstance(adapter, LinearIssueProvider):
+            adapter.close()
 
 
 def get_issue_provider(request: Request) -> IssueProvider:
