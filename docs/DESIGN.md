@@ -8,7 +8,7 @@
 
 #### Status: Approved
 
-#### Last Update Date: 11/04/2026
+#### Last Update Date: 11/06/2026
 
 #### Relevant Links
 
@@ -309,12 +309,25 @@ We do not claim anything about Linear's or Trello's internal complexity. Request
 
 ### 5.5 Tools and hosting
 
-This is a draft and proposal stage. During Milestone 3 these decisions will be implemented and recorded as such.
+Every choice below favors tools that are free, need no payment method, and take little setup.
 
-- **Infrastructure as code (Proposal).** Terraform, chosen because the team covered it in lecture and it keeps the deployment reviewable in the repository.  
-- **Runtime (Proposal).** The service runs as a single container instance, pinned to one distinct instance. HW1 documents that the `If-Match` update lock and the read cache live in one process, and that the idempotency store is a SQLite file, so running several instances would need a shared store first which we determined to be unneeded complexity.  
-- **Persistent storage (Proposal).** A persistent volume holds the idempotency SQLite file at `IDEMPOTENCY_DB_PATH`, so keys survive restarts.  
-- **CI (HW1).** GitHub Actions runs lint and the test suite with a locked `uv` environment.
+| Concern | Choice | Why | Owner of the account | Expected cost |
+| --- | --- | --- | --- | --- |
+| Provisioning | Terraform | Simple, covered in lecture, and keeps the deployment reviewable in the repository. | Tyler | $0 |
+| Hosting | Render, free web service, one instance | Free and no payment method needed. A single instance matches our design, because the update lock and read cache live in one process. | Tyler | $0 |
+| CI and delivery | GitHub Actions (HW1 already runs lint and tests with a locked `uv` environment). We add a container build and a deploy step. | Already in use, so no new account. | N/A | $0 |
+| Telemetry | OpenTelemetry SDK, sent to Grafana Cloud's free plan | Free plan with no credit card: 10k metric series, 50 GB each of logs and traces, 14 day retention. | Tyler | $0 |
+
+**Teardown date:** 11/20/2026. All resources are removed on this date (unless a grader requests an extension), with `terraform destroy` and by deleting the Grafana Cloud stack.
+
+**Hosting consequences we accept**
+
+- **Idempotency store is not durable.** Render free web services cannot attach a persistent disk, so the SQLite idempotency file is lost on every redeploy, restart or spin-down. HW1 promises that keys are remembered for 24 hours. In this deployment that promise only holds until the next restart. We accept this because Linear does not support `Idempotency-Key` anyway and the deployment is for demonstration. We would revisit this if the deployment needs durable keys, and the fix is a paid instance with a disk.
+- **Cold starts.** The free service spins down after 15 minutes without traffic and takes about a minute to wake. The first request after idle will be slow, and the read cache starts empty.
+- **Single instance.** Render free services support only one instance, which is what our design already provided.
+- **Not for production.** Render's documentation says not to use free instances for production, and it may restart a free service at any time.
+
+**Telemetry boundary:** Traces and logs carry the operation, status code, error code and timing. They never carry issue titles, request bodies, credentials or GraphQL query text, matching section 5.2.
 
 ## 6\. Migration and Coordination Plan
 
