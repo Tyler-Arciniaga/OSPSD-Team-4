@@ -149,7 +149,7 @@ The public API uses three models.
 | `IssueUpdate` | Currently supports changing only `title`. An empty body, a null title, and additional fields are rejected. |
 
 - Titles must be 1–256 characters and cannot contain only whitespace.  
-- Leading and trailing whitespace is preserved.  
+- The service sends a title to the provider unchanged, including leading and trailing whitespace. A provider may trim that whitespace when it stores the title (Linear does; observed by the conformance suite). Responses and later reads return the title as stored.  
 - Issue IDs are opaque strings: callers should pass them back unchanged without interpreting their format.  
 - Each ID belongs to the configured provider; IDs are not shared between Trello and Linear.
 
@@ -478,6 +478,7 @@ See section 6.4 followed by 8.1 for the team’s next actions.
 
 ### Change Log
 
+- Titles: a provider may trim a title's leading and trailing whitespace when storing it (section 3.2). The conformance suite found that Linear does, so the contract now promises the title as stored, consistent across create and later reads, rather than preserved whitespace.
 - Linear IDs: the service accepts only Linear's full UUID `id`, not short identifiers such as `TYL-5` (section 6.7). A returned issue's `id` therefore always equals the requested ID, as with Trello.
 - Adapters moved to `app/providers/` (`trello_provider.py`, `linear_provider.py`), with what they share (timeout, caller-facing errors) in `app/providers/common.py`. `close()` stays outside the contract as section 2.2 decided: the service-side `ClosableIssueProvider` protocol in `app/interface.py` requires it of every adapter.
 - Dropped provider-aware cache keys (planned change 4). Each process runs exactly one provider, chosen at startup, and the read cache is in memory and per process, so IDs from two providers can never share a cache and cannot collide.
