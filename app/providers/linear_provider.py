@@ -11,16 +11,30 @@ from typing import Any
 
 import httpx
 
+from app.providers.common import (
+    RATE_LIMITED_MESSAGE,
+    REJECTED_MESSAGE,
+    REQUEST_TIMEOUT_SECONDS,
+    TIMEOUT_MESSAGE,
+    UNAVAILABLE_MESSAGE,
+    UNEXPECTED_RESPONSE_MESSAGE,
+    UNREACHABLE_MESSAGE,
+    access_denied,
+    credentials_not_configured,
+    malformed_issue_id,
+    not_found,
+    provider_error,
+    target_not_configured,
+)
 from issue_tracker_contract.errors import ErrorCode, ServiceError
 from issue_tracker_contract.models import Issue, IssueUpdate
 
 LINEAR_API_URL = "https://api.linear.app/graphql"
 
-# Same per-operation budget as the Trello adapter.
-REQUEST_TIMEOUT_SECONDS = 10
-
 # Linear issue IDs are lowercase UUIDs. Used to reject an ID that cannot
 # name an issue before contacting Linear, and to check a returned issue.
+# Linear also accepts short identifiers such as "TYL-5"; this service does
+# not, so callers always use the `id` the service returned.
 ISSUE_ID_PATTERN = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 
 # Only `id` and `title` are requested, keeping responses small. `trashed`
@@ -63,11 +77,7 @@ def _credentials() -> str:
     """Return the Linear API key, or fail if it is missing."""
     api_key = os.environ.get("LINEAR_API_KEY")
     if not api_key:
-        raise ServiceError(
-            ErrorCode.SERVICE_NOT_CONFIGURED,
-            "Issue tracker credentials not configured",
-            cause="missing_credentials",
-        )
+        raise credentials_not_configured()
     return api_key
 
 
@@ -75,11 +85,7 @@ def _target_team_id() -> str:
     """Return the team new issues are created in, or fail if it is missing."""
     team_id = os.environ.get("LINEAR_TEAM_ID")
     if not team_id:
-        raise ServiceError(
-            ErrorCode.SERVICE_NOT_CONFIGURED,
-            "Issue tracker target team not configured",
-            cause="missing_target_team",
-        )
+        raise target_not_configured("team")
     return team_id
 
 
@@ -89,15 +95,7 @@ def _require_issue_id(issue_id: str) -> None:
     Runs before the credential check, so no request is attempted.
     """
     if not re.fullmatch(ISSUE_ID_PATTERN, issue_id):
-        raise ServiceError(
-            ErrorCode.NOT_FOUND, "Issue not found", cause="malformed_issue_id"
-        )
-
-
-def _not_found(cause: str) -> ServiceError:
-    return ServiceError(
-        ErrorCode.NOT_FOUND, "Issue not found", provider_involved=True, cause=cause
-    )
+        raise malformed_issue_id()
 
 
 def _not_available(operation: str) -> ServiceError:
@@ -109,15 +107,8 @@ def _not_available(operation: str) -> ServiceError:
     )
 
 
-def _provider_error(message: str, cause: str) -> ServiceError:
-    """Report a failed or unusable Linear request without Linear details."""
-    return ServiceError(
-        ErrorCode.PROVIDER_ERROR, message, provider_involved=True, cause=cause
-    )
-
-
 def _unexpected_response(cause: str) -> ServiceError:
-    return _provider_error("The issue tracker returned an unexpected response", cause)
+    return provider_error(UNEXPECTED_RESPONSE_MESSAGE, cause)
 
 
 def _error_codes(body: Any) -> list[str | None]:
@@ -149,28 +140,21 @@ def _translate_failure(status: int, codes: list[str | None]) -> ServiceError:
     """
     if status == 401 or AUTHENTICATION_ERROR in codes:
         cause = f"provider_status={status}" if status == 401 else _error_cause(codes)
-        return ServiceError(
-            ErrorCode.ACCESS_DENIED,
-            "The issue tracker denied access to this issue",
-            provider_involved=True,
-            cause=cause,
-        )
+        return access_denied(cause)
     if status == 429 or RATELIMITED in codes:
         cause = f"provider_status={status}" if status == 429 else _error_cause(codes)
-        return _provider_error("The issue tracker is rate limiting requests", cause)
+        return provider_error(RATE_LIMITED_MESSAGE, cause)
     if status >= 500:
-        return _provider_error(
-            "The issue tracker is currently unavailable", f"provider_status={status}"
-        )
+        return provider_error(UNAVAILABLE_MESSAGE, f"provider_status={status}")
     cause = _error_cause(codes) if codes else f"provider_status={status}"
-    return _provider_error("The issue tracker rejected the request", cause)
+    return provider_error(REJECTED_MESSAGE, cause)
 
 
 def _translate_transport_failure(exc: httpx.TransportError) -> ServiceError:
     """Translate a network failure. Only the exception's class name is kept."""
     if isinstance(exc, httpx.TimeoutException):
-        return _provider_error("The issue tracker did not respond in time", "timeout")
-    return _provider_error("The issue tracker could not be reached", type(exc).__name__)
+        return provider_error(TIMEOUT_MESSAGE, "timeout")
+    return provider_error(UNREACHABLE_MESSAGE, type(exc).__name__)
 
 
 def _never_sent(exc: httpx.TransportError) -> bool:
@@ -216,18 +200,20 @@ class LinearIssueProvider:
         self._client.close()
 
     def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
-        """Retrieve a Linear issue; reads are always fresh with this provider.
+        """Retrieve a Linear issue.
 
-        A trashed (deleted) issue is reported as missing, matching Trello.
+        This adapter saves no results, so every call sends a query to Linear
+        and `fresh` needs no handling. A trashed (deleted) issue is reported
+        as missing, matching Trello.
         """
         _require_issue_id(issue_id)
         status, body = self._send(_credentials(), GET_ISSUE_QUERY, {"id": issue_id})
         codes = _error_codes(body)
-        if status == 200 and codes:
-            if INPUT_ERROR in codes:
-                raise _not_found(f"graphql_code={INPUT_ERROR}")
-            raise _translate_failure(status, codes)
-        if status != 200:
+        if status != 200 or codes:
+            # Linear reports a missing issue as HTTP 200 with INPUT_ERROR.
+            # `issue` takes only the ID, so an input error here means no issue.
+            if status == 200 and INPUT_ERROR in codes:
+                raise not_found(f"graphql_code={INPUT_ERROR}")
             raise _translate_failure(status, codes)
         try:
             node = body["data"]["issue"]
@@ -240,7 +226,7 @@ class LinearIssueProvider:
         except (KeyError, TypeError, ValueError) as exc:
             raise _unexpected_response(type(exc).__name__) from None
         if trashed:
-            raise _not_found("issue_trashed")
+            raise not_found("issue_trashed")
         return issue
 
     def create_issue(self, title: str) -> Issue:

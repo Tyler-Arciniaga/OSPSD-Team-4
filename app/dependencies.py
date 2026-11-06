@@ -6,15 +6,16 @@ from fastapi import FastAPI, Request
 
 from app.cache import CachedIssueProvider
 from app.idempotency import IdempotencyStore
-from app.linear_provider import LinearIssueProvider
-from app.provider import TrelloIssueProvider
+from app.interface import ClosableIssueProvider
+from app.providers.linear_provider import LinearIssueProvider
+from app.providers.trello_provider import TrelloIssueProvider
 from issue_tracker_contract.interface import IssueProvider
 
 # Where idempotency keys are kept when IDEMPOTENCY_DB_PATH is not set.
 DEFAULT_IDEMPOTENCY_DB_PATH = "idempotency.sqlite3"
 
 
-def _build_adapter() -> TrelloIssueProvider | LinearIssueProvider:
+def _build_adapter() -> ClosableIssueProvider:
     """Build the one adapter named by ISSUE_PROVIDER (default: trello).
 
     Construction sends no request to the provider.
@@ -57,9 +58,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # This does not delete any issues or other data from the provider.
         del app.state.issue_provider
         del app.state.idempotency_store
-        # Linear holds an HTTP client; Trello opens a connection per request.
-        if isinstance(adapter, LinearIssueProvider):
-            adapter.close()
+        # Whoever creates the adapter closes it. Every adapter implements
+        # close(), so shutdown is always called regardless of the provider configured.
+        adapter.close()
 
 
 def get_issue_provider(request: Request) -> IssueProvider:
