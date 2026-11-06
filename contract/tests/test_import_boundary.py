@@ -63,12 +63,12 @@ import json
 from pydantic import BaseModel
 from issue_tracker_contract.models import Issue
 from . import errors
-from app.provider import TrelloIssueProvider
+from app.providers.trello_provider import TrelloIssueProvider
 import app.errors
 from fastapi import FastAPI
 """
     assert forbidden_imports(source) == [
-        "app.provider",
+        "app.providers.trello_provider",
         "app.errors",
         "fastapi",
     ]

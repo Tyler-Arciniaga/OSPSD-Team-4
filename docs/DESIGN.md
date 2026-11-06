@@ -343,8 +343,10 @@ Assumption: course staff accept the contract living in our repository. If they r
 │   ├── src/issue_tracker_contract/  models, interface, errors (moved from app/)
 │   └── tests/conformance/           shared conformance suite
 ├── app/
-│   ├── provider.py                  Trello adapter
-│   └── linear_provider.py           (new) Linear adapter
+│   └── providers/
+│       ├── common.py                (new) shared timeout and error helpers
+│       ├── trello_provider.py       Trello adapter (moved from app/provider.py)
+│       └── linear_provider.py       (new) Linear adapter
 ├── tests/
 ├── docs/
 └── DESIGN.md
@@ -391,7 +393,7 @@ If a change to the contract would break an adapter or the conformance suite afte
 | Transport | REST over `urlopen` per request (HW1) | GraphQL over one long-lived HTTP client (Proposal) |
 | Credentials | `TRELLO_API_KEY`, `TRELLO_TOKEN` (HW1) | API key in the `Authorization` header (Proposal) |
 | Create target | A list, `TRELLO_LIST_ID` | A team, with an optional workflow state (Proposal) |
-| ID shape | 24 lowercase hex characters | A UUID. The short identifier such as `TYL-5` also works, but consumers store the `id` we return. |
+| ID shape | 24 lowercase hex characters | A lowercase UUID. Linear also accepts short identifiers such as `TYL-5`, but our service does not: it returns `404` for them without a request, so callers use the `id` we return. |
 | Missing issue signal | HTTP 404 (HW1). A malformed ID is rejected without a request. | HTTP 200 with an `errors` entry, the same for a malformed ID (Observed) |
 | Delete | Permanent, and a repeat is not found | Soft delete. A repeat succeeds and a later fetch can still return the issue (Observed), so the adapter must detect deletion to return `404` (see section 8). |
 | `Idempotency-Key` | Supported through tagging the card description (HW1) | Not supported in this milestone, answers `503` |
@@ -463,4 +465,6 @@ See section 6.4 followed by 8.1 for the team’s next actions.
 
 ### Change Log
 
+- Linear IDs: the service accepts only Linear's full UUID `id`, not short identifiers such as `TYL-5` (section 6.7). A returned issue's `id` therefore always equals the requested ID, as with Trello.
+- Adapters moved to `app/providers/` (`trello_provider.py`, `linear_provider.py`), with what they share (timeout, caller-facing errors) in `app/providers/common.py`. `close()` stays outside the contract as section 2.2 decided: the service-side `ClosableIssueProvider` protocol in `app/interface.py` requires it of every adapter.
 - Dropped provider-aware cache keys (planned change 4). Each process runs exactly one provider, chosen at startup, and the read cache is in memory and per process, so IDs from two providers can never share a cache and cannot collide.

@@ -41,19 +41,27 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
   - `contract/tests/test_import_boundary.py`: Fails if the contract package imports service, framework, or provider code.
   - `contract/tests/conformance/`: Shared conformance suite (planned).
 - `app/errors.py`: Failure logging.
-- `app/interface.py`: The optional `IdempotentIssueProvider` capability used for idempotent creation.
-- `app/provider.py`: Trello authentication, requests, and translation of Trello responses and failures.
+- `app/interface.py`: Service-side provider protocols: `ClosableIssueProvider` (every adapter startup builds can be closed) and the optional `IdempotentIssueProvider` capability used for idempotent creation.
+- `app/providers/`: Provider adapters, one module per provider.
+  - `app/providers/common.py`: What every adapter shares: the request timeout and the caller-facing error messages.
+  - `app/providers/trello_provider.py`: Trello authentication, requests, and translation of Trello responses and failures.
+  - `app/providers/linear_provider.py`: Linear GraphQL requests and translation of Linear responses and failures (get and create; rename and delete not yet implemented).
 - `app/cache.py`: Caches successful reads and invalidates saved issues before updates or deletions.
-- `app/dependencies.py`: Creates one cached Trello provider and the idempotency key store at application startup and supplies them to the endpoints.
+- `app/dependencies.py`: Creates one cached provider (Trello, or Linear with `ISSUE_PROVIDER=linear`) and the idempotency key store at application startup and supplies them to the endpoints.
 - `app/idempotency.py`: Durable idempotency key store and the logic that creates each keyed issue at most once.
 - `tests/conftest.py`: Shared per-test client setup and application startup/shutdown.
 - `tests/test_cache.py`: Cache behavior, concurrency, invalidation, and application lifecycle tests.
-- `tests/test_get_issue.py`: Retrieval endpoint tests with simulated Trello responses.
-- `tests/test_create_issue.py`: Creation endpoint tests with simulated Trello responses.
-- `tests/test_provider.py`: Provider compatibility, translation, and error tests.
+- `tests/trello/`: Tests of the real Trello adapter with simulated Trello responses.
+  - `tests/trello/test_get_issue.py`, `test_create_issue.py`: Retrieval and creation endpoint tests.
+  - `tests/trello/test_update_issue.py`: `PATCH` endpoint tests with simulated Trello responses and supplied providers.
+  - `tests/trello/test_delete_issue.py`: DELETE request, failure, and injected-provider workflow tests.
+  - `tests/trello/test_provider.py`: Provider compatibility, translation, and error tests.
+- `tests/linear/`: Tests of the real Linear adapter with simulated GraphQL responses, through the real startup with `ISSUE_PROVIDER=linear`.
+  - `tests/linear/test_get_issue.py`, `test_create_issue.py`: Retrieval and creation endpoint tests.
+  - `tests/linear/test_provider.py`: Protocol compatibility, uncached reads, unimplemented operations, and `close()`.
+  - `tests/linear/fake_linear.py`: The simulated Linear API and expected values shared by these tests.
+- `tests/test_provider_selection.py`: Startup builds the adapter named by `ISSUE_PROVIDER` and closes it at shutdown.
 - `tests/test_injected_provider.py`: Endpoint tests using supplied fake providers.
-- `tests/test_update_issue.py`: `PATCH` endpoint tests with simulated Trello responses and supplied providers.
-- `tests/test_delete_issue.py`: DELETE request, failure, and injected-provider workflow tests.
 - `tests/test_idempotency.py`: Repeated, overlapping, conflicting, expired and restarted keyed creations, unknown provider outcomes, and cache and logging integration.
 - `tests/test_errors.py`: Error response and failure-logging tests using a controlled provider.
 - `tests/expected_errors.py`: Expected error bodies shared by the endpoint tests.
@@ -297,6 +305,11 @@ nor logs contain credentials or provider details.
 Cache tests cover repeated reads, expiration, least-recently-used eviction,
 returned-copy isolation, invalidation before successful or failed writes,
 uncached failures, and reuse and reset across application lifespans.
+
+Linear tests in `tests/linear/` run retrieval and creation through the real
+startup with `ISSUE_PROVIDER=linear` and simulated GraphQL responses,
+including Linear's HTTP 200 responses that carry errors, trashed issues,
+and malformed or short IDs.
 
 The tests use simulated responses or fake providers and require no
 running server, real credentials, or network access. Live Trello
