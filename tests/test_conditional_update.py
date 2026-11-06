@@ -5,9 +5,9 @@ from fastapi.testclient import TestClient
 
 from app.cache import CachedIssueProvider
 from app.dependencies import get_issue_provider
-from app.errors import ErrorCode, ServiceError
 from app.main import app
-from app.models import Issue, IssueUpdate
+from issue_tracker_contract.errors import ErrorCode, ServiceError
+from issue_tracker_contract.models import Issue, IssueUpdate
 
 ISSUE_ID = "64f1c0a2b3d4e5f607182930"
 

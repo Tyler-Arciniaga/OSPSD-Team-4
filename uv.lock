@@ -1,11 +1,17 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11.5"
 resolution-markers = [
     "python_full_version >= '3.15'",
     "python_full_version == '3.14.*'",
     "python_full_version == '3.13.*'",
     "python_full_version < '3.13'",
+]
+
+[manifest]
+members = [
+    "issue-tracker-contract",
+    "ospsd-team-4",
 ]
 
 [[package]]
@@ -487,6 +493,17 @@ wheels = [
 ]
 
 [[package]]
+name = "issue-tracker-contract"
+version = "1.0.0"
+source = { editable = "contract" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2" }]
+
+[[package]]
 name = "jinja2"
 version = "3.1.6"
 source = { registry = "https://pypi.org/simple" }
@@ -949,6 +966,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },
+    { name = "issue-tracker-contract" },
 ]
 
 [package.dev-dependencies]
@@ -960,7 +978,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "fastapi", extras = ["standard"], specifier = ">=0.142.2" }]
+requires-dist = [
+    { name = "fastapi", extras = ["standard"], specifier = ">=0.142.2" },
+    { name = "issue-tracker-contract", editable = "contract" },
+]
 
 [package.metadata.requires-dev]
 dev = [

@@ -6,8 +6,8 @@ from fastapi import FastAPI, Request
 
 from app.cache import CachedIssueProvider
 from app.idempotency import IdempotencyStore
-from app.interface import IssueProvider
 from app.provider import TrelloIssueProvider
+from issue_tracker_contract.interface import IssueProvider
 
 # Where idempotency keys are kept when IDEMPOTENCY_DB_PATH is not set.
 DEFAULT_IDEMPOTENCY_DB_PATH = "idempotency.sqlite3"

@@ -11,10 +11,15 @@ from pydantic import ValidationError
 
 from app import main, provider
 from app.dependencies import get_issue_provider
-from app.errors import ErrorCode, ServiceError
-from app.interface import IssueProvider
-from app.models import MAX_TITLE_LENGTH, Issue, IssueCreate, IssueUpdate
 from app.provider import TrelloIssueProvider
+from issue_tracker_contract.errors import ErrorCode, ServiceError
+from issue_tracker_contract.interface import IssueProvider
+from issue_tracker_contract.models import (
+    MAX_TITLE_LENGTH,
+    Issue,
+    IssueCreate,
+    IssueUpdate,
+)
 from tests.expected_errors import (
     CREDENTIALS_NOT_CONFIGURED,
     ISSUE_HTTP_FAILURES,

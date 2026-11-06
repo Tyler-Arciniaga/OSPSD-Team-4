@@ -9,22 +9,23 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.dependencies import get_idempotency_store, get_issue_provider, lifespan
-from app.errors import (
-    ErrorBody,
-    ErrorCode,
-    ErrorDetail,
-    ErrorResponse,
-    ServiceError,
-    log_failure,
-)
+from app.errors import log_failure
 from app.idempotency import (
     IDEMPOTENCY_KEY_PATTERN,
     MAX_IDEMPOTENCY_KEY_LENGTH,
     IdempotencyStore,
     create_issue_idempotently,
 )
-from app.interface import IdempotentIssueProvider, IssueProvider
-from app.models import Issue, IssueCreate, IssueUpdate
+from app.interface import IdempotentIssueProvider
+from issue_tracker_contract.errors import (
+    ErrorBody,
+    ErrorCode,
+    ErrorDetail,
+    ErrorResponse,
+    ServiceError,
+)
+from issue_tracker_contract.interface import IssueProvider
+from issue_tracker_contract.models import Issue, IssueCreate, IssueUpdate
 
 app = FastAPI(
     title="Issue Tracking Service",

@@ -8,7 +8,7 @@ This allows application code to retrieve, create, update, and delete issues usin
 
 ## Interface Contract
 
-**File:** `app/interface.py`
+**File:** `contract/src/issue_tracker_contract/interface.py`
 
 **Interface:** `IssueProvider`
 
@@ -70,7 +70,7 @@ refusing an overlap and recovering an unknown outcome.
 
 ## Errors
 
-**File:** `app/errors.py`
+**Files:** `contract/src/issue_tracker_contract/errors.py` (error types), `app/errors.py` (failure logging)
 
 Providers report every expected failure by raising `ServiceError`, with an
 `ErrorCode` and a caller-facing message written in the service's terms.
