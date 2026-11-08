@@ -41,19 +41,27 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
   - `contract/tests/test_import_boundary.py`: Fails if the contract package imports service, framework, or provider code.
   - `contract/tests/conformance/`: Shared conformance suite (planned).
 - `app/errors.py`: Failure logging.
-- `app/interface.py`: The optional `IdempotentIssueProvider` capability used for idempotent creation.
-- `app/provider.py`: Trello authentication, requests, and translation of Trello responses and failures.
+- `app/interface.py`: Service-side provider protocols: `ClosableIssueProvider` (every adapter startup builds can be closed) and the optional `IdempotentIssueProvider` capability used for idempotent creation.
+- `app/providers/`: Provider adapters, one module per provider.
+  - `app/providers/common.py`: What every adapter shares: the request timeout and the caller-facing error messages.
+  - `app/providers/trello_provider.py`: Trello authentication, requests, and translation of Trello responses and failures.
+  - `app/providers/linear_provider.py`: Linear GraphQL requests and translation of Linear responses and failures (get and create; rename and delete not yet implemented).
 - `app/cache.py`: Caches successful reads and invalidates saved issues before updates or deletions.
-- `app/dependencies.py`: Creates one cached Trello provider and the idempotency key store at application startup and supplies them to the endpoints.
+- `app/dependencies.py`: Creates one cached provider (Trello, or Linear with `ISSUE_PROVIDER=linear`) and the idempotency key store at application startup and supplies them to the endpoints.
 - `app/idempotency.py`: Durable idempotency key store and the logic that creates each keyed issue at most once.
 - `tests/conftest.py`: Shared per-test client setup and application startup/shutdown.
 - `tests/test_cache.py`: Cache behavior, concurrency, invalidation, and application lifecycle tests.
-- `tests/test_get_issue.py`: Retrieval endpoint tests with simulated Trello responses.
-- `tests/test_create_issue.py`: Creation endpoint tests with simulated Trello responses.
-- `tests/test_provider.py`: Provider compatibility, translation, and error tests.
+- `tests/trello/`: Tests of the real Trello adapter with simulated Trello responses.
+  - `tests/trello/test_get_issue.py`, `test_create_issue.py`: Retrieval and creation endpoint tests.
+  - `tests/trello/test_update_issue.py`: `PATCH` endpoint tests with simulated Trello responses and supplied providers.
+  - `tests/trello/test_delete_issue.py`: DELETE request, failure, and injected-provider workflow tests.
+  - `tests/trello/test_provider.py`: Provider compatibility, translation, and error tests.
+- `tests/linear/`: Tests of the real Linear adapter with simulated GraphQL responses, through the real startup with `ISSUE_PROVIDER=linear`.
+  - `tests/linear/test_get_issue.py`, `test_create_issue.py`: Retrieval and creation endpoint tests.
+  - `tests/linear/test_provider.py`: Protocol compatibility, uncached reads, unimplemented operations, and `close()`.
+  - `tests/linear/fake_linear.py`: The simulated Linear API and expected values shared by these tests.
+- `tests/test_provider_selection.py`: Startup builds the adapter named by `ISSUE_PROVIDER` and closes it at shutdown.
 - `tests/test_injected_provider.py`: Endpoint tests using supplied fake providers.
-- `tests/test_update_issue.py`: `PATCH` endpoint tests with simulated Trello responses and supplied providers.
-- `tests/test_delete_issue.py`: DELETE request, failure, and injected-provider workflow tests.
 - `tests/test_idempotency.py`: Repeated, overlapping, conflicting, expired and restarted keyed creations, unknown provider outcomes, and cache and logging integration.
 - `tests/test_errors.py`: Error response and failure-logging tests using a controlled provider.
 - `tests/expected_errors.py`: Expected error bodies shared by the endpoint tests.
@@ -84,6 +92,20 @@ not necessary.
 
 ## Configuration
 
+Copy the credential template if you do not already have a `.env` file:
+
+```bash
+cp -n .env.example .env
+chmod 600 .env
+```
+
+`.env` is ignored by Git. Do not commit credentials. Set `ISSUE_PROVIDER`
+in `.env` to the provider this process uses: `trello` (the default when
+unset) or `linear`. Any other value stops startup. Configure that provider
+below.
+
+### Trello Configuration
+
 Use a dedicated Trello test account and a private test board containing a
 card your team may change and a list your team may add cards to. The
 account granting the token must be able to read the board and create, edit,
@@ -99,32 +121,55 @@ and delete its test cards.
    read and write access (the token expires after one day). Write access is
    required for POST, PATCH, and DELETE:
    `https://trello.com/1/authorize?expiration=1day&scope=read,write&response_type=token&key=YOUR_API_KEY`.
-3. Copy the credential template if you do not already have a `.env` file:
-
-   ```bash
-   cp -n .env.example .env
-   chmod 600 .env
-   ```
-
-   Edit `.env` locally and fill in `TRELLO_API_KEY` and `TRELLO_TOKEN`.
-   `.env` is ignored by Git. Do not commit credentials.
+3. Edit `.env` locally and fill in `TRELLO_API_KEY` and `TRELLO_TOKEN`.
 4. Set `TRELLO_LIST_ID` in `.env` to the full ID of the list where new
    issues should be created. To find it, open any card in that list,
    append `.json` to its URL, and copy the top-level `idList` value
    (24 hexadecimal characters). Retrieval works without this setting;
    creation returns `503` until it is set.
 
-5. Optionally set `IDEMPOTENCY_DB_PATH` to the file that records idempotency
-   keys (default `idempotency.sqlite3` in the working directory, ignored by
-   Git). It must survive restarts, and every worker must use the same file.
-   Deleting it forgets all keys.
+See [Trello authorization](https://developer.atlassian.com/cloud/trello/guides/rest-api/authorization/)
+for permissions and token revocation.
+
+### Linear Configuration
+
+Use a dedicated Linear test workspace, or a test team in one, whose issues
+your team may create and delete.
+
+1. Sign in to the test workspace. Open **Settings > Personal > Security &
+   access**, create a personal API key with full access and access to your specific team. Then copy
+   it.
+2. Edit `.env` locally, set `ISSUE_PROVIDER=linear`, and fill in
+   `LINEAR_API_KEY`.
+3. Set `LINEAR_TEAM_ID` in `.env` to the ID of the team new issues should be
+   created in. To find it, export the key in a terminal and list the teams.
+   Personal API keys are sent without a `Bearer` prefix:
+
+   ```bash
+   export LINEAR_API_KEY=<your key>
+   curl -s https://api.linear.app/graphql \
+     -H "Content-Type: application/json" -H "Authorization: $LINEAR_API_KEY" \
+     -d '{"query": "{ teams { nodes { id key name } } }"}'
+   ```
+
+   Copy the test team's `id` (a UUID). Retrieval works without this setting;
+   creation returns `503` until it is set.
+4. Optionally set `LINEAR_STATE_ID` to the workflow state new issues start
+   in. When it is empty, Linear uses the team's default state.
+
+See [Linear API authentication](https://linear.app/developers/graphql#authentication)
+for API keys and revocation.
+
+### Shared Configuration Settings
+
+Optionally set `IDEMPOTENCY_DB_PATH` to the file that records idempotency
+keys (default `idempotency.sqlite3` in the working directory, ignored by
+Git). It must survive restarts, and every worker must use the same file.
+Deleting it forgets all keys.
 
 The startup command below loads `.env` into the service environment.
 Existing exported environment variables take precedence over values in
 the file. Restart the server after changing `.env`.
-
-See [Trello authorization](https://developer.atlassian.com/cloud/trello/guides/rest-api/authorization/)
-for permissions and token revocation.
 
 ## Running the Service
 
@@ -298,6 +343,11 @@ Cache tests cover repeated reads, expiration, least-recently-used eviction,
 returned-copy isolation, invalidation before successful or failed writes,
 uncached failures, and reuse and reset across application lifespans.
 
+Linear tests in `tests/linear/` run retrieval and creation through the real
+startup with `ISSUE_PROVIDER=linear` and simulated GraphQL responses,
+including Linear's HTTP 200 responses that carry errors, trashed issues,
+and malformed or short IDs.
+
 The tests use simulated responses or fake providers and require no
 running server, real credentials, or network access. Live Trello
 verification is performed separately as described below.
@@ -411,6 +461,106 @@ request and ignores the successful response body. All four use a 10-second
 socket timeout with no automatic retries. Invalid requests or missing
 configuration can fail before any provider request. See [the API contract](docs/api.md)
 for errors and supported IDs.
+
+## Linear Verification
+
+The Linear adapter currently implements GET and POST; add steps here as
+PATCH and DELETE are implemented. Use the documented single-process startup
+command for this workflow so all requests share the same cache.
+
+1. In the test team on the Linear platform, create an issue named `HW1 Linear GET test`. Linear
+   shows its short identifier (for example `TYL-5`); however the service accepts
+   only the full ID. With `LINEAR_API_KEY` exported as in
+   [Linear Configuration](#linear), look it up, replacing `short-id` with your
+   identifier:
+
+   ```bash
+   curl -s https://api.linear.app/graphql \
+     -H "Content-Type: application/json" -H "Authorization: $LINEAR_API_KEY" \
+     -d '{"query": "{ issue(id: \"short-id\") { id title } }"}'
+   ```
+
+   Use the returned `id` (a UUID), rather than the short identifier.
+2. Configure credentials as above and start the service. In another
+   terminal, set `LINEAR_TEST_ISSUE_ID` to that full ID and run:
+
+   ```bash
+   curl -i "http://127.0.0.1:8000/issues/$LINEAR_TEST_ISSUE_ID"
+   ```
+
+   Expect HTTP 200 and exactly `{"id":"<your full issue ID>","title":"HW1 Linear GET test"}`.
+3. TODO (once updateIssue operation is implemented)
+   Rename the issue to `HW1 Linear renamed` in Linear. An immediate GET
+   may still return the cached title. Wait at least 30 seconds after the
+   rename, then repeat the request. Expect HTTP 200 with the new title and
+   the same ID. Restarting the server also clears the cache.
+4. Run `curl -i http://127.0.0.1:8000/issues/does-not-exist`, then repeat
+   it with your issue's short identifier in place of `does-not-exist`.
+   Expect HTTP 404 and
+   `{"error":{"code":"not_found","message":"Issue not found"}}` for both.
+   The log lines should show `"cause": "malformed_issue_id"` and
+   `"provider_involved": false`: neither request reaches Linear.
+5. Create an issue:
+
+   ```bash
+   curl -i -X POST http://127.0.0.1:8000/issues \
+     -H "Content-Type: application/json" \
+     -d '{"title": "HW1 Linear POST test"}'
+   ```
+
+   Expect HTTP 201, a `Location: /issues/<new ID>` header, and
+   `{"id":"<new ID>","title":"HW1 Linear POST test"}`. Confirm an issue with
+   that title appears in the configured team in Linear, then run
+   `curl -i "http://127.0.0.1:8000/issues/<new ID>"` and expect HTTP 200
+   with the same body.
+6. Repeat the request with `-d '{"title": ""}'`. Expect HTTP 422 and
+   confirm no new issue appears in Linear.
+7. TODO (once deleteIssue operation is implemented for Linear):
+   Delete the issue created in step 6 in Linear, which moves it to the
+   trash. Wait at least 30 seconds after the step 6 GET, then repeat that
+   GET. Expect HTTP 404 and
+   `{"error":{"code":"not_found","message":"Issue not found"}}`, with
+   `"cause": "issue_trashed"` in the log line.
+8. Rename the step 2 test issue through the service:
+
+   ```bash
+   curl -i -X PATCH "http://127.0.0.1:8000/issues/$LINEAR_TEST_ISSUE_ID" \
+     -H "Content-Type: application/json" \
+     -d '{"title": "HW1 Linear PATCH test"}'
+   ```
+
+   Expect HTTP 503 and
+   `{"error":{"code":"service_not_configured","message":"Renaming issues for Linear issue provider is not available yet"}}`.
+   Confirm in Linear that the title did not change. Repeat with
+   `curl -i -X DELETE "http://127.0.0.1:8000/issues/$LINEAR_TEST_ISSUE_ID"`
+   and expect HTTP 503 with the message
+   `Deleting issues for Linear issue provider is not available yet`.
+   Confirm the issue still exists in Linear.
+9. Repeat the step 6 request with
+    `-H "Idempotency-Key: 3f2b1c9e-8d4a-4f6b-9c1e-2a7d5e8f0b13"`. Expect
+    HTTP 503 and
+    `{"error":{"code":"service_not_configured","message":"Idempotent creation is not available"}}`,
+    and confirm no new issue appears in Linear.
+10. Check that a real provider failure is translated. Stop the server and
+    restart it with an invalid key, keeping the rest of `.env`:
+
+    ```bash
+    LINEAR_API_KEY=invalid-key uv run --locked uvicorn app.main:app --env-file .env
+    ```
+
+    Request the step 2 issue, which still exists:
+    `curl -i "http://127.0.0.1:8000/issues/$LINEAR_TEST_ISSUE_ID"`. Expect
+    HTTP 403 and
+    `{"error":{"code":"access_denied","message":"The issue tracker denied access to this issue"}}`.
+    The server terminal should show one log line like
+    `{"level": "WARNING", "operation": "get_issue", "error": "access_denied", "status": 403, "provider_involved": true, "cause": "provider_status=401", "write_outcome": null}`,
+    with no key, URL, or stack trace.
+11. Delete any remaining test issues (including the step 2 issue) and any
+    team created only for this check. Revoke the API key from
+    **Settings > Account > Security & access** when finished, stop the
+    server, clear the Linear values from `.env` (or set
+    `ISSUE_PROVIDER=trello`), and run
+    `unset LINEAR_API_KEY LINEAR_TEST_ISSUE_ID` if you also exported them.
 
 ## Contributing
 

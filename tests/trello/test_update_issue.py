@@ -9,9 +9,10 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from app import main, provider
+from app import main
 from app.dependencies import get_issue_provider
-from app.provider import TrelloIssueProvider
+from app.providers import trello_provider as provider
+from app.providers.trello_provider import TrelloIssueProvider
 from issue_tracker_contract.errors import ErrorCode, ServiceError
 from issue_tracker_contract.interface import IssueProvider
 from issue_tracker_contract.models import (

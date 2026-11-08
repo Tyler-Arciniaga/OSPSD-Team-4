@@ -31,6 +31,9 @@ class FakeIssueProvider:
     def create_issue(self, title: str) -> Issue:
         raise AssertionError("This test should not create issues")
 
+    def close(self) -> None:
+        """Startup closes every adapter it builds; this one holds nothing."""
+
 
 def test_repeated_read_uses_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     # Freeze the cache's clock so this test does not depend on elapsed time.
