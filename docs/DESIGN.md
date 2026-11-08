@@ -360,7 +360,7 @@ Assumption: course staff accept the contract living in our repository. If they r
 │   └── linear_provider.py           (new) Linear adapter
 ├── tests/
 ├── docs/
-└── DESIGN.md
+    └── DESIGN.md
 ```
 
 ### 6.3 Compatibility for existing callers
