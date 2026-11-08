@@ -498,6 +498,15 @@ separate Python process made 25 tests fail, including
 `test_trello_rejects_malformed_id_without_a_request`. No source was changed
 for that experiment; the tests pass with the real check.
 
+### Conformance suite
+
+`contract/tests/conformance/` holds one HTTP suite that runs unchanged
+against a live service configured for Trello and then Linear (DESIGN.md
+section 7). It covers get and create today. It uses no adapter code, only
+the routes, so it checks what a consumer observes, including provider
+assumptions the simulated tests cannot. It is skipped unless
+`CONFORMANCE_BASE_URL` is set; see its README for running it.
+
 ### Live Trello verification
 
 Offline tests do not establish that real credentials and Trello

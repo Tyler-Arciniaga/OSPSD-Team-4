@@ -10,4 +10,5 @@ not import the service (`app/`), a web framework, or a provider SDK;
 `tests/test_import_boundary.py` enforces this.
 
 - `src/issue_tracker_contract/`: the importable package.
-- `tests/conformance/`: the shared conformance suite (not yet written).
+- `tests/conformance/`: the shared HTTP conformance suite, run against a live
+  service for each provider (see its README).

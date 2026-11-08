@@ -39,7 +39,7 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
   - `contract/src/issue_tracker_contract/interface.py`: Provider-independent `IssueProvider` interface.
   - `contract/src/issue_tracker_contract/errors.py`: Error codes, the `ServiceError` raised by providers and endpoints, the code-to-status mapping, and the error response models.
   - `contract/tests/test_import_boundary.py`: Fails if the contract package imports service, framework, or provider code.
-  - `contract/tests/conformance/`: Shared conformance suite (planned).
+  - `contract/tests/conformance/`: Shared HTTP conformance suite for get and create, run unchanged against a live service configured for each provider. Skipped unless `CONFORMANCE_BASE_URL` is set.
 - `app/errors.py`: Failure logging.
 - `app/interface.py`: Service-side provider protocols: `ClosableIssueProvider` (every adapter startup builds can be closed) and the optional `IdempotentIssueProvider` capability used for idempotent creation.
 - `app/providers/`: Provider adapters, one module per provider.
@@ -351,6 +351,22 @@ and malformed or short IDs.
 The tests use simulated responses or fake providers and require no
 running server, real credentials, or network access. Live Trello
 verification is performed separately as described below.
+
+### Conformance Suite
+
+The shared conformance suite in `contract/tests/conformance/` checks that
+a consumer sees the same behavior from every provider. It sends real HTTP
+requests to a running service and creates real issues, so it is skipped
+(such as during CI) unless `CONFORMANCE_BASE_URL` is set. Start the service
+for one provider, then run:
+
+```bash
+CONFORMANCE_BASE_URL=http://127.0.0.1:8000 uv run --locked pytest contract/tests/conformance
+```
+
+Repeat for the other provider. See
+[the suite's README](contract/tests/conformance/README.md) for the steps
+and cleanup of created issues.
 
 See [Provider Interface and Dependency Injection](docs/providers.md)
 for the provider setup and the responsibilities of each test file.
