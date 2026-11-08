@@ -635,13 +635,15 @@ Reports whether this process can serve requests:
 
 - `config`: the required configuration was validated at startup. The service does not start without it (see the README's [Configuration](../README.md#configuration)), so a running service always reports `ok`.
 - `idempotency_store`: the idempotency key store at `IDEMPOTENCY_DB_PATH` opens. This is checked only when the configured provider supports [idempotent creation](#idempotent-creation) (Trello). For a provider that does not (Linear), no request opens the store. It reports `not_used` and does not affect readiness, and startup does not check its directory either.
+- `commit`: the Git commit the running image was built from, or `unknown`. On Render this is the commit Render built (`RENDER_GIT_COMMIT`). Elsewhere it is the image's `GIT_SHA` build argument. Only a commit ID is ever reported.
 - `provider`: whether the provider answered a lightweight authenticated read. This is **information only** and never changes the status code. The value is `reachable`, `unreachable` (no answer, an error status, a timeout, or rejected credentials), or `unknown` (the first check has not finished yet). A check starts at most once every 30 seconds, with the usual 10 second provider timeout. Other requests in that window get the last result.
 
 ```json
 {
   "status": "ready",
   "checks": {"config": "ok", "idempotency_store": "ok"},
-  "provider": "unreachable"
+  "provider": "unreachable",
+  "commit": "744f29dd3cb7b47025f2bce1d3876114d22c3ab1"
 }
 ```
 
