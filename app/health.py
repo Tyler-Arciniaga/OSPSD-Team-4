@@ -8,8 +8,10 @@ information only and never changes the status code, so a brief provider
 outage cannot make the platform restart a healthy service in a loop.
 """
 
+import os
+import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from threading import Lock
 from typing import Literal
 
@@ -32,6 +34,25 @@ class ReadinessResponse(BaseModel):
     status: Literal["ready", "not_ready"]
     checks: dict[str, CheckResult]
     provider: ProviderStatus
+    commit: str
+
+
+# A Git commit ID, full or abbreviated. Anything else is reported as unknown,
+# so a misconfigured variable can never echo arbitrary text.
+COMMIT_PATTERN = r"[0-9a-f]{7,40}"
+
+
+def deployed_commit(environ: Mapping[str, str] = os.environ) -> str:
+    """Return the commit this process was built from, or "unknown".
+
+    RENDER_GIT_COMMIT (set by Render to the commit it actually built) takes precedence
+    over GIT_SHA (the image's build argument, set for local and CI builds).
+    """
+    for name in ("RENDER_GIT_COMMIT", "GIT_SHA"):
+        value = environ.get(name, "")
+        if re.fullmatch(COMMIT_PATTERN, value):
+            return value
+    return "unknown"
 
 
 class ProviderProbe:

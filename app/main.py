@@ -23,6 +23,7 @@ from app.health import (
     LivenessResponse,
     ProviderProbe,
     ReadinessResponse,
+    deployed_commit,
 )
 from app.idempotency import (
     IDEMPOTENCY_KEY_PATTERN,
@@ -204,6 +205,7 @@ def readyz(
         # Startup only completes once the configuration has been validated.
         checks={"config": "ok", "idempotency_store": store_result},
         provider=probe.status(),
+        commit=deployed_commit(),
     )
     return JSONResponse(status_code=200 if ready else 503, content=body.model_dump())
 
