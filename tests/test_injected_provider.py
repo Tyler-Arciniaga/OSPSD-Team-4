@@ -30,10 +30,6 @@ def test_endpoint_uses_supplied_provider(monkeypatch: pytest.MonkeyPatch) -> Non
     def supply_fake_provider() -> IssueProvider:
         return FakeIssueProvider()
 
-    # The test must work without Trello credentials.
-    monkeypatch.delenv("TRELLO_API_KEY", raising=False)
-    monkeypatch.delenv("TRELLO_TOKEN", raising=False)
-
     # Fail if the endpoint accidentally uses the real Trello implementation.
     def forbid_trello(self: TrelloIssueProvider, issue_id: str) -> Issue:
         raise AssertionError("This test must not use Trello")
@@ -48,6 +44,10 @@ def test_endpoint_uses_supplied_provider(monkeypatch: pytest.MonkeyPatch) -> Non
     )
 
     with TestClient(app) as client:
+        # The request must work without Trello credentials. They are removed
+        # after startup, which requires them.
+        monkeypatch.delenv("TRELLO_API_KEY", raising=False)
+        monkeypatch.delenv("TRELLO_TOKEN", raising=False)
         response = client.get(f"/issues/{issue_id}")
 
     assert response.status_code == 200
@@ -160,11 +160,6 @@ def test_create_uses_supplied_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     def supply_fake_provider() -> IssueProvider:
         return FakeIssueProvider()
 
-    # The test must work without Trello credentials.
-    monkeypatch.delenv("TRELLO_API_KEY", raising=False)
-    monkeypatch.delenv("TRELLO_TOKEN", raising=False)
-    monkeypatch.delenv("TRELLO_LIST_ID", raising=False)
-
     # Fail if the endpoint accidentally uses the real Trello implementation.
     def forbid_trello(self: TrelloIssueProvider, title: str) -> Issue:
         raise AssertionError("This test must not use Trello")
@@ -178,6 +173,11 @@ def test_create_uses_supplied_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     with TestClient(app) as client:
+        # The request must work without Trello credentials. They are removed
+        # after startup, which requires them.
+        monkeypatch.delenv("TRELLO_API_KEY", raising=False)
+        monkeypatch.delenv("TRELLO_TOKEN", raising=False)
+        monkeypatch.delenv("TRELLO_LIST_ID", raising=False)
         response = client.post("/issues", json={"title": "New issue"})
 
     assert response.status_code == 201

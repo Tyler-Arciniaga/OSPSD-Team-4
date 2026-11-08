@@ -50,8 +50,8 @@ def test_shutdown_closes_the_adapter_once(
     closed: list[object] = []
     build = dependencies._build_adapter
 
-    def build_recording_close() -> ClosableIssueProvider:
-        adapter = build()
+    def build_recording_close(provider: str) -> ClosableIssueProvider:
+        adapter = build(provider)
         close = adapter.close
 
         def recording_close() -> None:
