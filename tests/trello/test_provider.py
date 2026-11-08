@@ -230,3 +230,84 @@ def test_trello_rejects_malformed_created_card(
     assert exc.value.code == ErrorCode.PROVIDER_ERROR
     assert exc.value.status == 502
     assert exc.value.message == "The issue tracker returned an unexpected response"
+
+
+PING_LIST_ID = "5f1c0a2b3d4e5f6071829304"
+
+
+def _ping_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TRELLO_API_KEY", "test-key")
+    monkeypatch.setenv("TRELLO_TOKEN", "test-token")
+    monkeypatch.setenv("TRELLO_LIST_ID", PING_LIST_ID)
+
+
+def test_trello_ping_reads_the_configured_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ping_configuration(monkeypatch)
+    sent: list[Request] = []
+
+    def fake_urlopen(request: Request, timeout: int) -> io.BytesIO:
+        sent.append(request)
+        assert timeout == provider_module.REQUEST_TIMEOUT_SECONDS
+        return io.BytesIO(json.dumps({"id": PING_LIST_ID}).encode())
+
+    monkeypatch.setattr(provider_module, "urlopen", fake_urlopen)
+
+    assert TrelloIssueProvider().ping() is True
+    assert len(sent) == 1
+    assert sent[0].get_method() == "GET"
+    assert sent[0].full_url == (
+        f"https://api.trello.com/1/lists/{PING_LIST_ID}?fields=id"
+    )
+    # Credentials travel in the header, never in the URL.
+    assert "test-token" not in sent[0].full_url
+    assert "test-token" in str(sent[0].get_header("Authorization"))
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        HTTPError("https://api.trello.com", 401, "Unauthorized", Message(), None),
+        HTTPError("https://api.trello.com", 503, "Unavailable", Message(), None),
+        TimeoutError(),
+        OSError("network down"),
+    ],
+)
+def test_trello_ping_reports_failures_as_false(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    _ping_configuration(monkeypatch)
+
+    def failing_urlopen(request: Request, timeout: int) -> io.BytesIO:
+        raise failure
+
+    monkeypatch.setattr(provider_module, "urlopen", failing_urlopen)
+
+    assert TrelloIssueProvider().ping() is False
+
+
+def test_trello_ping_rejects_an_unexpected_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ping_configuration(monkeypatch)
+    monkeypatch.setattr(
+        provider_module,
+        "urlopen",
+        lambda request, timeout: io.BytesIO(b"not json"),
+    )
+
+    assert TrelloIssueProvider().ping() is False
+
+
+def test_trello_ping_without_configuration_sends_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TRELLO_TOKEN", raising=False)
+
+    def forbid_network(request: Request, timeout: int) -> io.BytesIO:
+        raise AssertionError("ping() must not contact Trello without credentials")
+
+    monkeypatch.setattr(provider_module, "urlopen", forbid_network)
+
+    assert TrelloIssueProvider().ping() is False

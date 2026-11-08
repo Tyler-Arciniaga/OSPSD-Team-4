@@ -8,8 +8,15 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main
-from app.config import ConfigError, StartupConfig, validate_startup_config
+from app import dependencies, main
+from app.config import (
+    PROVIDERS_USING_IDEMPOTENCY_STORE,
+    REQUIRED_VARIABLES,
+    ConfigError,
+    StartupConfig,
+    validate_startup_config,
+)
+from app.interface import IdempotentIssueProvider
 from tests.conftest import FAKE_STARTUP_CONFIG
 
 TRELLO_VARIABLES = ["TRELLO_API_KEY", "TRELLO_TOKEN", "TRELLO_LIST_ID"]
@@ -183,3 +190,23 @@ def test_server_process_exits_with_a_sanitized_message(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "TRELLO_TOKEN" in output
     _assert_no_fake_value(output)
+
+
+def test_linear_does_not_require_a_store_directory(tmp_path: Path) -> None:
+    """Linear never opens the key store, so its directory is not checked."""
+    path = tmp_path / "missing" / "idempotency.sqlite3"
+    environ = _environ(tmp_path, "linear", IDEMPOTENCY_DB_PATH=str(path))
+
+    assert validate_startup_config(environ).provider == "linear"
+
+
+@pytest.mark.parametrize("provider", sorted(REQUIRED_VARIABLES))
+def test_store_requirement_matches_the_adapter(provider: str) -> None:
+    """The providers needing a store directory are those supporting idempotency."""
+    adapter = dependencies._build_adapter(provider)
+    try:
+        assert isinstance(adapter, IdempotentIssueProvider) == (
+            provider in PROVIDERS_USING_IDEMPOTENCY_STORE
+        )
+    finally:
+        adapter.close()
