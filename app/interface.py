@@ -13,13 +13,21 @@ from issue_tracker_contract.models import Issue
 
 @runtime_checkable
 class ClosableIssueProvider(IssueProvider, Protocol):
-    """An adapter the service can release at shutdown.
+    """An adapter the service can probe while running and release at shutdown.
 
-    Every adapter that startup builds implements this, so shutdown is the
-    same for all of them. `close()` releases whatever the adapter holds (for
-    example a long-lived HTTP client); an adapter holding nothing does
-    nothing.
+    Every adapter that startup builds implements this, so readiness and
+    shutdown are the same for all of them. `close()` releases whatever the
+    adapter holds (for example a long-lived HTTP client); an adapter holding
+    nothing does nothing.
     """
+
+    def ping(self) -> bool:
+        """Report whether the provider answers a lightweight authenticated read.
+
+        Used only to inform the readiness report. Never raises; any failure,
+        including missing configuration, returns False.
+        """
+        ...
 
     def close(self) -> None:
         """Release the adapter's resources. Called once, at shutdown."""
