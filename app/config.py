@@ -1,8 +1,8 @@
 """Startup configuration check.
 
 Before the service builds a provider, it checks that every variable the
-selected provider needs is set and that the idempotency store's directory is
-writable. A failure names the variables concerned and never includes a value,
+selected provider needs is set and, for a provider that uses the idempotency
+store, that the store's directory is writable. A failure names the variables concerned and never includes a value,
 so the message is safe to print in deployment logs.
 
 The adapters still check their own settings on every call, as a second line
@@ -25,6 +25,11 @@ REQUIRED_VARIABLES: Mapping[str, tuple[str, ...]] = {
     "trello": ("TRELLO_API_KEY", "TRELLO_TOKEN", "TRELLO_LIST_ID"),
     "linear": ("LINEAR_API_KEY", "LINEAR_TEAM_ID"),
 }
+
+# Providers whose adapter supports idempotent creation, and so writes to the
+# idempotency key store. Only these need a writable IDEMPOTENCY_DB_PATH
+# directory; the others refuse an Idempotency-Key before opening the store.
+PROVIDERS_USING_IDEMPOTENCY_STORE = frozenset({"trello"})
 
 
 class ConfigError(ValueError):
@@ -64,7 +69,9 @@ def validate_startup_config(
         )
 
     db_path = environ.get("IDEMPOTENCY_DB_PATH") or DEFAULT_IDEMPOTENCY_DB_PATH
-    if not _directory_is_writable(db_path):
+    if provider in PROVIDERS_USING_IDEMPOTENCY_STORE and not _directory_is_writable(
+        db_path
+    ):
         raise ConfigError(
             "IDEMPOTENCY_DB_PATH directory does not exist or is not writable"
         )

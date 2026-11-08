@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 
 from app.cache import CachedIssueProvider
 from app.config import ConfigError, validate_startup_config
+from app.health import ProviderProbe
 from app.idempotency import IdempotencyStore
 from app.interface import ClosableIssueProvider
 from app.providers.linear_provider import LinearIssueProvider
@@ -57,6 +58,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # survives restarts. The file is opened only when a request has a key.
     app.state.idempotency_store = IdempotencyStore(config.idempotency_db_path)
 
+    # Readiness reports whether the provider answers, checked at most every
+    # 30 seconds. The check is sent only when /readyz is requested.
+    app.state.provider_probe = ProviderProbe(adapter.ping)
+
     try:
         # Pause this function while the application handles requests.
         # The saved provider remains available and is reused.
@@ -66,6 +71,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # This does not delete any issues or other data from the provider.
         del app.state.issue_provider
         del app.state.idempotency_store
+        del app.state.provider_probe
         # Whoever creates the adapter closes it. Every adapter implements
         # close(), so shutdown is always called regardless of the provider configured.
         adapter.close()
@@ -83,3 +89,8 @@ def get_issue_provider(request: Request) -> IssueProvider:
 def get_idempotency_store(request: Request) -> IdempotencyStore:
     """Return the idempotency key store created during application startup."""
     return request.app.state.idempotency_store
+
+
+def get_provider_probe(request: Request) -> ProviderProbe:
+    """Return the provider reachability check created during startup."""
+    return request.app.state.provider_probe
