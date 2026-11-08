@@ -3,7 +3,7 @@
 # deploys exactly this commit. None of these values are secret.
 
 variable "commit_sha" {
-  description = "Full 40-character Git commit Render builds and runs. It must be pushed and on var.branch."
+  description = "Full 40-character Git commit Render builds and runs. It must be pushed and in var.branch's history."
   type        = string
   default     = "9ab10b17a387e535dc79384fc22c56a9ab16d7f1"
 
@@ -14,9 +14,9 @@ variable "commit_sha" {
 }
 
 variable "branch" {
-  description = "Branch Render builds from. Switch to main once this work is merged."
+  description = "Branch Render builds from. commit_sha must be in its history."
   type        = string
-  default     = "feature/enable-remote-deployment-via-IaC"
+  default     = "main"
 }
 
 variable "secrets_env_group_id" {
