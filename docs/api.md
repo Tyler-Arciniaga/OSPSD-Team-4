@@ -621,6 +621,35 @@ curl -i -X DELETE http://127.0.0.1:8000/issues/64f1c0a2b3d4e5f607182930
 HTTP/1.1 204 No Content
 ```
 
+## Health checks
+
+Two endpoints report on the service process itself. They never contact the provider for liveness, and their bodies never contain credentials, configuration values, or provider text. They do not use the [Error model](#error-model) shape.
+
+### `GET /healthz` (liveness)
+
+Returns `200 {"status": "ok"}` whenever the process is serving HTTP. It checks nothing else, so the hosting platform restarts the service only when the process is stuck, never because the provider is briefly unavailable. The deployment's platform health check uses this path.
+
+### `GET /readyz` (readiness)
+
+Reports whether this process can serve requests:
+
+- `config`: the required configuration was validated at startup. The service does not start without it (see the README's [Configuration](../README.md#configuration)), so a running service always reports `ok`.
+- `idempotency_store`: the idempotency key store at `IDEMPOTENCY_DB_PATH` opens. This is checked only when the configured provider supports [idempotent creation](#idempotent-creation) (Trello). For a provider that does not (Linear), no request opens the store. It reports `not_used` and does not affect readiness, and startup does not check its directory either.
+- `provider`: whether the provider answered a lightweight authenticated read. This is **information only** and never changes the status code. The value is `reachable`, `unreachable` (no answer, an error status, a timeout, or rejected credentials), or `unknown` (the first check has not finished yet). A check starts at most once every 30 seconds, with the usual 10 second provider timeout. Other requests in that window get the last result.
+
+```json
+{
+  "status": "ready",
+  "checks": {"config": "ok", "idempotency_store": "ok"},
+  "provider": "unreachable"
+}
+```
+
+| Status | Meaning |
+| --- | --- |
+| `200` | `status` is `ready`. No check is `failed` (each is `ok` or `not_used`), whatever `provider` reports. |
+| `503` | `status` is `not_ready`. At least one check is `failed`. |
+
 ## Error model
 
 Every failed request returns a JSON body of the same shape, whichever
