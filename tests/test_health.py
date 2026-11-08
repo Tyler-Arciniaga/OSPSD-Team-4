@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from app import main
 from app.dependencies import get_provider_probe
-from app.health import ProviderProbe
+from app.health import ProviderProbe, deployed_commit
 from app.providers.trello_provider import TrelloIssueProvider
 from tests.conftest import FAKE_STARTUP_CONFIG
 
@@ -88,6 +88,7 @@ def test_readyz_is_ready_whatever_the_provider_reports(
         "status": "ready",
         "checks": {"config": "ok", "idempotency_store": "ok"},
         "provider": provider,
+        "commit": "unknown",
     }
     _assert_no_fake_value(response.text)
 
@@ -124,6 +125,7 @@ def test_readyz_fails_when_the_key_store_cannot_open(
         "status": "not_ready",
         "checks": {"config": "ok", "idempotency_store": "failed"},
         "provider": "reachable",
+        "commit": "unknown",
     }
     assert str(directory) not in response.text
 
@@ -184,4 +186,35 @@ def test_readyz_ignores_the_key_store_for_linear(
         "status": "ready",
         "checks": {"config": "ok", "idempotency_store": "not_used"},
         "provider": "reachable",
+        "commit": "unknown",
     }
+
+
+SHA = "0123456789abcdef0123456789abcdef01234567"
+
+
+@pytest.mark.parametrize(
+    ("environ", "expected"),
+    [
+        ({}, "unknown"),
+        ({"GIT_SHA": SHA}, SHA),
+        ({"GIT_SHA": "unknown"}, "unknown"),
+        ({"RENDER_GIT_COMMIT": SHA, "GIT_SHA": "fedcba9876543210"}, SHA),
+        ({"RENDER_GIT_COMMIT": "", "GIT_SHA": SHA}, SHA),
+        ({"GIT_SHA": "not a commit; maybe a secret"}, "unknown"),
+        ({"GIT_SHA": SHA.upper()}, "unknown"),
+    ],
+)
+def test_deployed_commit_prefers_render_and_accepts_only_commit_ids(
+    environ: dict[str, str], expected: str
+) -> None:
+    assert deployed_commit(environ) == expected
+
+
+def test_readyz_reports_the_build_commit(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    monkeypatch.setenv("GIT_SHA", SHA)
+    _use_probe(monkeypatch, ProviderProbe(CountingCheck(True)))
+
+    assert client.get("/readyz").json()["commit"] == SHA

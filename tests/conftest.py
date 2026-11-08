@@ -27,6 +27,9 @@ def startup_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     for name, value in FAKE_STARTUP_CONFIG.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setenv("IDEMPOTENCY_DB_PATH", str(tmp_path / "idempotency.sqlite3"))
+    # Readiness reports the build's commit; tests start from an unknown one.
+    monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
+    monkeypatch.delenv("GIT_SHA", raising=False)
 
 
 @pytest.fixture
