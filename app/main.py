@@ -10,6 +10,7 @@ from fastapi import Depends, FastAPI, Header, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.gzip import GZipMiddleware
 
 from app.dependencies import (
     get_idempotency_store,
@@ -46,6 +47,13 @@ app = FastAPI(
     title="Issue Tracking Service",
     lifespan=lifespan,
 )
+
+# Compress responses here rather than leaving it to Render's edge. When the
+# edge compresses, Cloudflare weakens the ETag to W/"...", which conformance
+# rejects and If-Match never matches. It keeps a strong ETag when the origin's
+# encoding is one the client accepts (docs/DEPLOYMENT.md#troubleshooting).
+# minimum_size=0 because issue bodies are far below the 500-byte default.
+app.add_middleware(GZipMiddleware, minimum_size=0)
 
 health_logger = logging.getLogger("app.health")
 

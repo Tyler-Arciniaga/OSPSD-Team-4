@@ -159,3 +159,24 @@ def test_failed_fresh_read_prevents_conditional_write(
         assert store.updates == 0
         # A failed refresh must not leave the old successful value available.
         assert client.get(f"/issues/{ISSUE_ID}").status_code == status
+
+
+def test_issue_responses_are_gzipped_with_a_strong_etag(
+    store: InMemoryProvider,
+) -> None:
+    # Behind Render's edge, the ETag stays strong only when the service
+    # compresses the response itself.
+    client = TestClient(app)
+    read = client.get(f"/issues/{ISSUE_ID}", headers={"Accept-Encoding": "gzip"})
+    assert read.headers["Content-Encoding"] == "gzip"
+    assert read.json() == {"id": ISSUE_ID, "title": "Original"}
+    etag = read.headers["ETag"]
+    assert etag.startswith('"') and etag.endswith('"')
+
+    updated = client.patch(
+        f"/issues/{ISSUE_ID}",
+        json={"title": "Changed"},
+        headers={"If-Match": etag, "Accept-Encoding": "gzip"},
+    )
+    assert updated.status_code == 200
+    assert updated.headers["Content-Encoding"] == "gzip"
