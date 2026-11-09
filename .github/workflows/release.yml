@@ -10,8 +10,12 @@
 #             and capture its digest. Then check that exact image, pulled back
 #             from the registry by digest, in a disposable container. Nothing
 #             later rebuilds it: every later stage uses <image>@<digest>.
+#   3. deploy Skip if this commit is no longer the tip of main. Otherwise point
+#             the Render service at <image>@<digest>, deploy it, wait until it
+#             is live, and confirm /readyz is ready and reports this commit.
+#             Configuration and secrets stay in Render; none are in the image.
 #
-# Deploying, the smoke check and the release record follow in later stages
+# The smoke check and the release record follow in later stages
 # (docs/DEPLOYMENT.md).
 
 name: Release
@@ -23,6 +27,16 @@ on:
 # Each job below asks for only what it needs.
 permissions:
   contents: read
+
+# One release at a time. A running release is never cancelled. While one
+# runs, a newer one waits; if a third arrives, it replaces the waiting one, so
+# only the newest waiting release survives. Terraform apply and destroy share
+# this group, so none of them overlap a release. GitHub keeps one waiting run
+# per group across all three workflows: a run started while another waits
+# replaces it, whichever workflow either belongs to (docs/DEPLOYMENT.md).
+concurrency:
+  group: render-production
+  cancel-in-progress: false
 
 jobs:
   ci:
@@ -73,3 +87,112 @@ jobs:
       - name: Log out of the container registry
         if: always()
         run: docker logout ghcr.io
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    # The environment's secrets and variables, without GitHub creating a
+    # Deployment for github.sha: the release record is created separately,
+    # for the exact commit and digest released.
+    environment:
+      name: render-production
+      deployment: false
+
+    outputs:
+      skip: ${{ steps.guard.outputs.skip }}
+      deploy_id: ${{ steps.deploy.outputs.deploy_id }}
+      started_at: ${{ steps.deploy.outputs.started_at }}
+      finished_at: ${{ steps.deploy.outputs.finished_at }}
+
+    env:
+      IMAGE: ${{ needs.build.outputs.image }}
+      DIGEST: ${{ needs.build.outputs.digest }}
+      RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID }}
+      SERVICE_URL: ${{ vars.SERVICE_URL }}
+
+    steps:
+      - name: Check out the release commit
+        uses: actions/checkout@v7
+
+      # A newer commit on main will be released by its own run, which is
+      # waiting for this one. Deploying this older commit now would only be
+      # overwritten, or, if this run were the late one, overwrite newer code.
+      - name: Skip if this commit is no longer the tip of main
+        id: guard
+        run: |
+          tip="$(git ls-remote origin refs/heads/main | cut -f1)"
+          if [ -z "$tip" ]; then
+            echo "Could not read the tip of main."
+            exit 1
+          fi
+          if [ "$tip" != "$GITHUB_SHA" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "main is at $tip, not $GITHUB_SHA: skipping this deploy; the newer release deploys instead."
+            {
+              echo "## Deploy skipped"
+              echo
+              echo "\`$GITHUB_SHA\` is no longer the tip of main (\`$tip\`). The release of the newer commit deploys instead."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Until the service runs from the registry (docs/DEPLOYMENT.md,
+      # bootstrap), these are unset and the release stops here, leaving the
+      # running service untouched.
+      - name: Check the environment is set up
+        if: steps.guard.outputs.skip == 'false'
+        env:
+          HAS_API_KEY: ${{ secrets.RENDER_API_KEY != '' }}
+          RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+        run: |
+          missing=""
+          [ "$HAS_API_KEY" = "true" ] || missing="$missing RENDER_API_KEY(secret)"
+          [ -n "$RENDER_OWNER_ID" ] || missing="$missing RENDER_OWNER_ID"
+          [ -n "$RENDER_SERVICE_ID" ] || missing="$missing RENDER_SERVICE_ID"
+          [ -n "$SERVICE_URL" ] || missing="$missing SERVICE_URL"
+          if [ -n "$missing" ]; then
+            echo "::error::The render-production environment is missing:$missing. The bootstrap is not finished (docs/DEPLOYMENT.md); nothing was deployed."
+            exit 1
+          fi
+
+      - name: Set up uv and Python
+        if: steps.guard.outputs.skip == 'false'
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.12.17"
+          python-version: "3.13.5"
+
+      - name: Install runtime dependencies
+        if: steps.guard.outputs.skip == 'false'
+        run: uv sync --locked --no-dev
+
+      - name: Deploy the image digest
+        id: deploy
+        if: steps.guard.outputs.skip == 'false'
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+        run: |
+          uv run --locked --no-dev python -m scripts.release deploy \
+            --service-id "$RENDER_SERVICE_ID" --image "$IMAGE" --digest "$DIGEST"
+
+      - name: Check the service runs this commit
+        if: steps.guard.outputs.skip == 'false'
+        run: |
+          uv run --locked --no-dev python -m scripts.release check-ready \
+            --url "$SERVICE_URL" --commit "$GITHUB_SHA"
+          {
+            echo "## Deployed"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| URL | $SERVICE_URL |"
+            echo "| Commit | \`$GITHUB_SHA\` |"
+            echo "| Image | \`$IMAGE@$DIGEST\` |"
+            echo "| Render deploy | \`${{ steps.deploy.outputs.deploy_id }}\` |"
+            echo "| Deploy window (UTC) | ${{ steps.deploy.outputs.started_at }} to ${{ steps.deploy.outputs.finished_at }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -23,9 +23,11 @@ on:
 permissions:
   contents: read
 
-# One apply at a time; never cancel one halfway.
+# Shares the release workflow's group (release.yml), so applies, destroys
+# and releases never overlap, and none is cancelled halfway. A run started
+# while another waits in this group replaces the waiting one; re-run it.
 concurrency:
-  group: terraform-render
+  group: render-production
   cancel-in-progress: false
 
 jobs:
