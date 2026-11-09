@@ -15,6 +15,7 @@ on:
       - "infra/**"
       - ".github/workflows/terraform-plan.yml"
       - ".github/workflows/terraform-apply.yml"
+      - ".github/workflows/terraform-destroy.yml"
 
 permissions:
   contents: read

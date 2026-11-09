@@ -259,13 +259,17 @@ creates an empty cache.
 ### Adapter lifecycle
 
 Every adapter startup builds satisfies `ClosableIssueProvider`
-(`app/interface.py`): the `IssueProvider` operations plus `close()`.
-Shutdown always calls `close()`, so no provider needs special handling and a
-new adapter only has to implement the method. `LinearIssueProvider.close()`
+(`app/interface.py`): the `IssueProvider` operations plus `ping()` and
+`close()`. Shutdown always calls `close()`, so no provider needs special
+handling and a new adapter only has to implement the method. `ping()` sends
+one lightweight authenticated read and returns whether the provider answered.
+It never raises. Trello reads the configured list's ID; Linear asks for the
+key's `viewer`. Startup wraps it in a cached check that `GET /readyz` reports
+for information only (see [Health checks](api.md#health-checks)). `LinearIssueProvider.close()`
 closes its HTTP client; `TrelloIssueProvider.close()` does nothing, because
 each Trello request opens and closes its own connection.
 
-`close()` is deliberately not part of the shared `IssueProvider` contract
+`ping()` and `close()` are deliberately not part of the shared `IssueProvider` contract
 (DESIGN.md section 2.2). Consumers of the contract use a provider; only the
 code that created it closes it. Adding it to the contract would also be an
 incompatible contract change: every implementation, including test fakes and

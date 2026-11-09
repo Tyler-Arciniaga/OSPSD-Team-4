@@ -29,7 +29,14 @@ requests create at most one issue (see
 error format and writes one sanitized log line. Automated tests run without
 credentials or network access.
 
-GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests.
+The service checks its required configuration at startup and refuses to
+start, naming the missing variable without printing any value, if
+something is missing. `GET /healthz` (liveness) and `GET /readyz`
+(readiness) report its health (see [Health checks](docs/api.md#health-checks)).
+It is packaged as a container image and deployed to Render with Terraform;
+see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests. It also builds the container image and checks it in a disposable container. Pull requests that change `infra/` get a `terraform plan` comment, and deploys run only by manual dispatch.
 
 ## Project Structure
 
@@ -40,8 +47,10 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
   - `contract/src/issue_tracker_contract/errors.py`: Error codes, the `ServiceError` raised by providers and endpoints, the code-to-status mapping, and the error response models.
   - `contract/tests/test_import_boundary.py`: Fails if the contract package imports service, framework, or provider code.
   - `contract/tests/conformance/`: Shared HTTP conformance suite for get and create, run unchanged against a live service configured for each provider. Skipped unless `CONFORMANCE_BASE_URL` is set.
+- `app/config.py`: Startup configuration check: the variables each provider requires and the idempotency store directory.
+- `app/health.py`: Liveness and readiness responses, the cached provider reachability check, and the deployed commit.
 - `app/errors.py`: Failure logging.
-- `app/interface.py`: Service-side provider protocols: `ClosableIssueProvider` (every adapter startup builds can be closed) and the optional `IdempotentIssueProvider` capability used for idempotent creation.
+- `app/interface.py`: Service-side provider protocols: `ClosableIssueProvider` (every adapter startup builds can be probed with `ping()` and closed) and the optional `IdempotentIssueProvider` capability used for idempotent creation.
 - `app/providers/`: Provider adapters, one module per provider.
   - `app/providers/common.py`: What every adapter shares: the request timeout and the caller-facing error messages.
   - `app/providers/trello_provider.py`: Trello authentication, requests, and translation of Trello responses and failures.
@@ -61,15 +70,25 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
   - `tests/linear/test_provider.py`: Protocol compatibility, uncached reads, unimplemented operations, and `close()`.
   - `tests/linear/fake_linear.py`: The simulated Linear API and expected values shared by these tests.
 - `tests/test_provider_selection.py`: Startup builds the adapter named by `ISSUE_PROVIDER` and closes it at shutdown.
+- `tests/test_config.py`: Startup configuration checks, including that a server started with a variable missing exits without printing values.
+- `tests/test_health.py`: `/healthz`, `/readyz`, the provider check's caching, and the reported commit.
 - `tests/test_injected_provider.py`: Endpoint tests using supplied fake providers.
 - `tests/test_idempotency.py`: Repeated, overlapping, conflicting, expired and restarted keyed creations, unknown provider outcomes, and cache and logging integration.
 - `tests/test_errors.py`: Error response and failure-logging tests using a controlled provider.
 - `tests/expected_errors.py`: Expected error bodies shared by the endpoint tests.
 - `docs/api.md`: API contract, error model, examples, and assumptions.
 - `docs/providers.md`: Provider interface, error translation, dependency setup, and testing approach.
+- `docs/DEPLOYMENT.md`: Deploying, verifying, rolling back, and tearing down the Render deployment, plus the teammate walkthrough.
+- `Dockerfile`, `.dockerignore`: The deployable image: locked runtime dependencies, non-root user, no credentials.
+- `infra/`: Terraform for the Render deployment, with state in HCP Terraform. `release.tf` pins the deployed commit.
+- `scripts/disposable_env.sh`: Builds the image and checks it in a throwaway container with fake configuration.
+- `scripts/conformance_remote.sh`: Runs the conformance suite against a deployed service.
 - `pyproject.toml`: Python requirement, dependencies, and tool configuration.
 - `uv.lock`: Locked dependency versions for reproducible installation.
-- `.github/workflows/ci.yml`: Automated linting, formatting, type checking, and tests.
+- `.github/workflows/ci.yml`: Automated linting, formatting, type checking, tests, and the container image check.
+- `.github/workflows/terraform-plan.yml`: Posts `terraform plan` on pull requests that change `infra/`.
+- `.github/workflows/terraform-apply.yml`: Manual, approved apply and deploy of the pinned commit, followed by a plan that must show no changes.
+- `.github/workflows/terraform-destroy.yml`: Manual, approved teardown of everything Terraform created.
 - `AGENTS.md`: Contribution and release workflow.
 
 ## Installation
@@ -102,7 +121,8 @@ chmod 600 .env
 `.env` is ignored by Git. Do not commit credentials. Set `ISSUE_PROVIDER`
 in `.env` to the provider this process uses: `trello` (the default when
 unset) or `linear`. Any other value stops startup. Configure that provider
-below.
+below. Startup also stops, naming the missing variable, if any variable that
+provider requires is empty. The other provider's variables are never needed.
 
 ### Trello Configuration
 
@@ -125,8 +145,7 @@ and delete its test cards.
 4. Set `TRELLO_LIST_ID` in `.env` to the full ID of the list where new
    issues should be created. To find it, open any card in that list,
    append `.json` to its URL, and copy the top-level `idList` value
-   (24 hexadecimal characters). Retrieval works without this setting;
-   creation returns `503` until it is set.
+   (24 hexadecimal characters). The service does not start without it.
 
 See [Trello authorization](https://developer.atlassian.com/cloud/trello/guides/rest-api/authorization/)
 for permissions and token revocation.
@@ -152,8 +171,7 @@ your team may create and delete.
      -d '{"query": "{ teams { nodes { id key name } } }"}'
    ```
 
-   Copy the test team's `id` (a UUID). Retrieval works without this setting;
-   creation returns `503` until it is set.
+   Copy the test team's `id` (a UUID). The service does not start without it.
 4. Optionally set `LINEAR_STATE_ID` to the workflow state new issues start
    in. When it is empty, Linear uses the team's default state.
 
@@ -165,7 +183,9 @@ for API keys and revocation.
 Optionally set `IDEMPOTENCY_DB_PATH` to the file that records idempotency
 keys (default `idempotency.sqlite3` in the working directory, ignored by
 Git). It must survive restarts, and every worker must use the same file.
-Deleting it forgets all keys.
+Deleting it forgets all keys. With Trello, startup checks that its directory
+exists and is writable. Linear does not support idempotent creation and never
+opens it.
 
 The startup command below loads `.env` into the service environment.
 Existing exported environment variables take precedence over values in
@@ -185,12 +205,34 @@ Interactive API documentation is available at <http://127.0.0.1:8000/docs>.
 The `--reload` option automatically restarts the server when code changes
 during development. Press Ctrl+C in the terminal to stop it.
 
+### Running in a Container
+
+The deployable image runs the same way anywhere. Build it from the
+repository root and pass configuration at run time; the image contains no
+credentials:
+
+```bash
+docker build --build-arg GIT_SHA="$(git rev-parse HEAD)" -t ospsd-team4 .
+docker run --rm -p 8000:8000 --env-file .env \
+  -e IDEMPOTENCY_DB_PATH=/app/data/idempotency.sqlite3 ospsd-team4
+```
+
+The `-e` setting overrides the relative `IDEMPOTENCY_DB_PATH` in `.env`,
+because inside the image only `/app/data` is writable by the service's
+non-root user.
+
+`scripts/disposable_env.sh` builds the image and checks it in a
+throwaway container with fake configuration. See
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the Render deployment.
+
 ## API Usage
 
 Retrieve an issue using `GET /issues/{issue_id}`, where `issue_id` is
 the required issue identifier. Create an issue using `POST /issues`
 with a JSON body containing a `title`. Permanently delete an issue using
-`DELETE /issues/{issue_id}`.
+`DELETE /issues/{issue_id}`. Check the service with `GET /healthz`
+(liveness) and `GET /readyz` (readiness; see
+[Health checks](docs/api.md#health-checks)).
 
 With the service running:
 
@@ -366,7 +408,9 @@ CONFORMANCE_BASE_URL=http://127.0.0.1:8000 uv run --locked pytest contract/tests
 
 Repeat for the other provider. See
 [the suite's README](contract/tests/conformance/README.md) for the steps
-and cleanup of created issues.
+and cleanup of created issues. To run it against the deployed service, use
+`scripts/conformance_remote.sh <url>` (see
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#verify)).
 
 See [Provider Interface and Dependency Injection](docs/providers.md)
 for the provider setup and the responsibilities of each test file.
@@ -487,7 +531,7 @@ command for this workflow so all requests share the same cache.
 1. In the test team on the Linear platform, create an issue named `HW1 Linear GET test`. Linear
    shows its short identifier (for example `TYL-5`); however the service accepts
    only the full ID. With `LINEAR_API_KEY` exported as in
-   [Linear Configuration](#linear), look it up, replacing `short-id` with your
+   [Linear Configuration](#linear-configuration), look it up, replacing `short-id` with your
    identifier:
 
    ```bash
@@ -577,6 +621,13 @@ command for this workflow so all requests share the same cache.
     server, clear the Linear values from `.env` (or set
     `ISSUE_PROVIDER=trello`), and run
     `unset LINEAR_API_KEY LINEAR_TEST_ISSUE_ID` if you also exported them.
+
+## Deployment
+
+The service runs on Render, described by Terraform in `infra/`. Pull requests
+show the plan, and deploys are manual and approved. See
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for prerequisites, deploy, verify,
+rollback, teardown, and the teammate walkthrough.
 
 ## Contributing
 

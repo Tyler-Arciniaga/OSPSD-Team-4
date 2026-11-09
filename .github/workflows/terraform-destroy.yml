@@ -1,0 +1,91 @@
+# Tear down everything Terraform created (docs/DEPLOYMENT.md#tear-down).
+#
+# Manual only: it runs when someone starts it from the Actions tab (or
+# `gh workflow run`), types "destroy" to confirm, and a required reviewer
+# approves the render-production environment. Nothing triggers it
+# automatically. It lets a teammate tear down without holding a Render API
+# key: the key stays in GitHub secrets.
+#
+# It removes only what Terraform manages: the Render web service and its link
+# to the environment group. The hand-made items (the environment group, API
+# keys and tokens, the HCP workspace, these GitHub secrets) are removed by
+# hand afterwards, using the checklist in docs/DEPLOYMENT.md.
+
+name: Terraform destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "destroy" to delete the Render service. This cannot be undone.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Shares the apply workflow's group, so a destroy never overlaps an apply.
+concurrency:
+  group: terraform-render
+  cancel-in-progress: false
+
+jobs:
+  destroy:
+    if: github.ref == 'refs/heads/main' && inputs.confirm == 'destroy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: render-production
+
+    defaults:
+      run:
+        working-directory: infra
+
+    env:
+      TF_IN_AUTOMATION: "1"
+      TF_INPUT: "0"
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v7
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4.0.1
+        with:
+          terraform_version: "1.17.1"
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+          terraform_wrapper: false
+
+      - name: Initialize
+        run: terraform init -input=false
+
+      # The destroy plan stays on this runner and is deleted with it.
+      - name: Plan the teardown
+        run: |
+          terraform plan -destroy -input=false -no-color -lock-timeout=5m -out=destroy.tfplan | tee plan.txt
+          {
+            echo "## Teardown plan applied by this run"
+            echo
+            echo '```'
+            cat plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Destroys exactly the plan shown above.
+      - name: Destroy
+        run: terraform apply -input=false -no-color -lock-timeout=5m destroy.tfplan
+
+      - name: Check nothing is left in state
+        run: |
+          left="$(terraform state list)"
+          if [ -n "$left" ]; then
+            echo "Still in state after destroy:"
+            echo "$left"
+            exit 1
+          fi
+          {
+            echo "## Teardown complete"
+            echo
+            echo "Terraform state is empty. Next: remove the hand-made items listed in docs/DEPLOYMENT.md#2-remove-what-was-made-by-hand."
+          } >> "$GITHUB_STEP_SUMMARY"
