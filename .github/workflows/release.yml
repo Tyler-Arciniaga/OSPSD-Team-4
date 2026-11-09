@@ -1,0 +1,71 @@
+# Release: turn a commit on main into the deployed revision.
+#
+# Stages, each starting only if the one before passed:
+#   1. ci     Every CI check, again, on this exact commit (ci.yml), so a
+#             commit cannot be released without passing them, even if it
+#             reached main without a pull request.
+#   2. build  Build the image once, push it tagged with the full commit SHA,
+#             and capture its digest. Then check that exact image, pulled back
+#             from the registry by digest, in a disposable container. Nothing
+#             later rebuilds it: every later stage uses <image>@<digest>.
+#
+# Deploying, the smoke check and the release record follow in later stages
+# (docs/DEPLOYMENT.md).
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+# Each job below asks for only what it needs.
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  build:
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # Push the image to this repository's GitHub container registry.
+      packages: write
+
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+      digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Check out the release commit
+        uses: actions/checkout@v7
+
+      # GITHUB_TOKEN can push only this repository's packages and expires
+      # with the job. Registry names must be lowercase.
+      - name: Log in to the container registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          owner="$(tr '[:upper:]' '[:lower:]' <<<"$GITHUB_REPOSITORY_OWNER")"
+          echo "IMAGE_REPO=ghcr.io/${owner}/ospsd-team4-issue-service" >> "$GITHUB_ENV"
+
+      - name: Build once and push
+        id: build
+        run: scripts/build_image.sh "$IMAGE_REPO" "$GITHUB_SHA"
+
+      # Pulled from the registry by digest: the bytes that will be deployed.
+      - name: Check the pushed image in a disposable container
+        env:
+          IMAGE_REF: ${{ steps.build.outputs.image }}@${{ steps.build.outputs.digest }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: scripts/disposable_env.sh
+
+      - name: Log out of the container registry
+        if: always()
+        run: docker logout ghcr.io
