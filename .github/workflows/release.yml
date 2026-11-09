@@ -14,9 +14,12 @@
 #             the Render service at <image>@<digest>, deploy it, wait until it
 #             is live, and confirm /readyz is ready and reports this commit.
 #             Configuration and secrets stay in Render; none are in the image.
+#   4. smoke  Run the conformance suite against the deployed service and the
+#             real provider (scripts/smoke_check.sh). It needs no credentials:
+#             the service holds them. A failure stops the release. Render keeps
+#             running the deployed revision until someone rolls back.
 #
-# The smoke check and the release record follow in later stages
-# (docs/DEPLOYMENT.md).
+# The release record follows in a later stage (docs/DEPLOYMENT.md).
 
 name: Release
 
@@ -103,6 +106,8 @@ jobs:
 
     outputs:
       skip: ${{ steps.guard.outputs.skip }}
+      url: ${{ steps.deploy.outputs.url }}
+      commit: ${{ steps.deploy.outputs.commit }}
       deploy_id: ${{ steps.deploy.outputs.deploy_id }}
       started_at: ${{ steps.deploy.outputs.started_at }}
       finished_at: ${{ steps.deploy.outputs.finished_at }}
@@ -179,6 +184,10 @@ jobs:
         run: |
           uv run --locked --no-dev python -m scripts.release deploy \
             --service-id "$RENDER_SERVICE_ID" --image "$IMAGE" --digest "$DIGEST"
+          {
+            echo "url=$SERVICE_URL"
+            echo "commit=$GITHUB_SHA"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Check the service runs this commit
         if: steps.guard.outputs.skip == 'false'
@@ -196,3 +205,32 @@ jobs:
             echo "| Render deploy | \`${{ steps.deploy.outputs.deploy_id }}\` |"
             echo "| Deploy window (UTC) | ${{ steps.deploy.outputs.started_at }} to ${{ steps.deploy.outputs.finished_at }} |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  smoke:
+    needs: deploy
+    if: needs.deploy.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # No environment and no secrets: the checks go through the service's
+    # public API, and the service holds the provider credentials.
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out the release commit
+        uses: actions/checkout@v7
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.12.17"
+          python-version: "3.13.5"
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Smoke check through the shared API
+        env:
+          SERVICE_URL: ${{ needs.deploy.outputs.url }}
+          COMMIT: ${{ needs.deploy.outputs.commit }}
+        run: scripts/smoke_check.sh "$SERVICE_URL" "$COMMIT"

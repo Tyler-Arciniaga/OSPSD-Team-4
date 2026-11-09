@@ -299,6 +299,12 @@ def main(
     ready = commands.add_parser("check-ready", help="confirm the service runs a commit")
     ready.add_argument("--url", required=True)
     ready.add_argument("--commit", required=True)
+    ready.add_argument(
+        "--timeout",
+        type=float,
+        default=READY_TIMEOUT_SECONDS,
+        help="seconds to wait (default: %(default)s)",
+    )
 
     args = parser.parse_args(argv)
     try:
@@ -329,7 +335,14 @@ def main(
             with httpx.Client(
                 base_url=args.url.rstrip("/"), timeout=30, transport=transport
             ) as service:
-                wait_until_ready(service, commit=args.commit, clock=clock, sleep=sleep)
+                wait_until_ready(
+                    service,
+                    commit=args.commit,
+                    clock=clock,
+                    sleep=sleep,
+                    timeout_seconds=args.timeout,
+                    poll_seconds=min(READY_POLL_SECONDS, max(args.timeout / 10, 0.5)),
+                )
             print(f"{args.url} is ready and runs {args.commit}.")
     except ReleaseError as exc:
         print(f"error: {exc}", file=sys.stderr)
