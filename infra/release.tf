@@ -5,7 +5,7 @@
 variable "commit_sha" {
   description = "Full 40-character Git commit Render builds and runs. It must be pushed and in var.branch's history."
   type        = string
-  default     = "9ab10b17a387e535dc79384fc22c56a9ab16d7f1"
+  default     = "af919abd8811c23df382b39574ba609b31acea38"
 
   validation {
     condition     = can(regex("^[0-9a-f]{40}$", var.commit_sha))
