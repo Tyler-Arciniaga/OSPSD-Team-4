@@ -36,7 +36,7 @@ something is missing. `GET /healthz` (liveness) and `GET /readyz`
 It is packaged as a container image and deployed to Render with Terraform;
 see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
-GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests, and the shared conformance suite against the controlled implementation (the real service backed by an in-memory provider). It also builds the container image. One aggregate `checks` status passes only when all of these pass; branch protection requires it before merging to `main` (see [Merge gate](docs/DEPLOYMENT.md#merge-gate)). Every pull request gets Terraform formatting and validation, pull requests that change `infra/` also get a `terraform plan` comment, and deploys run only by manual dispatch.
+GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests, and the shared conformance suite against the controlled implementation (the real service backed by an in-memory provider). It also builds the container image. One aggregate `checks` status passes only when all of these pass; branch protection requires it before merging to `main` (see [Merge gate](docs/DEPLOYMENT.md#merge-gate)). Every pull request gets Terraform formatting, validation and tests, and pull requests that change `infra/` also get a `terraform plan` comment. Every merge to `main` is released automatically by the release workflow; infrastructure changes are applied by hand, with approval.
 
 ## Project Structure
 
@@ -84,7 +84,8 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 - `docs/providers.md`: Provider interface, error translation, dependency setup, and testing approach.
 - `docs/DEPLOYMENT.md`: Deploying, verifying, rolling back, and tearing down the Render deployment, plus the teammate walkthrough.
 - `Dockerfile`, `.dockerignore`: The deployable image: locked runtime dependencies, non-root user, no credentials.
-- `infra/`: Terraform for the Render deployment, with state in HCP Terraform. `release.tf` pins the deployed commit.
+- `infra/`: Terraform for the Render deployment, with state in HCP Terraform. The services run images from GitHub's container registry, pinned by digest; `release.tf` names the image repository, the digest a new service starts on, and the disposable-service toggle. Which digest runs afterwards is set by releases, not Terraform.
+  - `infra/tests/`: `terraform test` checks with a mock Render provider: services start on the given digest, later digests are left to releases, and the disposable toggle.
 - `scripts/build_image.sh`: Builds the release image once, pushes it tagged with its full commit SHA, and reports its digest.
 - `scripts/release.py`: Release steps the release workflow runs: `deploy` points the Render service at an image digest (refusing anything but a digest), deploys it and waits until it is live; `check-ready` waits until `/readyz` is ready and reports the expected commit; `record` creates the release's GitHub Deployment (commit, digest, run, deploy window; `success` only after the smoke check passed); `known-good` prints the latest successful release (`GITHUB_TOKEN=$(gh auth token) uv run python -m scripts.release known-good --repo Tyler-Arciniaga/OSPSD-Team-4 --environment render-production`); `verify-rollback` refuses a commit and digest that were never released successfully.
 - `scripts/disposable_env.sh`: Checks the image in a throwaway container with fake configuration: one it builds from `HEAD`, or an already pushed image given by digest (`IMAGE_REF`).
@@ -95,7 +96,7 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 - `.github/workflows/ci.yml`: Automated linting, formatting, type checking, tests, the conformance suite against the controlled implementation, the container image build, and the aggregate `checks` status that branch protection requires. Reusable from other workflows (`workflow_call`).
 - `.github/workflows/release.yml`: On every push to `main`: reruns the CI checks on that commit (all but the build-only image check, since the release builds the image itself), builds the image once, pushes it to GitHub's container registry tagged with the full commit SHA, checks that exact image (by digest) in a disposable container, then, unless a newer commit has reached `main`, deploys that digest to Render and confirms `/readyz` reports the commit, then runs the smoke check against the live service and records the release as a GitHub Deployment (`success` only if the smoke check passed). One release runs at a time. Started by hand, it can roll back to a known-good release (redeploying its recorded digest, no rebuild) or release to the disposable service.
 - `.github/workflows/terraform-plan.yml`: Checks Terraform formatting and validation on every pull request, and posts `terraform plan` on pull requests that change `infra/` or a Terraform workflow.
-- `.github/workflows/terraform-apply.yml`: Manual, approved apply and deploy of the pinned commit, followed by a plan that must show no changes.
+- `.github/workflows/terraform-apply.yml`: Manual, approved apply of infrastructure changes only (it deploys no code), followed by a plan that must show no changes.
 - `.github/workflows/terraform-destroy.yml`: Manual, approved teardown of everything Terraform created.
 - `AGENTS.md`: Contribution and release workflow.
 
@@ -649,10 +650,16 @@ command for this workflow so all requests share the same cache.
 
 ## Deployment
 
-The service runs on Render, described by Terraform in `infra/`. Pull requests
-show the plan, and deploys are manual and approved. See
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for prerequisites, deploy, verify,
-rollback, teardown, and the teammate walkthrough.
+The service runs on Render, described by Terraform in `infra/`. Every merge
+to `main` is released automatically: checked again, built once into an image
+identified by its digest, deployed by that digest, smoke-checked against the
+real provider, and recorded as a GitHub Deployment. `GET /readyz` reports the
+running commit. A failed smoke check marks the release failed; rolling back
+to the last known-good release is the same workflow started by hand.
+Infrastructure changes are applied by hand with approval. See
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the pipeline, finding the
+running commit, rollback, repairing provider data, the bootstrap, the faulty
+release demonstration, teardown, and the teammate walkthrough.
 
 ## Contributing
 
