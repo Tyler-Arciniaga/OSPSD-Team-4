@@ -43,6 +43,7 @@ avoid overwriting someone else's change.
 
 The service gzips responses for clients that accept it, so a proxy in front
 of it has no reason to re-encode the body and weaken the tag to `W/"..."`.
+Empty responses, such as a delete's `204`, are sent uncompressed.
 
 ### Read freshness and caching
 
