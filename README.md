@@ -36,7 +36,7 @@ something is missing. `GET /healthz` (liveness) and `GET /readyz`
 It is packaged as a container image and deployed to Render with Terraform;
 see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
-GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests. It also builds the container image and checks it in a disposable container. Pull requests that change `infra/` get a `terraform plan` comment, and deploys run only by manual dispatch.
+GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests, and the shared conformance suite against the controlled implementation (the real service backed by an in-memory provider). It also builds the container image and checks it in a disposable container. Pull requests that change `infra/` get a `terraform plan` comment, and deploys run only by manual dispatch.
 
 ## Project Structure
 
@@ -73,6 +73,8 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 - `tests/test_config.py`: Startup configuration checks, including that a server started with a variable missing exits without printing values.
 - `tests/test_health.py`: `/healthz`, `/readyz`, the provider check's caching, and the reported commit.
 - `tests/test_injected_provider.py`: Endpoint tests using supplied fake providers.
+- `tests/controlled/`: The controlled implementation CI runs the conformance suite against: `provider.py` (an in-memory provider that follows the contract, with optional injected faults) and `server.py` (the real app with that provider injected, started with uvicorn).
+- `tests/test_controlled_provider.py`: The in-memory provider's contract behavior, its faults, and the real app running on it.
 - `tests/test_idempotency.py`: Repeated, overlapping, conflicting, expired and restarted keyed creations, unknown provider outcomes, and cache and logging integration.
 - `tests/test_errors.py`: Error response and failure-logging tests using a controlled provider.
 - `tests/expected_errors.py`: Expected error bodies shared by the endpoint tests.
@@ -85,7 +87,7 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 - `scripts/conformance_remote.sh`: Runs the conformance suite against a deployed service.
 - `pyproject.toml`: Python requirement, dependencies, and tool configuration.
 - `uv.lock`: Locked dependency versions for reproducible installation.
-- `.github/workflows/ci.yml`: Automated linting, formatting, type checking, tests, and the container image check.
+- `.github/workflows/ci.yml`: Automated linting, formatting, type checking, tests, the conformance suite against the controlled implementation, and the container image check.
 - `.github/workflows/terraform-plan.yml`: Posts `terraform plan` on pull requests that change `infra/`.
 - `.github/workflows/terraform-apply.yml`: Manual, approved apply and deploy of the pinned commit, followed by a plan that must show no changes.
 - `.github/workflows/terraform-destroy.yml`: Manual, approved teardown of everything Terraform created.
@@ -398,9 +400,25 @@ verification is performed separately as described below.
 
 The shared conformance suite in `contract/tests/conformance/` checks that
 a consumer sees the same behavior from every provider. It sends real HTTP
-requests to a running service and creates real issues, so it is skipped
-(such as during CI) unless `CONFORMANCE_BASE_URL` is set. Start the service
-for one provider, then run:
+requests to a running service, so it is skipped unless
+`CONFORMANCE_BASE_URL` is set.
+
+CI runs it on every push and pull request against the controlled
+implementation: the real service with an in-memory provider injected, so no
+network or credentials are needed. To run that locally:
+
+```bash
+GIT_SHA="$(git rev-parse HEAD)" uv run --locked uvicorn tests.controlled.server:app
+# in another terminal
+CONFORMANCE_BASE_URL=http://127.0.0.1:8000 uv run --locked pytest contract/tests/conformance
+```
+
+Setting `CONTROLLED_FAULT=wrong_title` starts a deliberately broken service
+that the suite must fail against. When the suite grows (rename, delete),
+extend `tests/controlled/provider.py` in the same change so CI keeps passing.
+
+Against a real provider it creates real issues. Start the service for one
+provider, then run:
 
 ```bash
 CONFORMANCE_BASE_URL=http://127.0.0.1:8000 uv run --locked pytest contract/tests/conformance
