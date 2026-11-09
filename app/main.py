@@ -1,4 +1,7 @@
 import hashlib
+import json
+import logging
+import sqlite3
 from collections.abc import Mapping
 from threading import Lock
 from typing import Annotated, Any
@@ -8,8 +11,20 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.dependencies import get_idempotency_store, get_issue_provider, lifespan
+from app.dependencies import (
+    get_idempotency_store,
+    get_issue_provider,
+    get_provider_probe,
+    lifespan,
+)
 from app.errors import log_failure
+from app.health import (
+    CheckResult,
+    LivenessResponse,
+    ProviderProbe,
+    ReadinessResponse,
+    deployed_commit,
+)
 from app.idempotency import (
     IDEMPOTENCY_KEY_PATTERN,
     MAX_IDEMPOTENCY_KEY_LENGTH,
@@ -31,6 +46,8 @@ app = FastAPI(
     title="Issue Tracking Service",
     lifespan=lifespan,
 )
+
+health_logger = logging.getLogger("app.health")
 
 # Makes each PATCH's version check and write one step, so two callers cannot
 # both pass the check. shortcut: one lock per process, serializing every PATCH;
@@ -142,6 +159,55 @@ def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
         exc_info=True,
     )
     return _error_response(500, ErrorCode.INTERNAL_ERROR, "Internal server error")
+
+
+@app.get("/healthz", response_model=LivenessResponse)
+def healthz() -> LivenessResponse:
+    """Liveness: the process is up and serving HTTP. Checks nothing else."""
+    return LivenessResponse(status="ok")
+
+
+@app.get(
+    "/readyz",
+    response_model=ReadinessResponse,
+    responses={503: {"model": ReadinessResponse}},
+)
+def readyz(
+    provider: Annotated[IssueProvider, Depends(get_issue_provider)],
+    store: Annotated[IdempotencyStore, Depends(get_idempotency_store)],
+    probe: Annotated[ProviderProbe, Depends(get_provider_probe)],
+) -> JSONResponse:
+    """Readiness: everything this provider relies on is usable.
+
+    Configuration is validated at startup. The key store counts only when the
+    provider supports idempotent creation; otherwise no request opens it.
+    `provider` is information only and never changes the status code.
+    """
+    store_result: CheckResult = "not_used"
+    if _supports_idempotent_creation(provider):
+        store_result = "ok"
+        try:
+            store.check()
+        except (sqlite3.Error, OSError) as exc:
+            store_result = "failed"
+            health_logger.error(
+                json.dumps(
+                    {
+                        "event": "readiness_check_failed",
+                        "check": "idempotency_store",
+                        "cause": type(exc).__name__,
+                    }
+                )
+            )
+    ready = store_result != "failed"
+    body = ReadinessResponse(
+        status="ready" if ready else "not_ready",
+        # Startup only completes once the configuration has been validated.
+        checks={"config": "ok", "idempotency_store": store_result},
+        provider=probe.status(),
+        commit=deployed_commit(),
+    )
+    return JSONResponse(status_code=200 if ready else 503, content=body.model_dump())
 
 
 @app.get(

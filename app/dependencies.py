@@ -1,29 +1,30 @@
-import os
+import json
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 
 from app.cache import CachedIssueProvider
+from app.config import ConfigError, validate_startup_config
+from app.health import ProviderProbe
 from app.idempotency import IdempotencyStore
 from app.interface import ClosableIssueProvider
 from app.providers.linear_provider import LinearIssueProvider
 from app.providers.trello_provider import TrelloIssueProvider
 from issue_tracker_contract.interface import IssueProvider
 
-# Where idempotency keys are kept when IDEMPOTENCY_DB_PATH is not set.
-DEFAULT_IDEMPOTENCY_DB_PATH = "idempotency.sqlite3"
+logger = logging.getLogger("app.config")
 
 
-def _build_adapter() -> ClosableIssueProvider:
-    """Build the one adapter named by ISSUE_PROVIDER (default: trello).
+def _build_adapter(provider: str) -> ClosableIssueProvider:
+    """Build the adapter for a validated provider name.
 
     Construction sends no request to the provider.
     """
-    choice = os.environ.get("ISSUE_PROVIDER") or "trello"
-    if choice == "trello":
+    if provider == "trello":
         return TrelloIssueProvider()
-    if choice == "linear":
+    if provider == "linear":
         return LinearIssueProvider()
     raise ValueError("ISSUE_PROVIDER must be 'trello' or 'linear'")
 
@@ -32,10 +33,20 @@ def _build_adapter() -> ClosableIssueProvider:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Create the shared provider at startup and release it at shutdown."""
 
+    # Refuse to start with missing configuration. The message names the
+    # variables only, so it is safe in deployment logs.
+    try:
+        config = validate_startup_config()
+    except ConfigError as exc:
+        logger.critical(
+            json.dumps({"event": "startup_config_invalid", "message": str(exc)})
+        )
+        raise
+
     # Create one provider adapter wrapped in a cache.
     # Creating these objects does not send a request to the provider.
     # Each application process gets its own provider and cache.
-    adapter = _build_adapter()
+    adapter = _build_adapter(config.provider)
     app.state.issue_provider = CachedIssueProvider(
         adapter,
         ttl_seconds=30,
@@ -45,9 +56,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # The key store keeps no state in memory, only a file path: every
     # process serving the API must use the same file, on storage that
     # survives restarts. The file is opened only when a request has a key.
-    app.state.idempotency_store = IdempotencyStore(
-        os.environ.get("IDEMPOTENCY_DB_PATH") or DEFAULT_IDEMPOTENCY_DB_PATH
-    )
+    app.state.idempotency_store = IdempotencyStore(config.idempotency_db_path)
+
+    # Readiness reports whether the provider answers, checked at most every
+    # 30 seconds. The check is sent only when /readyz is requested.
+    app.state.provider_probe = ProviderProbe(adapter.ping)
 
     try:
         # Pause this function while the application handles requests.
@@ -58,6 +71,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # This does not delete any issues or other data from the provider.
         del app.state.issue_provider
         del app.state.idempotency_store
+        del app.state.provider_probe
         # Whoever creates the adapter closes it. Every adapter implements
         # close(), so shutdown is always called regardless of the provider configured.
         adapter.close()
@@ -75,3 +89,8 @@ def get_issue_provider(request: Request) -> IssueProvider:
 def get_idempotency_store(request: Request) -> IdempotencyStore:
     """Return the idempotency key store created during application startup."""
     return request.app.state.idempotency_store
+
+
+def get_provider_probe(request: Request) -> ProviderProbe:
+    """Return the provider reachability check created during startup."""
+    return request.app.state.provider_probe

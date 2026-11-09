@@ -135,6 +135,13 @@ class IdempotencyStore:
         connection.execute(_SCHEMA)
         return connection
 
+    def check(self) -> None:
+        """Open the store and create its table if needed; raise if it cannot.
+
+        Used by the readiness check. Writes no key.
+        """
+        self._connect().close()
+
     def _transaction(
         self, work: Callable[[sqlite3.Connection, float], Claim | bool]
     ) -> Claim | bool:

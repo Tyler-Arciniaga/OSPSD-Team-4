@@ -163,6 +163,24 @@ class TrelloIssueProvider:
     def close(self) -> None:
         """Nothing to release: each request opens and closes its own connection."""
 
+    def ping(self) -> bool:
+        """Read the configured list's ID; True only if Trello answers with it."""
+        try:
+            request = Request(
+                f"https://api.trello.com/1/lists/{_target_list_id()}?fields=id",
+                headers=_trello_headers(),
+                method="GET",
+            )
+            with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+                body = json.load(response)
+            return isinstance(body, dict) and isinstance(body.get("id"), str)
+        except (ServiceError, OSError, ValueError):
+            # Missing configuration (ServiceError), an HTTP or network failure
+            # (OSError, including HTTPError and timeouts) or a body that is not
+            # JSON (ValueError) all count as unreachable. Nothing about the
+            # failure is kept since it is provider data.
+            return False
+
     def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
         """Retrieve a Trello card.
 

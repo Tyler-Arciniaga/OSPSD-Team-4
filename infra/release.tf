@@ -1,0 +1,36 @@
+# What is deployed. A deploy request is a pull request that changes this file:
+# its plan shows the change, and after merge the manual apply workflow
+# deploys exactly this commit. None of these values are secret.
+
+variable "commit_sha" {
+  description = "Full 40-character Git commit Render builds and runs. It must be pushed and in var.branch's history."
+  type        = string
+  default     = "01119e3c0b3be670ebe88ad383e67f15a4cec8c8"
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{40}$", var.commit_sha))
+    error_message = "commit_sha must be a full, lowercase 40-character commit SHA."
+  }
+}
+
+variable "branch" {
+  description = "Branch Render builds from. commit_sha must be in its history."
+  type        = string
+  default     = "main"
+}
+
+variable "secrets_env_group_id" {
+  description = <<-EOT
+    ID of the Render Environment Group, created by hand in the dashboard,
+    that holds the provider credentials (local.secret_env_var_names in
+    main.tf). Only the ID is here: the values never enter Terraform or its
+    state.
+  EOT
+  type        = string
+  default     = "evg-dboft06417fc7384rjfg"
+
+  validation {
+    condition     = can(regex("^evg-[a-z0-9]+$", var.secrets_env_group_id))
+    error_message = "secrets_env_group_id must be a Render environment group ID (evg-...)."
+  }
+}

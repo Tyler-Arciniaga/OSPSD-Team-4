@@ -1,0 +1,188 @@
+# Apply the reviewed infrastructure and deploy the pinned commit.
+#
+# Manual only: it runs when someone starts it from the Actions tab (or
+# `gh workflow run`), and then waits for approval on the render-production
+# environment. No push, merge, schedule or other workflow ever triggers it,
+# and Render's own auto-deploy is off (infra/main.tf).
+#
+# Steps: plan and apply the configuration on main, deploy exactly the
+# commit in infra/release.tf, check the deployed service reports that
+# commit, then plan again and fail unless it shows no changes, which proves a
+# repeated apply with unchanged inputs changes nothing.
+
+name: Terraform apply and deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: "Commit to deploy. Must equal commit_sha in infra/release.tf on main (a confirmation)."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# One apply at a time; never cancel one halfway.
+concurrency:
+  group: terraform-render
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    # Only reviewed, merged configuration is applied.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Required reviewers on this environment approve the run before it starts.
+    environment: render-production
+
+    defaults:
+      run:
+        working-directory: infra
+
+    env:
+      TF_IN_AUTOMATION: "1"
+      TF_INPUT: "0"
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+      RENDER_API: https://api.render.com/v1
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v7
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4.0.1
+        with:
+          terraform_version: "1.17.1"
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+          terraform_wrapper: false
+
+      - name: Initialize
+        run: terraform init -input=false
+
+      # The plan file stays on this runner and is deleted with it. It is
+      # never uploaded, because plan files can hold sensitive values.
+      - name: Plan
+        run: |
+          terraform plan -input=false -no-color -lock-timeout=5m -out=tfplan | tee plan.txt
+          {
+            echo "## Plan applied by this run"
+            echo
+            echo '```'
+            cat plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check the confirmation matches infra/release.tf
+        env:
+          CONFIRMED: ${{ inputs.commit_sha }}
+        run: |
+          pinned="$(terraform show -json tfplan | jq -r '.planned_values.outputs.commit_sha.value')"
+          if [ "$pinned" != "$CONFIRMED" ]; then
+            echo "Confirmation '$CONFIRMED' does not match commit_sha '$pinned' in infra/release.tf."
+            echo "Nothing was applied."
+            exit 1
+          fi
+          echo "Deploying $pinned."
+
+      # Applies exactly the plan shown above.
+      - name: Apply
+        run: terraform apply -input=false -no-color -lock-timeout=5m tfplan
+
+      - name: Deploy the pinned commit
+        id: deploy
+        run: |
+          service_id="$(terraform output -raw service_id)"
+          commit="$(terraform output -raw commit_sha)"
+          echo "url=$(terraform output -raw service_url)" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+          render() {
+            curl -fsS -H "Authorization: Bearer $RENDER_API_KEY" -H "Accept: application/json" "$@"
+          }
+
+          response="$(render -X POST -H "Content-Type: application/json" \
+            -d "{\"commitId\": \"$commit\"}" "$RENDER_API/services/$service_id/deploys")"
+          deploy_id="$(jq -r '.id // empty' <<<"$response")"
+          if [ -z "$deploy_id" ]; then
+            # The deploy was queued without a body: find it by commit.
+            deploy_id="$(render "$RENDER_API/services/$service_id/deploys?limit=10" \
+              | jq -r --arg c "$commit" '[.[].deploy | select(.commit.id == $c)][0].id // empty')"
+          fi
+          if [ -z "$deploy_id" ]; then
+            echo "Render did not report a deploy for $commit."
+            exit 1
+          fi
+          echo "Deploy $deploy_id started for $commit."
+
+          # A free-instance Docker build takes several minutes.
+          deadline=$((SECONDS + 1800))
+          while true; do
+            status="$(render "$RENDER_API/services/$service_id/deploys/$deploy_id" | jq -r '.status')"
+            echo "$(date -u +%H:%M:%S) $status"
+            case "$status" in
+              live) break ;;
+              build_failed | update_failed | pre_deploy_failed | canceled | deactivated)
+                echo "Deploy $deploy_id ended as $status; see the Render dashboard logs."
+                exit 1 ;;
+            esac
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "Deploy $deploy_id did not go live within 30 minutes."
+              exit 1
+            fi
+            sleep 20
+          done
+
+      - name: Check the service runs the pinned commit
+        env:
+          SERVICE_URL: ${{ steps.deploy.outputs.url }}
+          COMMIT: ${{ steps.deploy.outputs.commit }}
+        run: |
+          # A free instance can take about a minute to wake up.
+          for _ in $(seq 1 30); do
+            curl -fsS --max-time 30 "$SERVICE_URL/healthz" > /dev/null && break
+            sleep 10
+          done
+          curl -fsS --max-time 30 "$SERVICE_URL/healthz"
+          echo
+          ready="$(curl -sS --max-time 30 "$SERVICE_URL/readyz")"
+          echo "$ready"
+          deployed="$(jq -r '.commit' <<<"$ready")"
+          if [ "$deployed" != "$COMMIT" ]; then
+            echo "/readyz reports commit '$deployed', expected '$COMMIT'."
+            exit 1
+          fi
+          {
+            echo "## Deployed"
+            echo
+            echo "- URL: $SERVICE_URL"
+            echo "- Commit: \`$COMMIT\`"
+            echo "- /readyz: \`$ready\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Proof that applying again with unchanged inputs changes nothing:
+      # exit code 0 means no changes, 2 means the next apply would change
+      # something.
+      - name: Plan again (must show no changes)
+        run: |
+          set +e
+          terraform plan -input=false -no-color -lock-timeout=5m -detailed-exitcode | tee replan.txt
+          status=${PIPESTATUS[0]}
+          set -e
+          {
+            echo "## Second plan (idempotency check)"
+            echo
+            echo '```'
+            cat replan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -eq 0 ]; then
+            echo "No changes: a repeated apply would do nothing."
+          elif [ "$status" -eq 2 ]; then
+            echo "The second plan still shows changes; a repeated apply would change something."
+            exit 1
+          else
+            exit "$status"
+          fi

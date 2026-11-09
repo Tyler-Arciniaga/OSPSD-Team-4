@@ -1,0 +1,48 @@
+# Only what the image needs is sent to the build: pyproject.toml, uv.lock,
+# contract/ (without its tests) and app/. Everything else stays out, above
+# all credentials, Git history and Terraform state.
+
+# Credentials and local configuration
+.env
+.env.*
+**/.env
+**/.env.*
+
+# Version control and CI
+.git
+.gitignore
+.github
+
+# Local environments and caches
+.venv
+**/__pycache__
+**/*.py[cod]
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.DS_Store
+
+# Local data
+*.sqlite3
+*.sqlite3-*
+
+# Infrastructure and its state
+infra
+.terraform
+**/.terraform
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+*.tfplan
+
+# Not run by the service
+tests
+contract/tests
+docs
+scripts
+notes.md
+CLAUDE.md
+AGENTS.md
+Dockerfile
+.dockerignore

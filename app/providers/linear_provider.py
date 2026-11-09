@@ -49,6 +49,15 @@ query GetIssue($id: String!) {
 }
 """
 
+# The cheapest authenticated query: the API key's own user.
+PING_QUERY = """
+query Ping {
+  viewer {
+    id
+  }
+}
+"""
+
 CREATE_ISSUE_MUTATION = """
 mutation CreateIssue($input: IssueCreateInput!) {
   issueCreate(input: $input) {
@@ -198,6 +207,20 @@ class LinearIssueProvider:
     def close(self) -> None:
         """Close the HTTP client. Later calls fail as an unreachable provider."""
         self._client.close()
+
+    def ping(self) -> bool:
+        """Ask Linear for the key's user; True only on a clean answer."""
+        try:
+            status, body = self._send(_credentials(), PING_QUERY, {})
+            if status != 200 or _error_codes(body):
+                return False
+            return isinstance(body["data"]["viewer"]["id"], str)
+        except (ServiceError, KeyError, TypeError):
+            # Missing configuration or a network failure (ServiceError, from
+            # `_credentials` and `_send`) or an unexpected body (KeyError,
+            # TypeError) all count as unreachable. Nothing about the failure
+            # is kept since it is provider data.
+            return False
 
     def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
         """Retrieve a Linear issue.

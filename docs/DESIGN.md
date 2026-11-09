@@ -279,6 +279,14 @@ One Linear-specific consequence (Observed): a GraphQL response can be HTTP 200 a
 - **Data exposure.** The only user content the service handles is the issue title. It is returned to the caller who sent it and sent to the chosen provider. It is not logged.  
 - **Failure context without sensitive payloads.** `log_failure` writes one JSON line with the operation, error code, status, whether the provider was involved, a short cause and the write outcome. By design `cause` is a short label such as `timeout` or the exception class name, never a message, URL, credential or request body. The Linear adapter must keep to this: no GraphQL query text, variables, response body or key in any log line or `ServiceError` message (Proposal).  
 - **Idempotency data.** The raw `Idempotency-Key` is stored nowhere. Only a hash is kept (HW1).
+- **Startup configuration check (HW2).** Before building an adapter, the service checks that every variable the selected provider needs is set and not empty:
+  - Trello: `TRELLO_API_KEY`, `TRELLO_TOKEN` and `TRELLO_LIST_ID`.
+  - Linear: `LINEAR_API_KEY` and `LINEAR_TEAM_ID`.
+  - For a provider that uses the idempotency store (Trello), also that the `IDEMPOTENCY_DB_PATH` directory is writable.
+
+  If anything is missing, the service exits with one log line naming the variables. The line never includes a value, path or unrecognised `ISSUE_PROVIDER` value (`app/config.py`). The adapters' per-call checks remain as a second line of defense.
+- **Secrets in the deployment (HW2).** Provider credentials for the Render deployment live only in a Render environment group created by hand. Terraform links the group by its ID and never reads its values. That resource's state holds two IDs. The service's own variables in Terraform are configuration only (`ISSUE_PROVIDER`, `IDEMPOTENCY_DB_PATH`). The image contains no credentials, `.env` file or Git history (`.dockerignore`). Terraform state lives in HCP Terraform, and state and plan files are never committed or uploaded as CI artifacts. See [docs/DEPLOYMENT.md](DEPLOYMENT.md#configuration-and-secrets) for who can read each value.
+- **Health responses (HW2).** `/healthz` and `/readyz` carry statuses, a provider reachability word and the commit ID only: no credentials, configuration values or provider text.
 
 ### 5.3 Limits and cleanup
 
@@ -315,10 +323,28 @@ Every choice below favors tools that are free, need no payment method, and take 
 | --- | --- | --- | --- | --- |
 | Provisioning | Terraform | Simple, covered in lecture, and keeps the deployment reviewable in the repository. | Tyler | $0 |
 | Hosting | Render, free web service, one instance | Free and no payment method needed. A single instance matches our design, because the update lock and read cache live in one process. | Tyler | $0 |
-| CI and delivery | GitHub Actions (HW1 already runs lint and tests with a locked `uv` environment). We add a container build and a deploy step. | Already in use, so no new account. | N/A | $0 |
+| CI and delivery | GitHub Actions (HW1 already runs lint and tests with a locked `uv` environment). HW2 adds a container build check on every push, a `terraform plan` comment on pull requests that change `infra/`, and a manual, approved apply-and-deploy workflow. | Already in use, so no new account. | N/A | $0 |
+| Infrastructure state | HCP Terraform free plan, workspace in Local execution mode | Shared and locked state for the team without storing the Render key in HCP: plans and applies run where the key is. | Tyler | $0 |
 | Telemetry | OpenTelemetry SDK, sent to Grafana Cloud's free plan | Free plan with no credit card: 10k metric series, 50 GB each of logs and traces, 14 day retention. | Tyler | $0 |
 
-**Teardown date:** 11/20/2026. All resources are removed on this date (unless a grader requests an extension), with `terraform destroy` and by deleting the Grafana Cloud stack.
+**Teardown date:** 11/20/2026. All resources are removed on this date (unless a grader requests an extension), with `terraform destroy` and by deleting the Grafana Cloud stack. `terraform destroy` runs through a manual, approved workflow, so any teammate can run it without a Render key. The resources made by hand are removed by the checklist in [docs/DEPLOYMENT.md](DEPLOYMENT.md#tear-down): the environment group, API keys and tokens, the HCP workspace, and the GitHub secrets.
+
+**Deployment flow (HW2).** The artifact is the container image Render builds from the `Dockerfile` at one pinned commit, with dependencies from `uv.lock`.
+- `infra/release.tf` pins the commit. A deploy is a pull request that changes it, and the plan is posted on the pull request.
+- After merge, a manual workflow with a required approval:
+  1. applies exactly the reviewed plan;
+  2. deploys that commit through Render's deploy API;
+  3. checks that `/readyz` reports it;
+  4. plans again and fails unless nothing would change.
+- Nothing deploys on push or merge. Render's auto-deploy is off, and the provider's redeploy after a settings change is disabled (`skip_deploy_after_service_update`).
+- The pin goes through the deploy API because Render's Terraform provider can only name a branch, not a commit.
+
+**Liveness and readiness (HW2).** Render's health check uses `/healthz`, which only says the process is serving. A brief provider outage therefore never makes Render restart a healthy service in a loop. `/readyz` reports whether the process can serve:
+- 503 only if a dependency the configured provider uses is broken. Today that is the idempotency store, for Trello.
+- The provider's reachability is reported for information only (`reachable`, `unreachable` or `unknown`). It never changes the status code, and it is checked at most every 30 seconds with the usual 10 second timeout.
+- The response also reports the deployed commit.
+
+See [Health checks](api.md#health-checks).
 
 **Hosting consequences we accept**
 
@@ -477,6 +503,9 @@ No open question affects the shared contract. Everything which previously blocke
 See section 6.4 followed by 8.1 for the team’s next actions.
 
 ### Change Log
+
+- HW2 deployment (sections 5.2 and 5.5): startup configuration check, `/healthz` and `/readyz`, container image, Terraform for Render with HCP Terraform state, plan on pull requests, and a manual, approved apply and deploy. Secrets live in a hand-made Render environment group, which keeps their values out of Terraform state. See [docs/DEPLOYMENT.md](DEPLOYMENT.md).
+- Every adapter now implements `ping()` (on `ClosableIssueProvider`), used only for the readiness report.
 
 - Titles: a provider may trim a title's leading and trailing whitespace when storing it (section 3.2). The conformance suite found that Linear does, so the contract now promises the title as stored, consistent across create and later reads, rather than preserved whitespace.
 - Linear IDs: the service accepts only Linear's full UUID `id`, not short identifiers such as `TYL-5` (section 6.7). A returned issue's `id` therefore always equals the requested ID, as with Trello.

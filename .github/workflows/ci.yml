@@ -49,3 +49,16 @@ jobs:
       # Run the project's tests inside that environment.
       - name: Run tests
         run: uv run --locked pytest
+
+  # Build the deployable image and check it in a throwaway container with
+  # fake configuration (scripts/disposable_env.sh). Nothing is pushed or
+  # deployed: deploys are manual (terraform-apply.yml).
+  docker-image:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Build the image and check it in a disposable container
+        run: scripts/disposable_env.sh

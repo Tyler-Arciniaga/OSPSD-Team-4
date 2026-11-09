@@ -31,6 +31,10 @@ class FakeIssueProvider:
     def create_issue(self, title: str) -> Issue:
         raise AssertionError("This test should not create issues")
 
+    def ping(self) -> bool:
+        """Startup wires every adapter it builds into readiness."""
+        return True
+
     def close(self) -> None:
         """Startup closes every adapter it builds; this one holds nothing."""
 
