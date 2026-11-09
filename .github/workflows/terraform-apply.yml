@@ -103,22 +103,30 @@ jobs:
             curl -fsS -H "Authorization: Bearer $RENDER_API_KEY" -H "Accept: application/json" "$@"
           }
 
+          # A free-instance Docker build takes several minutes, and a queued
+          # deploy waits for the one ahead of it. One limit covers both.
+          deadline=$((SECONDS + 1800))
+
           response="$(render -X POST -H "Content-Type: application/json" \
             -d "{\"commitId\": \"$commit\"}" "$RENDER_API/services/$service_id/deploys")"
           deploy_id="$(jq -r '.id // empty' <<<"$response")"
-          if [ -z "$deploy_id" ]; then
-            # The deploy was queued without a body: find it by commit.
-            deploy_id="$(render "$RENDER_API/services/$service_id/deploys?limit=10" \
+
+          # Render answers 202 Queued, with no body, while another deploy is
+          # running. That always happens on the first apply: creating a
+          # service starts a build of the branch head. The queued deploy is
+          # listed once it starts, so look for it by commit until then.
+          while [ -z "$deploy_id" ]; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "Render did not start a deploy for $commit within 30 minutes."
+              exit 1
+            fi
+            echo "$(date -u +%H:%M:%S) deploy for $commit queued; waiting for it to start"
+            sleep 20
+            deploy_id="$(render "$RENDER_API/services/$service_id/deploys?limit=20" \
               | jq -r --arg c "$commit" '[.[].deploy | select(.commit.id == $c)][0].id // empty')"
-          fi
-          if [ -z "$deploy_id" ]; then
-            echo "Render did not report a deploy for $commit."
-            exit 1
-          fi
+          done
           echo "Deploy $deploy_id started for $commit."
 
-          # A free-instance Docker build takes several minutes.
-          deadline=$((SECONDS + 1800))
           while true; do
             status="$(render "$RENDER_API/services/$service_id/deploys/$deploy_id" | jq -r '.status')"
             echo "$(date -u +%H:%M:%S) $status"
