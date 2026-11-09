@@ -72,6 +72,40 @@ They are already done for this team; a teammate only needs the
    - **Secrets and variables → Actions → Variables:** `RENDER_OWNER_ID`.
    - **Environments → New environment** `render-production`: add the people allowed to approve deploys as **Required reviewers**, and limit **Deployment branches** to `main`.
 
+## Merge gate
+
+A change reaches `main` only through a pull request whose checks passed.
+
+| Check | Workflow | Runs on | Required to merge |
+| --- | --- | --- | --- |
+| `checks`: passes only if every job below passed | CI (`ci.yml`) | every push and pull request | **yes** |
+| `tests`: `ruff check`, `ruff format --check`, mypy, pytest | CI | every push and pull request | through `checks` |
+| `conformance-controlled`: the conformance suite against the real service backed by an in-memory provider | CI | every push and pull request | through `checks` |
+| `docker-image`: builds the image and checks it in a disposable container | CI | every push and pull request | through `checks` |
+| `plan`: `terraform fmt`, `validate`, plus `plan` posted on the pull request when it changes `infra/` or a Terraform workflow | Terraform plan | every pull request | no; review the posted plan |
+
+Pull requests from forks run with no secrets: every workflow uses
+`pull_request`, never `pull_request_target`. They get every CI check, and
+Terraform formatting and validation without the plan.
+
+### Branch protection (repository admin, once)
+
+Only a repository admin can do this. Do it after one CI run has finished on a
+branch, so GitHub offers `checks` as a status name.
+
+1. **Settings → Branches → Add classic branch protection rule**, branch name
+   pattern `main`.
+2. Tick **Require a pull request before merging**. Set **Required approvals**
+   to `0`: reviews are a team rule (AGENTS.md), not a setting.
+3. Tick **Require status checks to pass before merging**, search for
+   `checks` and add it (the one from **CI**). Leave the other CI jobs out:
+   `checks` already requires them.
+4. Tick **Do not allow bypassing the above settings**, so admins follow the
+   same rule.
+5. Leave **Allow force pushes** and **Allow deletions** unticked.
+6. **Create**. Then check it works: a pull request with a failing test shows
+   `checks` failing and the merge button blocked.
+
 ## Deploy
 
 Deploys are manual. Merges and pushes never deploy, and Render's auto-deploy
