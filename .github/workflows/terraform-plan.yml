@@ -1,8 +1,12 @@
 # Preview infrastructure changes before they are applied.
 #
-# On every pull request that touches infra/, this checks formatting, validates
-# the configuration and runs `terraform plan` against the shared state, then
-# posts the plan on the pull request for review. It never applies anything:
+# On every pull request this checks formatting and validates the
+# configuration. When the pull request touches infra/ or the Terraform
+# workflows, it also runs `terraform plan` against the shared state and posts
+# the plan on the pull request for review. Pull requests that touch neither
+# skip the plan, and never receive the HCP token or the Render API key, so the
+# check reports on every pull request without blocking unrelated ones. It
+# never applies anything:
 # applying is manual (terraform-apply.yml). The plan is kept only as text;
 # no plan file is saved or uploaded, because plan files can hold sensitive
 # values.
@@ -11,11 +15,6 @@ name: Terraform plan
 
 on:
   pull_request:
-    paths:
-      - "infra/**"
-      - ".github/workflows/terraform-plan.yml"
-      - ".github/workflows/terraform-apply.yml"
-      - ".github/workflows/terraform-destroy.yml"
 
 permissions:
   contents: read
@@ -38,31 +37,62 @@ jobs:
     env:
       TF_IN_AUTOMATION: "1"
       TF_INPUT: "0"
-      # Read by the Render provider. Secrets are not given to pull requests
-      # from forks; those get format and validation checks only.
-      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
-      RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+      # Secrets are not given to pull requests from forks; those get format
+      # and validation checks only.
       HAS_CREDENTIALS: ${{ secrets.TF_API_TOKEN != '' && secrets.RENDER_API_KEY != '' }}
 
     steps:
+      # Full history, so the pull request can be compared with its base.
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Compared from the merge base, so changes merged into the base branch
+      # since the pull request started do not count as its own.
+      - name: Check whether the pull request changes infrastructure
+        id: changes
+        working-directory: .
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA" \
+            | grep -E '^(infra/|\.github/workflows/terraform-)' || true)"
+          if [ -n "$changed" ]; then
+            echo "Infrastructure files changed:"
+            echo "$changed"
+            echo "infra=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No infrastructure changes: formatting and validation only, no plan."
+            echo "infra=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Terraform plan"
+              echo
+              echo "Skipped: this pull request does not change \`infra/\` or the Terraform workflows."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       # The same Terraform version as infra/versions.tf. The token lets
-      # Terraform read and lock the shared state in HCP Terraform.
+      # Terraform read and lock the shared state in HCP Terraform; it is
+      # given only when a plan will run.
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v4.0.1
         with:
           terraform_version: "1.17.1"
-          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+          cli_config_credentials_token: ${{ steps.changes.outputs.infra == 'true' && secrets.TF_API_TOKEN || '' }}
           terraform_wrapper: false
 
       - name: Check formatting
         run: terraform fmt -check -recursive -diff
 
       - name: Initialize
+        env:
+          INFRA_CHANGED: ${{ steps.changes.outputs.infra }}
         run: |
-          if [ "$HAS_CREDENTIALS" = "true" ]; then
+          if [ "$INFRA_CHANGED" != "true" ]; then
+            terraform init -input=false -backend=false
+          elif [ "$HAS_CREDENTIALS" = "true" ]; then
             terraform init -input=false
           else
             echo "No HCP Terraform or Render credentials (pull request from a fork?):"
@@ -75,7 +105,11 @@ jobs:
 
       - name: Plan
         id: plan
-        if: env.HAS_CREDENTIALS == 'true'
+        if: env.HAS_CREDENTIALS == 'true' && steps.changes.outputs.infra == 'true'
+        env:
+          # Read by the Render provider, only in this step.
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
         run: |
           set +e
           terraform plan -input=false -no-color -lock-timeout=5m > plan.txt 2>&1

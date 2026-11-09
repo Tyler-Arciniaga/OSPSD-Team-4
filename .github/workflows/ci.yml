@@ -3,10 +3,14 @@
 
 name: CI
 
-# Run when commits are pushed or pull requests are opened or updated.
+# Run when commits are pushed or pull requests are opened or updated. The
+# release workflow also calls it (workflow_call) on the exact commit it is
+# about to build and deploy, so a commit cannot deploy without passing these
+# checks, even if it reached main without a pull request.
 on:
   push:
   pull_request:
+  workflow_call:
 
 # Allow the workflow to read the repository.
 permissions:
@@ -117,3 +121,25 @@ jobs:
 
       - name: Build the image and check it in a disposable container
         run: scripts/disposable_env.sh
+
+  # The one status that branch protection requires (docs/DEPLOYMENT.md#merge-gate).
+  # It passes only when every job above succeeded; a failed, cancelled or
+  # skipped job fails it. Add each new check job to `needs`.
+  checks:
+    if: always()
+    needs: [tests, conformance-controlled, docker-image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Require every check to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$RESULTS"
+          not_passed="$(jq -r '[to_entries[] | select(.value.result != "success") | .key] | join(", ")' <<<"$RESULTS")"
+          if [ -n "$not_passed" ]; then
+            echo "Did not pass: $not_passed"
+            exit 1
+          fi
+          echo "All checks passed."
