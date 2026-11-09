@@ -103,6 +103,11 @@ jobs:
       - name: Validate
         run: terraform validate -no-color
 
+      # infra/tests: how images are pinned, against a mock Render provider.
+      # No credentials or network beyond downloading the provider.
+      - name: Test
+        run: terraform test -no-color
+
       - name: Plan
         id: plan
         if: env.HAS_CREDENTIALS == 'true' && steps.changes.outputs.infra == 'true'
@@ -146,7 +151,7 @@ jobs:
               marker,
               `### Terraform plan ${result} for \`${context.sha.slice(0, 7)}\``,
               "",
-              "Review this before applying. Applying is manual: run the **Terraform apply and deploy** workflow from `main` after merging.",
+              "Review this before applying. Applying is manual: run the **Terraform apply** workflow from `main` after merging.",
               "",
               "<details open><summary>Plan</summary>",
               "",
