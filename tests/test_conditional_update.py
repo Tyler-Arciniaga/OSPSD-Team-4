@@ -159,3 +159,21 @@ def test_failed_fresh_read_prevents_conditional_write(
         assert store.updates == 0
         # A failed refresh must not leave the old successful value available.
         assert client.get(f"/issues/{ISSUE_ID}").status_code == status
+
+
+def test_responses_with_an_etag_forbid_proxy_transforms(
+    store: InMemoryProvider,
+) -> None:
+    # A compressing proxy (Render's Cloudflare edge) otherwise weakens the
+    # ETag to W/"...", and If-Match then never matches it.
+    client = TestClient(app)
+    read = client.get(f"/issues/{ISSUE_ID}")
+    assert read.headers["Cache-Control"] == "no-transform"
+
+    updated = client.patch(
+        f"/issues/{ISSUE_ID}",
+        json={"title": "Changed"},
+        headers={"If-Match": read.headers["ETag"]},
+    )
+    assert updated.status_code == 200
+    assert updated.headers["Cache-Control"] == "no-transform"

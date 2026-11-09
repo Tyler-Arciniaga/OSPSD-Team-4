@@ -287,4 +287,6 @@ of your own.
 | Service exits at start with "Missing required configuration for trello: …" | The named variable is missing from the environment group, or the group is not linked. The message never contains values. |
 | `/readyz` shows `provider: unreachable` | The Trello token expired or was revoked, the list ID is wrong, or Trello is down. Service status stays 200. |
 | Destroy run shows the job as skipped | The confirmation was not exactly `destroy`, or the run was not started from `main`. Nothing was deleted. |
+| Apply waits on "deploy … queued; waiting for it to start" | Normal on the first apply: creating the service starts a build of the branch head, and the pinned deploy waits behind it. |
+| `ETag` arrives as `W/"..."` and `If-Match` updates fail with 412 | Render's Cloudflare edge compressed the response and weakened the tag. The service sends `Cache-Control: no-transform` to prevent this; check that header is present on the deployed response. |
 | Second plan shows changes | Something changed outside Terraform, for example in the dashboard. Read the diff. Either revert the dashboard change or bring the configuration in line through a pull request. |

@@ -60,6 +60,17 @@ def _etag(issue: Issue) -> str:
     return f'"{hashlib.sha256(issue.model_dump_json().encode()).hexdigest()[:16]}"'
 
 
+def _set_version_headers(response: Response, issue: Issue) -> None:
+    """Send the issue's ETag, and ask proxies to pass the response through unchanged.
+
+    `no-transform` stops a proxy that compresses responses (Render's edge,
+    Cloudflare) from re-encoding the body and weakening the ETag to W/"...",
+    which If-Match would then not match (docs/DEPLOYMENT.md#troubleshooting).
+    """
+    response.headers["ETag"] = _etag(issue)
+    response.headers["Cache-Control"] = "no-transform"
+
+
 def _error_responses(*statuses: int) -> dict[int | str, dict[str, Any]]:
     """Document the given error statuses with the shared error shape."""
     return {status: {"model": ErrorResponse} for status in statuses}
@@ -222,7 +233,7 @@ def get_issue(
 ) -> Issue:
     """Retrieve an issue by its ID using the supplied provider."""
     issue = provider.get_issue(issue_id)
-    response.headers["ETag"] = _etag(issue)
+    _set_version_headers(response, issue)
     return issue
 
 
@@ -252,7 +263,7 @@ def update_issue(
                 cause="version_mismatch",
             )
         issue = provider.update_issue(issue_id, changes)
-    response.headers["ETag"] = _etag(issue)
+    _set_version_headers(response, issue)
     return issue
 
 

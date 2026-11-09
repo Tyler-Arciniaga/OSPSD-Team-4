@@ -41,6 +41,10 @@ The response also carries an `ETag` header naming the issue's current
 version. Pass it to [Update an issue](#update-an-issue) as `If-Match` to
 avoid overwriting someone else's change.
 
+Responses that carry an `ETag` also send `Cache-Control: no-transform`, so a
+proxy in front of the service does not re-encode the body and weaken the tag
+to `W/"..."`.
+
 ### Read freshness and caching
 
 A successful GET may return a saved result for up to 30 seconds after its
