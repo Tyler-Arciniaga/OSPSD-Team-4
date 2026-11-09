@@ -41,9 +41,8 @@ The response also carries an `ETag` header naming the issue's current
 version. Pass it to [Update an issue](#update-an-issue) as `If-Match` to
 avoid overwriting someone else's change.
 
-Responses that carry an `ETag` also send `Cache-Control: no-transform`, so a
-proxy in front of the service does not re-encode the body and weaken the tag
-to `W/"..."`.
+The service gzips responses for clients that accept it, so a proxy in front
+of it has no reason to re-encode the body and weaken the tag to `W/"..."`.
 
 ### Read freshness and caching
 
