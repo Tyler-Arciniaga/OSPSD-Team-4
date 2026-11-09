@@ -3,7 +3,9 @@
 # Stages, each starting only if the one before passed:
 #   1. ci     Every CI check, again, on this exact commit (ci.yml), so a
 #             commit cannot be released without passing them, even if it
-#             reached main without a pull request.
+#             reached main without a pull request. The build-only image
+#             check is skipped: stage 2 builds the real image, and fails the
+#             release if it does not build.
 #   2. build  Build the image once, push it tagged with the full commit SHA,
 #             and capture its digest. Then check that exact image, pulled back
 #             from the registry by digest, in a disposable container. Nothing
@@ -25,6 +27,8 @@ permissions:
 jobs:
   ci:
     uses: ./.github/workflows/ci.yml
+    with:
+      skip_image_build: true
     permissions:
       contents: read
 

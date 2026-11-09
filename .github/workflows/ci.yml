@@ -11,6 +11,14 @@ on:
   push:
   pull_request:
   workflow_call:
+    inputs:
+      skip_image_build:
+        description: >-
+          Skip the docker-image job. The release workflow sets this because it
+          builds the deployable image itself right after these checks, and
+          that build fails the release if the image does not build.
+        type: boolean
+        default: false
 
 # Allow the workflow to read the repository.
 permissions:
@@ -114,6 +122,8 @@ jobs:
   # is deployed, pushes it, and checks that exact image in a disposable
   # container before deploying it.
   docker-image:
+    # On push and pull_request there are no inputs, so this always runs.
+    if: ${{ !inputs.skip_image_build }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -131,7 +141,8 @@ jobs:
 
   # The one status that branch protection requires (docs/DEPLOYMENT.md#merge-gate).
   # It passes only when every job above succeeded; a failed, cancelled or
-  # skipped job fails it. Add each new check job to `needs`.
+  # skipped job fails it. The one exception is docker-image when the caller
+  # asked to skip it. Add each new check job to `needs`.
   checks:
     if: always()
     needs: [tests, conformance-controlled, docker-image]
@@ -142,9 +153,13 @@ jobs:
       - name: Require every check to pass
         env:
           RESULTS: ${{ toJSON(needs) }}
+          SKIP_ALLOWED: ${{ inputs.skip_image_build && 'docker-image' || '' }}
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$RESULTS"
-          not_passed="$(jq -r '[to_entries[] | select(.value.result != "success") | .key] | join(", ")' <<<"$RESULTS")"
+          not_passed="$(jq -r --arg allowed "$SKIP_ALLOWED" '[to_entries[]
+            | select(.value.result != "success")
+            | select((.value.result == "skipped" and .key == $allowed) | not)
+            | .key] | join(", ")' <<<"$RESULTS")"
           if [ -n "$not_passed" ]; then
             echo "Did not pass: $not_passed"
             exit 1

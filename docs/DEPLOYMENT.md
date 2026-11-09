@@ -81,7 +81,7 @@ A change reaches `main` only through a pull request whose checks passed.
 | `checks`: passes only if every job below passed | CI (`ci.yml`) | every push and pull request | **yes** |
 | `tests`: `ruff check`, `ruff format --check`, mypy, pytest | CI | every push and pull request | through `checks` |
 | `conformance-controlled`: the conformance suite against the real service backed by an in-memory provider | CI | every push and pull request | through `checks` |
-| `docker-image`: builds the image and checks it in a disposable container | CI | every push and pull request | through `checks` |
+| `docker-image`: builds the image (the release workflow checks the pushed image in a disposable container) | CI | every push and pull request | through `checks` |
 | `plan`: `terraform fmt`, `validate`, plus `plan` posted on the pull request when it changes `infra/` or a Terraform workflow | Terraform plan | every pull request | no; review the posted plan |
 
 Pull requests from forks run with no secrets: every workflow uses
@@ -203,6 +203,14 @@ scripts/disposable_env.sh
 It builds the image from `HEAD`, runs it with fake configuration, and checks
 these points. Then it removes the container and image.
 
+To check an image that was already pushed, pin it by digest; the script
+refuses a tag:
+
+```bash
+IMAGE_REF=ghcr.io/tyler-arciniaga/ospsd-team4-issue-service@sha256:<digest> \
+EXPECTED_COMMIT=<commit> scripts/disposable_env.sh
+```
+
 - The image records its commit.
 - It runs as a non-root user.
 - It contains no `.env`, `.git` or Terraform files.
@@ -211,7 +219,9 @@ these points. Then it removes the container and image.
 - `/healthz` and `/readyz` return 200 while the provider is unreachable.
 - The logs contain no credential.
 
-CI runs the same script on every push and pull request.
+The release workflow runs it on every release, on the image it just pushed,
+pulled back from the registry by digest, before anything is deployed. Pull
+requests only build the image.
 
 ## Roll back
 

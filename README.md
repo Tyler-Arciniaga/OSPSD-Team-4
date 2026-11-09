@@ -36,7 +36,7 @@ something is missing. `GET /healthz` (liveness) and `GET /readyz`
 It is packaged as a container image and deployed to Render with Terraform;
 see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
-GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests, and the shared conformance suite against the controlled implementation (the real service backed by an in-memory provider). It also builds the container image and checks it in a disposable container. One aggregate `checks` status passes only when all of these pass; branch protection requires it before merging to `main` (see [Merge gate](docs/DEPLOYMENT.md#merge-gate)). Every pull request gets Terraform formatting and validation, pull requests that change `infra/` also get a `terraform plan` comment, and deploys run only by manual dispatch.
+GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests, and the shared conformance suite against the controlled implementation (the real service backed by an in-memory provider). It also builds the container image. One aggregate `checks` status passes only when all of these pass; branch protection requires it before merging to `main` (see [Merge gate](docs/DEPLOYMENT.md#merge-gate)). Every pull request gets Terraform formatting and validation, pull requests that change `infra/` also get a `terraform plan` comment, and deploys run only by manual dispatch.
 
 ## Project Structure
 
@@ -83,11 +83,13 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 - `docs/DEPLOYMENT.md`: Deploying, verifying, rolling back, and tearing down the Render deployment, plus the teammate walkthrough.
 - `Dockerfile`, `.dockerignore`: The deployable image: locked runtime dependencies, non-root user, no credentials.
 - `infra/`: Terraform for the Render deployment, with state in HCP Terraform. `release.tf` pins the deployed commit.
-- `scripts/disposable_env.sh`: Builds the image and checks it in a throwaway container with fake configuration.
+- `scripts/build_image.sh`: Builds the release image once, pushes it tagged with its full commit SHA, and reports its digest.
+- `scripts/disposable_env.sh`: Checks the image in a throwaway container with fake configuration: one it builds from `HEAD`, or an already pushed image given by digest (`IMAGE_REF`).
 - `scripts/conformance_remote.sh`: Runs the conformance suite against a deployed service.
 - `pyproject.toml`: Python requirement, dependencies, and tool configuration.
 - `uv.lock`: Locked dependency versions for reproducible installation.
-- `.github/workflows/ci.yml`: Automated linting, formatting, type checking, tests, the conformance suite against the controlled implementation, the container image check, and the aggregate `checks` status that branch protection requires. Reusable from other workflows (`workflow_call`).
+- `.github/workflows/ci.yml`: Automated linting, formatting, type checking, tests, the conformance suite against the controlled implementation, the container image build, and the aggregate `checks` status that branch protection requires. Reusable from other workflows (`workflow_call`).
+- `.github/workflows/release.yml`: On every push to `main`: reruns the CI checks on that commit (all but the build-only image check, since the release builds the image itself), builds the image once, pushes it to GitHub's container registry tagged with the full commit SHA, and checks that exact image (by digest) in a disposable container.
 - `.github/workflows/terraform-plan.yml`: Checks Terraform formatting and validation on every pull request, and posts `terraform plan` on pull requests that change `infra/` or a Terraform workflow.
 - `.github/workflows/terraform-apply.yml`: Manual, approved apply and deploy of the pinned commit, followed by a plan that must show no changes.
 - `.github/workflows/terraform-destroy.yml`: Manual, approved teardown of everything Terraform created.
@@ -224,7 +226,8 @@ because inside the image only `/app/data` is writable by the service's
 non-root user.
 
 `scripts/disposable_env.sh` builds the image and checks it in a
-throwaway container with fake configuration. See
+throwaway container with fake configuration. With `IMAGE_REF` set to a pushed
+image pinned by digest, it checks that image instead. See
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the Render deployment.
 
 ## API Usage
