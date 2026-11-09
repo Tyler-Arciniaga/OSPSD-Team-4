@@ -74,6 +74,7 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 - `tests/test_health.py`: `/healthz`, `/readyz`, the provider check's caching, and the reported commit.
 - `tests/test_injected_provider.py`: Endpoint tests using supplied fake providers.
 - `tests/controlled/`: The controlled implementation CI runs the conformance suite against: `provider.py` (an in-memory provider that follows the contract, with optional injected faults) and `server.py` (the real app with that provider injected, started with uvicorn).
+- `tests/release/`: Tests of `scripts/release.py` against simulated Render and service APIs.
 - `tests/test_controlled_provider.py`: The in-memory provider's contract behavior, its faults, and the real app running on it.
 - `tests/test_idempotency.py`: Repeated, overlapping, conflicting, expired and restarted keyed creations, unknown provider outcomes, and cache and logging integration.
 - `tests/test_errors.py`: Error response and failure-logging tests using a controlled provider.
@@ -84,12 +85,13 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 - `Dockerfile`, `.dockerignore`: The deployable image: locked runtime dependencies, non-root user, no credentials.
 - `infra/`: Terraform for the Render deployment, with state in HCP Terraform. `release.tf` pins the deployed commit.
 - `scripts/build_image.sh`: Builds the release image once, pushes it tagged with its full commit SHA, and reports its digest.
+- `scripts/release.py`: Release steps the release workflow runs: `deploy` points the Render service at an image digest (refusing anything but a digest), deploys it and waits until it is live; `check-ready` waits until `/readyz` is ready and reports the expected commit.
 - `scripts/disposable_env.sh`: Checks the image in a throwaway container with fake configuration: one it builds from `HEAD`, or an already pushed image given by digest (`IMAGE_REF`).
 - `scripts/conformance_remote.sh`: Runs the conformance suite against a deployed service.
 - `pyproject.toml`: Python requirement, dependencies, and tool configuration.
 - `uv.lock`: Locked dependency versions for reproducible installation.
 - `.github/workflows/ci.yml`: Automated linting, formatting, type checking, tests, the conformance suite against the controlled implementation, the container image build, and the aggregate `checks` status that branch protection requires. Reusable from other workflows (`workflow_call`).
-- `.github/workflows/release.yml`: On every push to `main`: reruns the CI checks on that commit (all but the build-only image check, since the release builds the image itself), builds the image once, pushes it to GitHub's container registry tagged with the full commit SHA, and checks that exact image (by digest) in a disposable container.
+- `.github/workflows/release.yml`: On every push to `main`: reruns the CI checks on that commit (all but the build-only image check, since the release builds the image itself), builds the image once, pushes it to GitHub's container registry tagged with the full commit SHA, checks that exact image (by digest) in a disposable container, then, unless a newer commit has reached `main`, deploys that digest to Render and confirms `/readyz` reports the commit. One release runs at a time.
 - `.github/workflows/terraform-plan.yml`: Checks Terraform formatting and validation on every pull request, and posts `terraform plan` on pull requests that change `infra/` or a Terraform workflow.
 - `.github/workflows/terraform-apply.yml`: Manual, approved apply and deploy of the pinned commit, followed by a plan that must show no changes.
 - `.github/workflows/terraform-destroy.yml`: Manual, approved teardown of everything Terraform created.
@@ -365,7 +367,7 @@ uv run --locked ruff format --check .
 Check for inconsistencies between type annotations and how values are used:
 
 ```bash
-uv run --locked mypy app tests contract/src contract/tests
+uv run --locked mypy app tests scripts contract/src contract/tests
 ```
 
 ### Automated Tests
