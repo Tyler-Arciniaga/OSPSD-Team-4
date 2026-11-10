@@ -147,8 +147,10 @@ def _translate_failure(status: int, codes: list[str | None]) -> ServiceError:
     Only the status and recognised error codes are kept: messages and the
     response body are provider data.
     """
-    if status == 401 or AUTHENTICATION_ERROR in codes:
-        cause = f"provider_status={status}" if status == 401 else _error_cause(codes)
+    if status in (401, 403) or AUTHENTICATION_ERROR in codes:
+        cause = (
+            f"provider_status={status}" if status in (401, 403) else _error_cause(codes)
+        )
         return access_denied(cause)
     if status == 429 or RATELIMITED in codes:
         cause = f"provider_status={status}" if status == 429 else _error_cause(codes)
