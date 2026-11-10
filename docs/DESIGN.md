@@ -382,7 +382,7 @@ Labels: **HW1** means it exists in the HW1 repo today. **Proposal** means it is 
 
 We adopt the first release of the shared contract, tagged `issue-tracker-contract-v1.0.0`. The contract lives in this repository in a top-level `contract/` directory, outside `app/`. The importable package is `issue_tracker_contract` (distribution name `issue-tracker-contract`) under `contract/src/`, and the conformance suite lives in `contract/tests/conformance/`. Releases use a prefixed tag because this repository also holds service code. The service depends on the package at a pinned revision. The contract details are in the [decision memo](https://docs.google.com/document/d/1Le2SpjEt_jmymtxRapjZk4H8QeueM_De) and are not repeated here.
 
-### 7.2 What changes
+### 6.2 What changes
 
 | Area | Change |
 | :---- | :---- |
