@@ -70,6 +70,18 @@ mutation CreateIssue($input: IssueCreateInput!) {
 }
 """
 
+UPDATE_ISSUE_MUTATION = """
+mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
+  issueUpdate(id: $id, input: $input) {
+    success
+    issue {
+      id
+      title
+    }
+  }
+}
+"""
+
 # Linear `extensions.code` values this adapter recognises. Any other code is
 # logged only as "graphql_error", so provider text never reaches a log line.
 INPUT_ERROR = "INPUT_ERROR"
@@ -291,8 +303,51 @@ class LinearIssueProvider:
         return issue
 
     def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
-        """Rename is not implemented for Linear yet (DESIGN.md 6.4, change 2)."""
-        raise _not_available("Renaming issues")
+        """Rename a Linear issue using the shared IssueProvider contract."""
+        _require_issue_id(issue_id)
+
+        # The shared model currently permits only title updates.
+        status, body = self._send(
+            _credentials(),
+            UPDATE_ISSUE_MUTATION,
+            {
+                "id": issue_id,
+                "input": {"title": changes.title},
+            },
+        )
+
+        codes = _error_codes(body)
+
+        if status != 200 or codes:
+            if status == 200 and INPUT_ERROR in codes:
+                raise not_found(f"graphql_code={INPUT_ERROR}")
+
+            error = _translate_failure(status, codes)
+            error.may_have_applied = status >= 500 or (
+                status == 200 and not all(
+                    code in REJECTION_CODES for code in codes
+                )
+            )
+            raise error
+
+        try:
+            payload = body["data"]["issueUpdate"]
+
+            if payload["success"] is not True:
+                raise ValueError("Update not confirmed")
+
+            issue = _to_issue(payload["issue"])
+
+            if issue.id != issue_id:
+                raise ValueError("Unexpected issue ID")
+
+        except (KeyError, TypeError, ValueError):
+            error = _unexpected_response("invalid_update_response")
+            error.may_have_applied = True
+            raise error from None
+
+        return issue
+
 
     def delete_issue(self, issue_id: str) -> None:
         """Delete is not implemented for Linear yet (DESIGN.md 6.4, change 2)."""
