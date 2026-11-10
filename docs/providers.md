@@ -182,10 +182,10 @@ checked. Only the HTTP status and a recognised `extensions.code` are kept.
 | GET answered HTTP 200 with `INPUT_ERROR` (missing issue) | `not_found` | `graphql_code=INPUT_ERROR` |
 | GET returned an issue with `trashed: true` | `not_found` | `issue_trashed` |
 | Creation answered with `INPUT_ERROR` (configuration such as the team is wrong) | `provider_error` | `graphql_code=INPUT_ERROR` |
-| HTTP 401, or `AUTHENTICATION_ERROR` | `access_denied` | `provider_status=401` or `graphql_code=AUTHENTICATION_ERROR` |
+| HTTP 401 or 403, or `AUTHENTICATION_ERROR` | `access_denied` | `provider_status=<status>` or `graphql_code=AUTHENTICATION_ERROR` |
 | HTTP 429, or `RATELIMITED` | `provider_error` | `provider_status=429` or `graphql_code=RATELIMITED` |
 | HTTP 5xx | `provider_error` | `provider_status=<status>` |
-| Any other error (including HTTP 403 and `FORBIDDEN`, not yet observed) | `provider_error` | `graphql_error` or `provider_status=<status>` |
+| Any other error (including an unverified `FORBIDDEN` code on HTTP 200) | `provider_error` | `graphql_error` or `provider_status=<status>` |
 | Timeout | `provider_error` | `timeout` |
 | Other connection failure | `provider_error` | exception class name |
 | Invalid JSON, missing fields, a non-UUID ID, a different issue than requested, or `success` not `true` | `provider_error` | exception class name |
@@ -195,6 +195,39 @@ errors are all `INPUT_ERROR`, `AUTHENTICATION_ERROR` or `RATELIMITED`, for a
 failed connection, connect timeout or pool timeout, and for missing
 configuration. It is `True` for HTTP 5xx, any other GraphQL error, read or
 write timeouts, dropped connections, and an unusable success body.
+
+#### Permission and rate-limit investigation
+
+Vanchi, November 10, 2026. The mapping above is checked with simulated
+responses; no Linear key was available locally for a live permission check.
+These are documentation-backed decisions, not newly observed provider responses:
+
+- [Linear's SDK error translator](https://github.com/linear/linear/blob/master/packages/sdk/src/error.ts)
+  recognises HTTP 403 as forbidden. We map it to `403 access_denied`, even
+  when the body is not JSON. A rejected create is logged as `not_applied`.
+- [Linear's rate-limit documentation](https://linear.app/developers/rate-limiting)
+  specifies HTTP 429 with `extensions.code=RATELIMITED`. Either signal
+  maps to `502 provider_error` with the rate-limit message. The existing
+  code also recognises `RATELIMITED` on HTTP 200 or 400. No automatic retry
+  is added. Linear documents `Retry-After` in seconds; this service does
+  not forward that header.
+- [API-key permissions](https://linear.app/docs/api-and-webhooks#api-keys)
+  can be restricted by operation and team. Their exact GraphQL denial
+  response has not been observed here. Unknown codes keep `502
+  provider_error`; an HTTP 200 create with an unknown error retains an
+  uncertain write outcome. We do not infer permission denial from message
+  text or reinterpret a missing-issue response.
+
+To verify permission behavior later, Vanchi should use a dedicated test
+workspace and a temporary read-only key: confirm a viewer query succeeds,
+then attempt one create in the test team. Record only the HTTP status,
+GraphQL `extensions.code` and `extensions.type`, and the service's code
+and sanitized log cause. If creation unexpectedly succeeds, remove that
+test issue with an authorised key or through Linear. Revoke the temporary
+key afterward. Restart the service when changing keys to clear cached reads.
+Do not exhaust the shared user quota to provoke throttling; rate-limit
+coverage uses controlled responses. Revisit the GraphQL permission mapping
+when a sanitized live response is available, before claiming it verified.
 
 ### Shared by every adapter
 

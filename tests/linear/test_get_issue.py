@@ -193,6 +193,14 @@ def test_rejected_api_key_returns_403(
             "graphql_code=AUTHENTICATION_ERROR",
         ),
         (429, RATE_LIMITED_BODY, 502, RATE_LIMITED, "provider_status=429"),
+        (429, b"private", 502, RATE_LIMITED, "provider_status=429"),
+        (
+            200,
+            RATE_LIMITED_BODY,
+            502,
+            RATE_LIMITED,
+            "graphql_code=RATELIMITED",
+        ),
         (
             400,
             graphql_error("RATELIMITED"),
@@ -208,10 +216,10 @@ def test_rejected_api_key_returns_403(
             REJECTED,
             "graphql_error",
         ),
-        # Forbidden-entity responses are not yet observed (DESIGN.md 8.1 #2),
-        # so they stay a provider error rather than access denied.
+        # An unverified GraphQL permission code keeps the conservative fallback.
         (200, graphql_error("FORBIDDEN"), 502, REJECTED, "graphql_error"),
-        (403, b"private", 502, REJECTED, "provider_status=403"),
+        (403, b"private", 403, ACCESS_DENIED, "provider_status=403"),
+        (403, graphql_error("FORBIDDEN"), 403, ACCESS_DENIED, "provider_status=403"),
     ],
 )
 def test_linear_failures(
@@ -231,6 +239,7 @@ def test_linear_failures(
 
     assert response.status_code == expected
     assert response.json() == error
+    assert len(linear.requests) == 1
     [record] = failure_records(caplog)
     assert record["cause"] == cause
     assert record["provider_involved"] is True

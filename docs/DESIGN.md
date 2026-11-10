@@ -8,7 +8,7 @@
 
 #### Status: Approved
 
-#### Last Update Date: 11/08/2026
+#### Last Update Date: 11/10/2026
 
 #### Relevant Links
 
@@ -252,9 +252,9 @@ Every failure travels the same three steps: the adapter turns a provider outcome
 | Provider outcome | Domain error | HTTP | Notes |
 | :---- | :---- | :---- | :---- |
 | Issue does not exist, or ID is malformed | `not_found` | 404 | Trello: rejects a malformed ID without a request. Linear (Observed): HTTP 200 with an `errors` entry, `INPUT_ERROR`, "Entity not found: Issue"; a malformed ID gives the same result. |
-| Provider rejects our credentials | `access_denied` | 403 | Linear (Observed): a bad key is a real HTTP 401, `AUTHENTICATION_ERROR`. Thus distinct translation needed. |
+| Provider rejects our credentials or returns HTTP 403 | `access_denied` | 403 | Linear (Observed earlier): a bad key is a real HTTP 401, `AUTHENTICATION_ERROR`. HTTP 403 is recognised as forbidden by Linear's SDK; covered with controlled responses, not a live permission check. |
 | Credentials, target list, or team missing | `service_not_configured` | 503 | Proposal for Linear: raise on missing API key or team ID. No request is sent. |
-| Timeout, network failure, unusable response, rate limit | `provider_error` | 502 | A timeout is reported with cause `timeout`. Linear's over-limit and forbidden-entity responses are not yet observed, so they map to `provider_error`. |
+| Timeout, network failure, unusable response, rate limit | `provider_error` | 502 | A timeout is reported with cause `timeout`. Linear documents HTTP 429 with `RATELIMITED`; either signal maps to a rate-limit failure. Unverified GraphQL permission codes keep the generic fallback. See [investigation](providers.md#permission-and-rate-limit-investigation). |
 | Provider rejects the request itself | `provider_error` | 502 | Covers a rejection that is not an access problem. |
 | Invalid request body, title or `Idempotency-Key` format, or an extra field | `invalid_input` | 422 | Raised by the HTTP layer before any provider call, with `details` naming the field (HW1). Identical for both adapters. |
 | `Idempotency-Key` sent but the configured provider cannot support it | `service_not_configured` | 503 | For Linear this is the expected answer until an approach is verified (Proposal). |
@@ -464,7 +464,6 @@ No open question affects the shared contract. Everything which previously blocke
 | \# | Question | Consequence if unresolved | Owner | Next step |
 | :---- | :---- | :---- | :---- | :---- |
 | 1 | Does Linear expose a reliable indicator that an issue was deleted, and do deleted issues still appear in lists? | The Linear adapter would not return `404` after a delete or on a later `GET` of the recently deleted issue, so the settled repeated-delete rule would not be honored with Linear. | Turki | Confirm against the live test account and record the observed results. If there is no reliable indicator, track deletions in the adapter and document this rationale. |
-| 2 | How does Linear report hitting its rate limit, and how does it report a valid key without permission for an entity? | Mapping permission errors would default to `provider_error` (502), which may hide a case that should be `access_denied` (403). | Vanchi | Observe the responses if they can be provoked safely. Otherwise ship the default mapping (`provider_error 502`) and record decision. |
 | 3 | Does detecting a deleted issue on Linear `GET` add a provider call or an extra lookup to the cost of that operation? | The cost analysis in 5.4 may be wrong for Linear. | Chan | Confirm during implementation and update 5.4. |
 | 4 | Which cloud provider and container service, and how do credentials reach the running service? | Cannot finish the Milestone 3 infrastructure plan. | Tyler | Decide before Milestone 3 infrastructure work starts.&nbsp;&nbsp; |
 
@@ -478,6 +477,7 @@ No open question affects the shared contract. Everything which previously blocke
 | Do the JSON error response models (`ErrorBody`, `ErrorDetail`, `ErrorResponse`) live in the contract package or the service? | In the contract package, the JSON error shape has one authoritative definition, which intuitively sits next to `ErrorCode` and `ServiceError`. `log_failure` stays in the service. | Sections 2.1 and 3 |
 | Does `Idempotency-Key` on create belong in the core contract, and how is it supported on Linear? | It is an extension, not core. Linear does not support it in this milestone and answers `503 service_not_configured` when the header is sent. | Section 5.1 and the decision memo |
 | Where does the shared contract live? | In our HW1 repository, in its own top-level directory `contract/` outside `app/`. The importable package is `issue_tracker_contract` (distribution name `issue-tracker-contract`), under `contract/src/`, and releases use a prefixed tag such as `issue-tracker-contract-v1.0.0`. | Section 6 |
+| How are Linear permission and rate-limit failures handled? | November 10, Vanchi: HTTP 403 maps to `access_denied`; HTTP 429 or `RATELIMITED` maps to `provider_error`, with no retries. No Linear key was available for live checks. The permitted fallback remains for unverified GraphQL permission codes. Vanchi owns checking a temporary restricted key when available; controlled tests verify mapping, write outcomes and sanitization. | [Evidence and live-check procedure](providers.md#permission-and-rate-limit-investigation) |
 
 ### 8.3 Review record
 
@@ -503,6 +503,8 @@ No open question affects the shared contract. Everything which previously blocke
 See section 6.4 followed by 8.1 for the team’s next actions.
 
 ### Change Log
+
+- November 10: recorded Vanchi's permission/rate-limit investigation and live-check limitation. Linear HTTP 403 now maps to `access_denied`; unknown GraphQL permission errors retain the documented fallback. Added controlled checks for permission failures, rate limits, write outcomes and no retries.
 
 - HW2 deployment (sections 5.2 and 5.5): startup configuration check, `/healthz` and `/readyz`, container image, Terraform for Render with HCP Terraform state, plan on pull requests, and a manual, approved apply and deploy. Secrets live in a hand-made Render environment group, which keeps their values out of Terraform state. See [docs/DEPLOYMENT.md](DEPLOYMENT.md).
 - Every adapter now implements `ping()` (on `ClosableIssueProvider`), used only for the readiness report.

@@ -149,7 +149,12 @@ def test_missing_configuration_returns_503_and_sends_nothing(
     [
         # Rejected before anything was written.
         (401, AUTHENTICATION_BODY, 403, "access_denied", "not_applied"),
+        (403, b"private", 403, "access_denied", "not_applied"),
+        (403, graphql_error("FORBIDDEN"), 403, "access_denied", "not_applied"),
         (429, RATE_LIMITED_BODY, 502, "provider_error", "not_applied"),
+        (429, b"private", 502, "provider_error", "not_applied"),
+        (400, RATE_LIMITED_BODY, 502, "provider_error", "not_applied"),
+        (200, RATE_LIMITED_BODY, 502, "provider_error", "not_applied"),
         (
             400,
             graphql_error("GRAPHQL_VALIDATION_FAILED"),
@@ -167,6 +172,7 @@ def test_missing_configuration_returns_503_and_sends_nothing(
             "not_applied",
         ),
         # Outcome unknown.
+        (200, graphql_error("FORBIDDEN"), 502, "provider_error", "unknown"),
         (200, graphql_error("INTERNAL_SERVER_ERROR"), 502, "provider_error", "unknown"),
         (503, b"private", 502, "provider_error", "unknown"),
     ],
@@ -188,6 +194,7 @@ def test_linear_failures_report_the_write_outcome(
 
     assert response.status_code == expected
     assert response.json()["error"]["code"] == code
+    assert len(linear.requests) == 1
     [record] = failure_records(caplog)
     assert record["write_outcome"] == write_outcome
     assert record["provider_involved"] is True
