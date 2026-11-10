@@ -51,15 +51,15 @@ Labels: **HW1** means it exists in the HW1 repo today. **Proposal** means it is 
 
 ### 2.1 Components and responsibilities
 
-| Component | Responsibility | Status |
-| :---- | :---- | :---- |
-| Shared contract package | `Issue`, `IssueCreate`, `IssueUpdate`, the `IssueProvider` interface, and the domain error types: `ErrorCode`, `ServiceError`, code-to-status mapping, and JSON error response models. No provider SDK, no web framework, no application logic. | Proposal (extracted from `app/models.py`, `app/interface.py`, `app/errors.py`) |
-| Application decisions | `ETag` and `If-Match` checks, the 30 second read cache (`CachedIssueProvider`), `Idempotency-Key` handling (an optional header on create so a retried request makes at most one issue; the application records each key in its store and asks the adapter to find or tag an earlier create, and only adapters that support this accept the header). The ETag and cache logic is written only against `IssueProvider`, so it runs unchanged with either adapter. Idempotency also needs the optional `IdempotentIssueProvider` capability, which Trello has and Linear does not yet have. | HW1 (`app/main.py`, `app/cache.py`, `app/idempotency.py`) |
-| HTTP translation | FastAPI routes, request validation, and the error handlers that turn a `ServiceError`, imported from the contract package, into the shared JSON error body. Failure logging (`log_failure`) also stays here because it is application policy. | HW1 (`app/main.py`) |
-| Provider adapters | `TrelloIssueProvider` (unchanged). `LinearIssueProvider` turns the four operations into GraphQL calls, reads error bodies on HTTP 200, and maps provider failures to `ServiceError`. | HW1 (Trello), Proposal (Linear) |
-| Startup configuration | `lifespan` reads configuration, picks one adapter, builds it, wraps it in the cache, and closes it at shutdown. | HW1 pattern, Proposal (provider choice and `close`) |
+| Component | Responsibility | Status | Depends On |
+| :---- | :---- | :---- | :---- |
+| Shared contract package | `Issue`, `IssueCreate`, `IssueUpdate`, the `IssueProvider` interface, and the domain error types: `ErrorCode`, `ServiceError`, code-to-status mapping, and JSON error response models. No provider SDK, no web framework, no application logic. | Proposal (extracted from `app/models.py`, `app/interface.py`, `app/errors.py`) | Nothing in our service. It imports no provider SDK, no web framework and nothing from `app/`. |
+| Application decisions | `ETag` and `If-Match` checks, the 30 second read cache (`CachedIssueProvider`), `Idempotency-Key` handling (an optional header on create so a retried request makes at most one issue; the application records each key in its store and asks the adapter to find or tag an earlier create, and only adapters that support this accept the header). The ETag and cache logic is written only against `IssueProvider`, so it runs unchanged with either adapter. Idempotency also needs the optional `IdempotentIssueProvider` capability, which Trello has and Linear does not yet have. | HW1 (`app/main.py`, `app/cache.py`, `app/idempotency.py`) | The `IssueProvider`` interface and error types in the contract package. It never names an adapter. |
+| HTTP translation | FastAPI routes, request validation, and the error handlers that turn a `ServiceError`, imported from the contract package, into the shared JSON error body. Failure logging (`log_failure`) also stays here because it is application policy. | HW1 (`app/main.py`) | The application decisions and `ServiceError` from the contract package. |
+| Provider adapters | `TrelloIssueProvider` (unchanged). `LinearIssueProvider` turns the four operations into GraphQL calls, reads error bodies on HTTP 200, and maps provider failures to `ServiceError`. | HW1 (Trello), Proposal (Linear) | The contract package (they implement `IssueProvider` and raise `ServiceError`) and the service-side `ClosableIssueProvider` protocol in `app/interface.py`. Each calls only its own provider's API. |
+| Startup configuration | `lifespan` reads configuration, picks one adapter, builds it, wraps it in the cache, and closes it at shutdown. | HW1 pattern, Proposal (provider choice and `close`) | The adapters, the cache wrapper and the configuration check. It is the only component that names a concrete adapter. |
 
-**Dependency direction.** Routes depend on the `IssueProvider` interface. Adapters implement it. The contract package depends on nothing in our service. Only startup code names a concrete adapter, so nothing above the adapters can reference Trello or Linear.
+**Dependency direction.** Dependencies point inward toward the contract package. Startup code depends on the adapters and the cache wrapper. Routes depend on the cache wrapper, which depends on the IssueProvider interface. Adapters depend on the contract package and call their provider's API. The contract package depends on nothing in our service, so nothing above the adapters can reference Trello or Linear.
 
 ### 2.2 Who creates and closes provider clients, and who owns state
 
@@ -173,6 +173,8 @@ The proposal retains the existing HTTP routes.
 
 Illustrative request and expected response based on the existing HW1 implementation.
 
+**Request**
+
 ```
 POST /issues HTTP/1.1
 Content-Type: application/json
@@ -181,6 +183,8 @@ Content-Type: application/json
 ```
 
 &nbsp;
+
+**Expected**
 
 ```
 HTTP/1.1 201 Created
@@ -223,21 +227,34 @@ Both adapters return the same `Issue` model containing `id` and `title`. Trelloâ
 
 Each adapter converts provider errors into the shared error codes. Linear requires checking the GraphQL response body because an HTTP 200 response can still contain an error.
 
-Our live checks showed that Linear can return a deleted issue and accept a second delete. The Linear adapter must detect deleted issues so that fetching or deleting them again returns 404 through our API, matching Trello.
+Some translations lose information or narrow what a provider can do. We list every one here.
 
-Both providers will use the existing HW1 routes for creating, retrieving, renaming, and deleting issues. Both will also support caching and conditional updates. The shared contract does not require `Idempotency-Key` support, although we plan to add it for Linear (outside the scope of HW2 however). Providers may offer extra features, but must still support all required behavior.
+- **Repeated delete on Linear**. Linear accepts a second delete as a success (Observed). Our API returns `404 not_found` for it, so the success status that Linear would give is lost. The adapter must check whether the issue is already deleted before it deletes, so a repeat reaches the caller as `404`, as it does with Trello.
+- **Deleted issues on Linear**. Linear keeps a deleted issue and can restore it. Our API reports it as `404` and offers no restore.
+- **Fields outside the core**. Descriptions, assignees, labels and workflow states are not in `Issue`. A Linear issue's workflow state is never returned, and consumers cannot change it; only the operator's configured default applies to new issues.
+- **Titles**. A provider may trim leading and trailing whitespace when it stores a title. Linear does, so the title in the response can differ from the one sent (section 3.2).
+- **Linear short identifiers**. Linear also accepts identifiers such as `TYL-5`. Our service accepts only the full UUID id and returns `404` for the short form (section 6.7).
+
+HW1's `create_issue`, `get_issue`, `update_issue` and `delete_issue` map one to one onto the contract's create, get, rename and delete operations, and the HTTP routes stay the same. Both providers will use the existing HW1 routes for creating, retrieving, renaming, and deleting issues. Both will also support caching and conditional updates. The shared contract does not require `Idempotency-Key` support, although we plan to add it for Linear (outside the scope of HW2 however). Providers may offer extra features, but must still support all required behavior.
 
 ## <!-- gdoc_comment_begin: c1 -->4<!-- gdoc_comment_end: c1 -->. Alternatives and Tradeoffs
 
 ### <!-- gdoc_comment_begin: c2 -->Consistent Deletion vs. Provider-Specific Deletion<!-- gdoc_comment_end: c2 -->
 
-Another decision our team faced was whether to preserve each provider's deletion behavior or enforce consistent deletion across Trello and Linear. Trello supports deleting cards through its REST API, while Linear's `issueDelete` mutation moves issues to trash rather than immediately removing them permanently. One alternative would be to expose each provider's behavior directly, allowing Linear issues to remain retrievable after deletion while Trello issues would no longer be accessible. However, this would mean that the same `DELETE /issues/{id}` operation could produce different results depending on the configured provider. We chose to standardize deletion behavior so that a successful DELETE returns `204` and subsequent attempts to retrieve the issue return `404`, regardless of which provider is being used.
+**Decision**. After a successful `DELETE /issues/{id}`, the issue is no longer retrievable through our API on either provider: the delete returns `204`, and any later `GET` or `DELETE` of that ID returns `404 not_found`.
 
-For consumers, this approach provides predictable behavior without requiring them to understand how each provider handles deletion internally. For example, a consumer could delete an issue and expect it to become inaccessible through our API, whether it originated in Trello or Linear. The tradeoff is that consumers would not have access to Linear's recovery functionality through our shared API, even though the issue may still exist in Linear's trash. For the implementation, Trello can continue using its existing deletion operation, while Linear requires additional handling to prevent trashed issues from being returned. One approach would be to include Linear's `trashed` field alongside `id` and `title` in the GraphQL query and return `404` whenever the issue is marked as trashed. This would allow us to preserve the same `IssueProvider` interface without introducing provider-specific behavior into the FastAPI routes.
+**Alternative**. Pass each provider's behavior through, so a deleted Linear issue stays retrievable while a deleted Trello card does not. The same request would then give different results depending on `ISSUE_PROVIDER`, and every consumer would need provider-specific handling.
 
-Based on Linear's documented deletion behavior, deleted issues may remain available through its API while they are in trash. This creates a difference from Trello that our adapter would need to handle. We propose checking Linear's `trashed` field to determine whether an issue should be returned, but we have not yet verified this approach through implementation or testing. We also need to determine how Linear handles repeated deletion requests to ensure that deleting an already-trashed issue returns `404` rather than `204`. Depending on that behavior, the Linear adapter may need an additional lookup before deleting an issue.
+**Evidence**. Two sources support the choice.
 
-We would reconsider this decision if future requirements included restoring deleted issues, permanently erasing data, or exposing provider-specific deletion features. In those cases, consumers might benefit from distinguishing between moving an issue to trash and permanently deleting it, which could justify introducing additional operations or changing the existing API contract. For our current implementation, consistent deletion behavior allows consumers to rely on the same responses from Trello and Linear while keeping their different deletion mechanisms within their respective adapters.
+- Provider documentation. Linear's help page says deleted issues go to a "Recently deleted" list and are "stored in the archives for 30 days, after which they'll be permanently removed" (Linear: delete and archive issues). So Linear keeps the issue and can restore it, while Trello's delete removes the card and HW1 already returns `404` afterwards (`docs/api.md`).
+- Our live calls (Observed). Against the Linear test team, a deleted issue could still be fetched, and a second delete succeeded. A consumer who relied on the provider's own behavior would therefore see a deleted issue come back on Linear only.
+
+**Repeated delete**. Linear accepts a second delete as a success. Our API instead returns `404`, the same as Trello and the same as a `GET` of a deleted issue, so a consumer needs one rule: after a successful delete, every later operation on that ID is `not_found`. Section 3.6 lists this as a lossy translation.
+
+**Cost**. Consumers cannot use Linear's restore feature through our API, and a deleted Linear issue still exists in Linear for 30 days, so the contract promises "no longer retrievable", not "erased". The Linear adapter takes on the extra work. It requests the `trashed`` field with`id` and `title` and maps a trashed issue to `404` (covered by the controlled test `test_get_trashed_issue_returns_404`). For`DELETE` it must read the issue first, because Linear would accept the repeat. That read is one extra provider call on Linear deletes (open question 3). That Linear sets `trashed: true` on a deleted issue in the live service is not yet confirmed (open question 1).
+
+**When we would revisit this**. We would change the decision if a consumer needs to restore a deleted issue, if a consumer needs permanent erasure, or if the extra read before delete proves too slow or too frequently rate limited on Linear to keep.
 
 &nbsp;
 
@@ -330,6 +347,7 @@ Every choice below favors tools that are free, need no payment method, and take 
 **Teardown date:** 11/20/2026. All resources are removed on this date (unless a grader requests an extension), with `terraform destroy` and by deleting the Grafana Cloud stack. `terraform destroy` runs through a manual, approved workflow, so any teammate can run it without a Render key. The resources made by hand are removed by the checklist in [docs/DEPLOYMENT.md](DEPLOYMENT.md#tear-down): the environment group, API keys and tokens, the HCP workspace, and the GitHub secrets.
 
 **Deployment flow (HW2).** The artifact is the container image Render builds from the `Dockerfile` at one pinned commit, with dependencies from `uv.lock`.
+
 - `infra/release.tf` pins the commit. A deploy is a pull request that changes it, and the plan is posted on the pull request.
 - After merge, a manual workflow with a required approval:
   1. applies exactly the reviewed plan;
@@ -340,6 +358,7 @@ Every choice below favors tools that are free, need no payment method, and take 
 - The pin goes through the deploy API because Render's Terraform provider can only name a branch, not a commit.
 
 **Liveness and readiness (HW2).** Render's health check uses `/healthz`, which only says the process is serving. A brief provider outage therefore never makes Render restart a healthy service in a loop. `/readyz` reports whether the process can serve:
+
 - 503 only if a dependency the configured provider uses is broken. Today that is the idempotency store, for Trello.
 - The provider's reachability is reported for information only (`reachable`, `unreachable` or `unknown`). It never changes the status code, and it is checked at most every 30 seconds with the usual 10 second timeout.
 - The response also reports the deployed commit.
@@ -363,9 +382,7 @@ Labels: **HW1** means it exists in the HW1 repo today. **Proposal** means it is 
 
 We adopt the first release of the shared contract, tagged `issue-tracker-contract-v1.0.0`. The contract lives in this repository in a top-level `contract/` directory, outside `app/`. The importable package is `issue_tracker_contract` (distribution name `issue-tracker-contract`) under `contract/src/`, and the conformance suite lives in `contract/tests/conformance/`. Releases use a prefixed tag because this repository also holds service code. The service depends on the package at a pinned revision. The contract details are in the [decision memo](https://docs.google.com/document/d/1Le2SpjEt_jmymtxRapjZk4H8QeueM_De) and are not repeated here.
 
-Assumption: course staff accept the contract living in our repository. If they require a separate shared contract repository, we move `contract/` as it is and update the links (see section 8).
-
-### 6.2 What changes
+### 7.2 What changes
 
 | Area | Change |
 | :---- | :---- |
