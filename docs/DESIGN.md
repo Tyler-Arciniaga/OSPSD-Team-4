@@ -493,16 +493,16 @@ A separate controlled test checks the live check itself: `tests/test_smoke_check
 
 A dash means the guarantee cannot be checked through the live API (for example, a provider timeout), so only the controlled test establishes it.
 
-| Guarantee | Conformance test | Controlled test |
-| :---- | :---- | :---- |
-| Create returns `201`, `{id, title}` and a `Location` that reads the issue back | `test_create_returns_the_new_issue_and_its_location` | `linear/test_create_issue.py::test_created_issue_can_be_read_back` |
-| Invalid bodies return `422 invalid_input` and never reach the provider | `test_invalid_body_returns_422`, `test_invalid_update_body` | `test_injected_provider.py::test_invalid_create_body_does_not_call_provider` |
-| An unknown or malformed ID returns `404 not_found`, including Linear's HTTP 200 errors | `test_get_unknown_issue_returns_404` | `linear/test_get_issue.py::test_get_missing_issue_on_http_200_returns_404` |
-| Rename returns the updated issue, and a later read sees it | `test_get_after_update` | `trello/test_update_issue.py::test_patch_updates_title` |
-| A stale `If-Match` returns `412` and the earlier title remains | `test_update_with_stale_etag` | `test_conditional_update.py::test_stale_overwrite_is_rejected` |
-| After a delete, `GET`, `PATCH` and a repeated `DELETE` return `404`, even if the issue was cached | `test_get_after_delete_returns_404`, `test_repeated_delete_returns_404` | `linear/test_delete_issue.py::test_delete_already_deleted_issue_returns_404` |
-| Provider failures map to the documented code and status | — | `test_errors.py::test_provider_failure`, `test_errors.py::test_access_denied` |
-| Responses and logs contain no credentials or provider text | — | `test_errors.py::test_real_provider_failures_are_sanitized` |
+| Guarantee | Conformance test | Trello controlled test | Linear controlled test |
+| :---- | :---- | :---- | :---- |
+| Create returns `201`, `{id, title}` and a `Location` that reads the issue back | `test_create_returns_the_new_issue_and_its_location` | `trello/test_create_issue.py::test_create_issue_returns_id_and_title` | `linear/test_create_issue.py::test_created_issue_can_be_read_back` |
+| Invalid bodies return `422 invalid_input` and never reach the provider | `test_invalid_body_returns_422`, `test_invalid_update_body` | `trello/test_update_issue.py::test_patch_invalid_body_returns_422` | `linear/test_create_issue.py::test_invalid_body_never_reaches_linear`, `linear/test_update_issue.py::test_patch_invalid_body_never_reaches_linear` |
+| An unknown or malformed ID returns `404 not_found`, including Linear's HTTP 200 errors | `test_get_unknown_issue_returns_404` | `trello/test_provider.py::test_trello_missing_issue_returns_404`, `trello/test_get_issue.py::test_get_unknown_issue_returns_404` | `linear/test_get_issue.py::test_get_missing_issue_on_http_200_returns_404`, `linear/test_get_issue.py::test_get_malformed_id_returns_404_without_contacting_linear` |
+| Rename returns the updated issue, and a later read sees it | `test_get_after_update` | `trello/test_update_issue.py::test_patch_updates_title` | `linear/test_update_issue.py::test_patch_sends_graphql_mutation_and_returns_updated_issue` |
+| A stale `If-Match` returns `412` and the earlier title remains | `test_update_with_stale_etag` | `test_conditional_update.py::test_stale_overwrite_is_rejected` (above the adapter, so it covers both) | Same test |
+| After a delete, `GET`, `PATCH` and a repeated `DELETE` return `404`, even if the issue was cached | `test_get_after_delete_returns_404`, `test_repeated_delete_returns_404` | `trello/test_delete_issue.py::test_delete_uses_injected_provider_and_cannot_be_retrieved_or_deleted_again` | `linear/test_delete_issue.py::test_delete_already_deleted_issue_returns_404`, `linear/test_delete_issue.py::test_get_after_delete_returns_404`, `linear/test_update_issue.py::test_patch_after_delete_returns_404` |
+| Provider failures map to the documented code and status | — | `trello/test_get_issue.py::test_trello_http_errors`, `trello/test_get_issue.py::test_trello_network_failure` | `linear/test_get_issue.py::test_linear_failures`, `linear/test_get_issue.py::test_network_failure_returns_502` |
+| Responses and logs contain no credentials or provider text | — | `test_errors.py::test_real_provider_failures_are_sanitized` | `linear/test_get_issue.py::test_linear_failures` |
 
 ### 7.4 What the tests do not establish
 
