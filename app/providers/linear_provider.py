@@ -320,7 +320,21 @@ class LinearIssueProvider:
 
         if status != 200 or codes:
             if status == 200 and INPUT_ERROR in codes:
-                raise not_found(f"graphql_code={INPUT_ERROR}")
+                try:
+                    self.get_issue(issue_id, fresh=True)
+                except ServiceError as exc:
+                    if exc.code == ErrorCode.NOT_FOUND:
+                        raise not_found(f"graphql_code={INPUT_ERROR}") from None
+
+                    # Could not confirm whether the issue exists.
+                    error = provider_error(REJECTED_MESSAGE, "graphql_code=INPUT_ERROR")
+                    error.may_have_applied = True
+                    raise error from None
+
+                # Issue exists, but Linear rejected the update.
+                error = provider_error(REJECTED_MESSAGE, "graphql_code=INPUT_ERROR")
+                error.may_have_applied = True
+                raise error
 
             error = _translate_failure(status, codes)
             error.may_have_applied = status >= 500 or (
