@@ -2,7 +2,7 @@
 #
 # Manual only: it runs when someone starts it from the Actions tab (or
 # `gh workflow run`), types "destroy" to confirm, and a required reviewer
-# approves the render-production environment. Nothing triggers it
+# approves the render-infrastructure environment. Nothing triggers it
 # automatically. It lets a teammate tear down without holding a Render API
 # key: the key stays in GitHub secrets.
 #
@@ -24,9 +24,11 @@ on:
 permissions:
   contents: read
 
-# Shares the apply workflow's group, so a destroy never overlaps an apply.
+# Shares the release workflow's group (release.yml), so applies, destroys
+# and releases never overlap, and none is cancelled halfway. A run started
+# while another waits in this group replaces the waiting one; re-run it.
 concurrency:
-  group: terraform-render
+  group: render-production
   cancel-in-progress: false
 
 jobs:
@@ -34,7 +36,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && inputs.confirm == 'destroy'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    environment: render-production
+    environment: render-infrastructure
 
     defaults:
       run:

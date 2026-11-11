@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Disposable test environment: build the deployable image from the current
-# commit, run it with fake configuration, check it, then remove everything.
+# Disposable test environment: run the deployable image with fake
+# configuration, check it, then remove everything.
+#
+# By default it builds the image from the current commit. With IMAGE_REF set
+# to a pushed image pinned by digest, it pulls and checks exactly that image
+# instead; the release workflow does this before deploying it.
 #
 # This shows that the artifact runs anywhere Docker does and does not depend
 # on this machine, without touching the real deployment or a real provider
@@ -8,14 +12,27 @@
 # expected: readiness must stay 200 while the provider is unreachable.
 #
 # Usage: scripts/disposable_env.sh        (from a clean checkout)
+#        IMAGE_REF=<repo>@sha256:<digest> EXPECTED_COMMIT=<sha> scripts/disposable_env.sh
+#        (EXPECTED_COMMIT defaults to HEAD: the commit the image must record)
 # Needs: docker, curl, git.
 
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-COMMIT="$(git rev-parse HEAD)"
-IMAGE="ospsd-team4-disposable:${COMMIT:0:12}"
+if [[ -n "${IMAGE_REF:-}" ]]; then
+  # A tag can point at different images over time; only a digest names
+  # exactly one.
+  if [[ ! "$IMAGE_REF" =~ @sha256:[0-9a-f]{64}$ ]]; then
+    echo "IMAGE_REF must be pinned by digest (<repo>@sha256:<64 hex>), got '${IMAGE_REF}'." >&2
+    exit 2
+  fi
+  COMMIT="${EXPECTED_COMMIT:-$(git rev-parse HEAD)}"
+  IMAGE="$IMAGE_REF"
+else
+  COMMIT="$(git rev-parse HEAD)"
+  IMAGE="ospsd-team4-disposable:${COMMIT:0:12}"
+fi
 CONTAINER="ospsd-team4-disposable-$$"
 PORT="${DISPOSABLE_PORT:-18000}"
 
@@ -26,7 +43,10 @@ FAKE_LIST="5f1c0a2b3d4e5f6071829304"
 
 failures=0
 pass() { printf '  PASS  %s\n' "$1"; }
-fail() { printf '  FAIL  %s\n' "$1"; failures=$((failures + 1)); }
+fail() {
+  printf '  FAIL  %s\n' "$1"
+  failures=$((failures + 1))
+}
 
 cleanup() {
   docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
@@ -37,13 +57,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
-  echo "note: tracked files have uncommitted changes; the image includes them,"
-  echo "      so it is not exactly commit ${COMMIT}."
-fi
+if [[ -n "${IMAGE_REF:-}" ]]; then
+  echo "Pulling ${IMAGE}"
+  docker pull --quiet "$IMAGE" >/dev/null
+else
+  if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+    echo "note: tracked files have uncommitted changes; the image includes them,"
+    echo "      so it is not exactly commit ${COMMIT}."
+  fi
 
-echo "Building ${IMAGE} from ${COMMIT}"
-docker build --quiet --build-arg GIT_SHA="$COMMIT" -t "$IMAGE" . >/dev/null
+  echo "Building ${IMAGE} from ${COMMIT}"
+  docker build --quiet --build-arg GIT_SHA="$COMMIT" -t "$IMAGE" . >/dev/null
+fi
 
 echo "Checking the image"
 label="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE")"
@@ -91,8 +116,8 @@ grep -qe "$FAKE_KEY" -e "$FAKE_TOKEN" <<<"$logs" && fail "logs contain a credent
 
 echo
 if [[ "$failures" -eq 0 ]]; then
-  echo "All disposable-environment checks passed; removing the container and image."
+  echo "All disposable-environment checks passed for ${IMAGE}; removing the container and image."
 else
-  echo "${failures} check(s) failed; removing the container and image."
+  echo "${failures} check(s) failed for ${IMAGE}; removing the container and image."
   exit 1
 fi
