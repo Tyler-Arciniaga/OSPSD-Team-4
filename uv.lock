@@ -8,12 +8,6 @@ resolution-markers = [
     "python_full_version < '3.13'",
 ]
 
-[manifest]
-members = [
-    "issue-tracker-contract",
-    "ospsd-team-4",
-]
-
 [[package]]
 name = "agent-detector"
 version = "2.0.0"
@@ -495,13 +489,10 @@ wheels = [
 [[package]]
 name = "issue-tracker-contract"
 version = "1.0.0"
-source = { editable = "contract" }
+source = { git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git?subdirectory=contract&tag=issue-tracker-contract-v1.0.0#e2528b1a8b55ea7c74df8d222b9e6555b9d87925" }
 dependencies = [
     { name = "pydantic" },
 ]
-
-[package.metadata]
-requires-dist = [{ name = "pydantic", specifier = ">=2" }]
 
 [[package]]
 name = "jinja2"
@@ -981,7 +972,7 @@ dev = [
 requires-dist = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.142.2" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "issue-tracker-contract", editable = "contract" },
+    { name = "issue-tracker-contract", git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git?subdirectory=contract&tag=issue-tracker-contract-v1.0.0" },
 ]
 
 [package.metadata.requires-dev]

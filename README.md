@@ -41,7 +41,7 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 ## Project Structure
 
 - `app/main.py`: FastAPI endpoints, which validate input and call the supplied provider, and the handlers that turn failures into error responses and log lines.
-- `contract/`: The shared contract package, `issue_tracker_contract`. It must not import anything from `app/`, a web framework, or a provider SDK.
+- `contract/`: The shared contract package, `issue_tracker_contract`. It must not import anything from `app/`, a web framework, or a provider SDK. The service does not install it from this folder: it depends on a tagged release of it (see [Contract versioning](#contract-versioning)).
   - `contract/src/issue_tracker_contract/models.py`: Public `Issue` response model, `IssueCreate` and `IssueUpdate` request models, and the shared `IssueTitle` rule.
   - `contract/src/issue_tracker_contract/interface.py`: Provider-independent `IssueProvider` interface.
   - `contract/src/issue_tracker_contract/errors.py`: Error codes, the `ServiceError` raised by providers and endpoints, the code-to-status mapping, and the error response models.
@@ -114,7 +114,9 @@ uv sync --locked --python 3.13.5
 ```
 
 This creates a local `.venv` and installs application and development
-dependencies using the versions in `uv.lock`.
+dependencies using the versions in `uv.lock`. The shared contract is fetched
+from its tag on GitHub, so `uv sync` needs `git` and network access the first
+time.
 
 Use `uv run` for project commands; manually activating `.venv` is
 not necessary.
@@ -441,6 +443,39 @@ and cleanup of created issues. To run it against the deployed service, use
 
 See [Provider Interface and Dependency Injection](docs/providers.md)
 for the provider setup and the responsibilities of each test file.
+
+### Contract versioning
+
+The service depends on a tagged release of the shared contract, not on the
+`contract/` folder. `pyproject.toml` names the tag, and `uv.lock` records
+it with the commit it points to:
+
+```toml
+# pyproject.toml
+issue-tracker-contract = { git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git", tag = "issue-tracker-contract-v1.0.0", subdirectory = "contract" }
+```
+
+Only `contract/src/` and `contract/pyproject.toml` are part of the
+package. Changes to them do not reach the service until they are released
+under a new tag. To release a contract change:
+
+1. Change `contract/src/`, bump `version` in `contract/pyproject.toml`, and
+   merge (see [the breaking-change process](docs/DESIGN.md#66-handling-an-incompatible-contract-change)
+   if it is incompatible).
+2. Tag the merge commit and push the tag. Tags are never moved.
+
+   ```bash
+   git tag -a issue-tracker-contract-vX.Y.Z <commit> -m "issue-tracker-contract X.Y.Z"
+   git push origin issue-tracker-contract-vX.Y.Z
+   ```
+
+3. Change `tag` in `pyproject.toml`, the `==` version in `dependencies`,
+   run `uv lock`, and run the checks.
+
+Tests in `contract/tests/` run from the working tree, so changing only
+them needs no new tag. The import-boundary test reads `contract/src/` from
+disk, so it checks the next release before it is tagged; the conformance
+suite tests a running service over HTTP.
 
 ## Trello Verification
 

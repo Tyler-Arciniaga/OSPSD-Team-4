@@ -1,5 +1,5 @@
-# Only what the image needs is sent to the build: pyproject.toml, uv.lock,
-# contract/ (without its tests) and app/. Everything else stays out, above
+# Only what the image needs is sent to the build: pyproject.toml, uv.lock and
+# app/. The shared contract is fetched from its tag, not copied from contract/. Everything else stays out, above
 # all credentials, Git history and Terraform state.
 
 # Credentials and local configuration
@@ -38,7 +38,7 @@ infra
 
 # Not run by the service
 tests
-contract/tests
+contract
 docs
 scripts
 notes.md
