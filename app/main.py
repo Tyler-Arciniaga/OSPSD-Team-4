@@ -52,8 +52,8 @@ app = FastAPI(
 # edge compresses, Cloudflare weakens the ETag to W/"...", which conformance
 # rejects and If-Match never matches. It keeps a strong ETag when the origin's
 # encoding is one the client accepts (docs/DEPLOYMENT.md#troubleshooting).
-# minimum_size=0 because issue bodies are far below the 500-byte default.
-app.add_middleware(GZipMiddleware, minimum_size=0)
+# Compress small JSON responses, but skip empty bodies such as DELETE's 204.
+app.add_middleware(GZipMiddleware, minimum_size=1)
 
 health_logger = logging.getLogger("app.health")
 
