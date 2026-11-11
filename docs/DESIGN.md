@@ -8,7 +8,7 @@
 
 #### Status: Approved
 
-#### Last Update Date: 11/10/2026
+#### Last Update Date: 11/11/2026
 
 #### Relevant Links
 
@@ -320,7 +320,7 @@ One Linear-specific consequence (Observed): a GraphQL response can be HTTP 200 a
 - **Provider clients.** The adapter's `close()` is called by `lifespan` at shutdown, forwarded through the cache wrapper (see section 2.2). For Linear it closes the HTTP client (Proposal).  
 - **Idempotency store.** Expired keys are purged (HW1). The SQLite file must be on storage that survives restarts and is shared by every process that serves the API.  
 - **Live test data.** Any issue a live check creates must be deleted by that check, even when the check fails. Linear's delete is soft: deleted issues stay recoverable for a period (Assumption: 30 days, from Linear's help pages), so the test team will keep accumulating deleted issues.  
-- **Fast tests versus live checks.** HW1's split is kept. Fast, controlled tests run in CI on every push and pull request (lint and the pytest suite) with simulated provider responses and no credentials or network. Live integration checks call the real provider, need real credentials, and are run deliberately and not in CI (as in HW1's live Trello verification).
+- **Fast tests versus live checks.** HW1's split is kept. Fast, controlled tests run in CI on every push and pull request (lint and the pytest suite) with simulated provider responses and no credentials or network. Live integration checks call the real provider and need real credentials, so they never run in the pull-request checks: the conformance suite runs against live Trello in the release workflow's smoke check, which uses the deployed service's credentials, and against live Linear by hand. Section 7.1 lists where each kind of check runs.
 
 ### 5.4 Cost of the affected operations
 
@@ -468,18 +468,47 @@ If a change to the contract would break an adapter or the conformance suite afte
 
 ## 7\. Testing
 
-| Guarantee | Check |
-| :---- | :---- |
-| Both providers implement the common workflow | Run the same HTTP conformance suite against each provider: create, get, rename, delete, then verify GET and repeated DELETE return `404`. Check response bodies, statuses and `Location`. |
-| Invalid requests and provider failures produce the documented errors | Use HTTP tests and controlled provider responses; verify invalid input does not reach the provider and logs exclude credentials and payloads. |
-| Stale renames are rejected | Read an ETag, rename the issue, then retry with the old ETag. Expect `412` and verify the earlier title remains. |
-| Cache and retry behavior match the design | Use controlled tests for cache invalidation, uncertain writes and the existing Trello idempotency extension. Verify Linear returns `503` for a keyed create until it supports the extension. |
+### 7.1 Controlled tests and live provider checks
 
-**Conformance.** The team will maintain one HTTP suite in the shared contract repository, proposed under `contract/tests/conformance/`. Run it unchanged against a service configured for Trello and then Linear. Fixtures create disposable issues, retain their IDs and clean them up even after failures; report any cleanup failure for follow-up. Tests use one service process for immediate post-delete checks because caches are per process. A GET that returns an issue after deletion exposes a contract mismatch.
+| Kind | What it runs against | Where and when | Credentials or network |
+| :---- | :---- | :---- | :---- |
+| **Controlled tests** (`uv run --locked pytest`, everything under `tests/` and `contract/tests/test_import_boundary.py`) | The real FastAPI app through `TestClient`, with a fake provider injected, Trello's `urlopen` replaced by simulated responses, or Linear's HTTP client pointed at `FakeLinear` (`tests/linear/fake_linear.py`), which replays the GraphQL responses we observed in live calls | CI `tests` job on every push and pull request, and again on the merge commit before a release deploys | None. The conformance suite is skipped here because `CONFORMANCE_BASE_URL` is unset |
+| **Conformance, controlled implementation** | The real service started with uvicorn (`tests/controlled/server.py`), backed by the in-memory provider in `tests/controlled/provider.py` | CI `conformance-controlled` job on every push and pull request, and on the merge commit before a release. The job fails if any conformance test is skipped | None |
+| **Conformance, live Trello** | The deployed service on Render, configured for the dedicated Trello test list | Release workflow `smoke` job (`scripts/smoke_check.sh`) after every deploy from `main`. A release is recorded `success` only if every test passes | Held by the deployed service only, never by the runner |
+| **Conformance, live Linear** | A service configured with `ISSUE_PROVIDER=linear` and the dedicated Linear test team, run locally or deployed | By hand, following `contract/tests/conformance/README.md` or `scripts/conformance_remote.sh <url>`, before a release and whenever the Linear adapter changes | In the local `.env` or the deployed service |
 
-**Controlled and live checks.** The existing `uv run --locked pytest` suite runs without credentials or network; extend it with simulated Linear responses and adapter tests. Run the conformance workflow against dedicated real-provider test accounts separately from CI, following the README's Trello verification. Live checks must clean up test data and keep credentials out of the repository. Controlled tests establish application behavior but cannot verify provider assumptions.
+Controlled tests establish what *our code* does with a given provider response, including failures that cannot be provoked safely against a real account (timeouts, lost responses, rejected keys, malformed bodies). Live checks establish that the real provider actually behaves the way our controlled tests assume.
 
-**Gaps.** The shared suite, tagged contract integration and Linear adapter are proposed, not yet verified. Turki will check Linear deletion behavior, Vanchi will investigate permission and rate-limit responses, and Chan will check any extra provider lookup (section 8.1). Record the results before the November 11 implementation milestone.
+A separate controlled test checks the live check itself: `tests/test_smoke_check.py` starts the controlled service with an injected fault and confirms the smoke check fails and names the failing test (`test_contract_break_fails_and_names_the_tests` with `CONTROLLED_FAULT=wrong_title`, `test_delete_failure_fails_and_lists_leftover_issues` with `delete_fails`), and that it fails before running the suite if the service reports the wrong commit (`test_wrong_commit_fails_before_running_the_suite`).
+
+### 7.2 How the conformance suite runs against the service
+
+- **One suite, unchanged, over HTTP.** `contract/tests/conformance/` uses only the public API through `httpx`. It never imports `app/` or an adapter, so the identical files run against the controlled implementation, a Trello service and a Linear service. The provider is chosen only by how the target service was started (`ISSUE_PROVIDER`).
+- **Target selection.** The `service` fixture (`conftest.py`) reads `CONFORMANCE_BASE_URL`. Unset, every conformance test is skipped, which keeps the ordinary `pytest` run free of network calls. In CI the `conformance-controlled` job sets it and fails if anything is skipped, because a skipped suite proves nothing.
+- **One process.** The suite targets a single service process, so a test's requests share one read cache. This is what lets `test_get_after_delete_returns_404` catch a deleted issue still served from the cache.
+- **Disposable data and cleanup.** Every issue is created through the `post_issue` fixture, which records each `201` and deletes the issue after the test even when the test fails, including tests that expected the create to be rejected. A delete that returns anything other than `204` or `404` raises a `CleanupWarning` naming the issue. `scripts/smoke_check.sh` lists those issues in the run summary for removal by hand. Titles start with `Conformance` so leftovers are recognisable.
+- **Release gate.** In the release workflow the smoke check first requires `/readyz` to report the deployed commit, then runs the suite against the live service. Any failing test records the release as `failure` and leaves the previous success as the known-good revision.
+
+### 7.3 Guarantees and the tests that establish them
+
+A dash means the guarantee cannot be checked through the live API (for example, a provider timeout), so only the controlled test establishes it.
+
+| Guarantee | Conformance test | Trello controlled test | Linear controlled test |
+| :---- | :---- | :---- | :---- |
+| Create returns `201`, `{id, title}` and a `Location` that reads the issue back | `test_create_returns_the_new_issue_and_its_location` | `trello/test_create_issue.py::test_create_issue_returns_id_and_title` | `linear/test_create_issue.py::test_created_issue_can_be_read_back` |
+| Invalid bodies return `422 invalid_input` and never reach the provider | `test_invalid_body_returns_422`, `test_invalid_update_body` | `trello/test_update_issue.py::test_patch_invalid_body_returns_422` | `linear/test_create_issue.py::test_invalid_body_never_reaches_linear`, `linear/test_update_issue.py::test_patch_invalid_body_never_reaches_linear` |
+| An unknown or malformed ID returns `404 not_found`, including Linear's HTTP 200 errors | `test_get_unknown_issue_returns_404` | `trello/test_provider.py::test_trello_missing_issue_returns_404`, `trello/test_get_issue.py::test_get_unknown_issue_returns_404` | `linear/test_get_issue.py::test_get_missing_issue_on_http_200_returns_404`, `linear/test_get_issue.py::test_get_malformed_id_returns_404_without_contacting_linear` |
+| Rename returns the updated issue, and a later read sees it | `test_get_after_update` | `trello/test_update_issue.py::test_patch_updates_title` | `linear/test_update_issue.py::test_patch_sends_graphql_mutation_and_returns_updated_issue` |
+| A stale `If-Match` returns `412` and the earlier title remains | `test_update_with_stale_etag` | `test_conditional_update.py::test_stale_overwrite_is_rejected` (above the adapter, so it covers both) | Same test |
+| After a delete, `GET`, `PATCH` and a repeated `DELETE` return `404`, even if the issue was cached | `test_get_after_delete_returns_404`, `test_repeated_delete_returns_404` | `trello/test_delete_issue.py::test_delete_uses_injected_provider_and_cannot_be_retrieved_or_deleted_again` | `linear/test_delete_issue.py::test_delete_already_deleted_issue_returns_404`, `linear/test_delete_issue.py::test_get_after_delete_returns_404`, `linear/test_update_issue.py::test_patch_after_delete_returns_404` |
+| Provider failures map to the documented code and status | — | `trello/test_get_issue.py::test_trello_http_errors`, `trello/test_get_issue.py::test_trello_network_failure` | `linear/test_get_issue.py::test_linear_failures`, `linear/test_get_issue.py::test_network_failure_returns_502` |
+| Responses and logs contain no credentials or provider text | — | `test_errors.py::test_real_provider_failures_are_sanitized` | `linear/test_get_issue.py::test_linear_failures` |
+
+### 7.4 What the tests do not establish
+
+- **Provider assumptions in the fakes.** `FakeLinear` encodes what we observed in live calls: HTTP 200 with `errors` for a missing issue, the `trashed` field after a delete, and whitespace trimming. Only the live Linear conformance run confirms these still hold. Because it runs by hand rather than on every release, a change in Linear's behavior would be caught at the next manual run, not automatically.
+- **Failures we cannot provoke live.** Linear's rate-limit and forbidden-entity responses have not been observed, so their `provider_error` mapping rests on controlled tests only (open question 2).
+- **Multiple processes.** The update lock and read cache are tested within one process only, which matches the single-instance deployment (section 8.3).
 
 ## 8\. Open Questions and Review
 
