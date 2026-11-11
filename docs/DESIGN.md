@@ -493,29 +493,21 @@ A separate controlled test checks the live check itself: `tests/test_smoke_check
 
 A dash means the guarantee cannot be checked through the live API (for example, a provider timeout), so only the controlled test establishes it.
 
-| \# | Guarantee | Conformance test | Controlled test |
-| :---- | :---- | :---- | :---- |
-| G1 | Create returns `201`, `{id, title}` and a `Location` that reads the issue back (3.3) | `test_create_returns_the_new_issue_and_its_location` | `linear/test_create_issue.py::test_created_issue_can_be_read_back` |
-| G2 | Invalid bodies return `422 invalid_input` and never reach the provider (3.2) | `test_invalid_body_returns_422`, `test_invalid_update_body` | `test_injected_provider.py::test_invalid_create_body_does_not_call_provider` |
-| G3 | Responses and later reads return the title as the provider stored it (3.2) | `test_create_returns_the_title_as_stored` | `linear/test_create_issue.py::test_create_sends_the_title_unchanged` |
-| G4 | An unknown or malformed ID returns `404 not_found`, including Linear's HTTP 200 errors (2.5, 5.1) | `test_get_unknown_issue_returns_404` | `linear/test_get_issue.py::test_get_missing_issue_on_http_200_returns_404` |
-| G5 | Rename returns the updated issue, and a later read sees it (3.3) | `test_get_after_update` | `trello/test_update_issue.py::test_patch_updates_title` |
-| G6 | A stale `If-Match` returns `412` and the earlier title remains (2.3) | `test_update_with_stale_etag` | `test_conditional_update.py::test_stale_overwrite_is_rejected` |
-| G7 | After a delete, `GET`, `PATCH` and a repeated `DELETE` return `404`, even if the issue was cached (section 4) | `test_get_after_delete_returns_404`, `test_repeated_delete_returns_404` | `linear/test_delete_issue.py::test_delete_already_deleted_issue_returns_404` |
-| G8 | Provider failures map to the documented code and status (5.1) | — | `test_errors.py::test_provider_failure`, `test_errors.py::test_access_denied` |
-| G9 | An unconfirmed write returns `502` with `write_outcome: unknown`, and is never retried (5.1) | — | `test_errors.py::test_write_failure_logs_whether_change_was_applied` |
-| G10 | Responses and logs contain no credentials or provider text (5.2) | — | `test_errors.py::test_real_provider_failures_are_sanitized` |
-| G11 | Reads are cached up to 30 seconds, and every update or delete clears the entry (3.3) | — | `test_cache.py::test_cached_issue_expires`, `test_cache.py::test_failed_write_invalidates_cached_issue` |
-| G12 | With Trello, a retried create with the same `Idempotency-Key` makes one issue (3.5) | — | `test_idempotency.py::test_repeated_request_creates_one_issue_and_replays_it` |
-| G13 | With Linear, `Idempotency-Key` returns `503` and creates nothing (3.5) | — | `linear/test_create_issue.py::test_idempotency_key_returns_503_and_creates_nothing` |
-| G14 | `ISSUE_PROVIDER` builds one adapter behind the cache, and shutdown closes it (2.2) | — | `test_provider_selection.py::test_startup_builds_the_configured_adapter_behind_the_cache`, `test_provider_selection.py::test_shutdown_closes_the_adapter_once` |
-| G15 | The contract package imports nothing from the service (2.1) | — | `contract/tests/test_import_boundary.py::test_contract_imports_nothing_from_service_or_providers` |
-| G16 | A release is recorded as a success only if conformance passes against the live service (5.5) | The release `smoke` job (live Trello) | `test_smoke_check.py::test_contract_break_fails_and_names_the_tests` |
+| Guarantee | Conformance test | Controlled test |
+| :---- | :---- | :---- |
+| Create returns `201`, `{id, title}` and a `Location` that reads the issue back | `test_create_returns_the_new_issue_and_its_location` | `linear/test_create_issue.py::test_created_issue_can_be_read_back` |
+| Invalid bodies return `422 invalid_input` and never reach the provider | `test_invalid_body_returns_422`, `test_invalid_update_body` | `test_injected_provider.py::test_invalid_create_body_does_not_call_provider` |
+| An unknown or malformed ID returns `404 not_found`, including Linear's HTTP 200 errors | `test_get_unknown_issue_returns_404` | `linear/test_get_issue.py::test_get_missing_issue_on_http_200_returns_404` |
+| Rename returns the updated issue, and a later read sees it | `test_get_after_update` | `trello/test_update_issue.py::test_patch_updates_title` |
+| A stale `If-Match` returns `412` and the earlier title remains | `test_update_with_stale_etag` | `test_conditional_update.py::test_stale_overwrite_is_rejected` |
+| After a delete, `GET`, `PATCH` and a repeated `DELETE` return `404`, even if the issue was cached | `test_get_after_delete_returns_404`, `test_repeated_delete_returns_404` | `linear/test_delete_issue.py::test_delete_already_deleted_issue_returns_404` |
+| Provider failures map to the documented code and status | — | `test_errors.py::test_provider_failure`, `test_errors.py::test_access_denied` |
+| Responses and logs contain no credentials or provider text | — | `test_errors.py::test_real_provider_failures_are_sanitized` |
 
 ### 7.4 What the tests do not establish
 
 - **Provider assumptions in the fakes.** `FakeLinear` encodes what we observed in live calls: HTTP 200 with `errors` for a missing issue, the `trashed` field after a delete, and whitespace trimming. Only the live Linear conformance run confirms these still hold. Because it runs by hand rather than on every release, a change in Linear's behavior would be caught at the next manual run, not automatically.
-- **Failures we cannot provoke live.** Linear's rate-limit and forbidden-entity responses have not been observed, so G8's `provider_error` mapping for them rests on controlled tests only (open question 2).
+- **Failures we cannot provoke live.** Linear's rate-limit and forbidden-entity responses have not been observed, so their `provider_error` mapping rests on controlled tests only (open question 2).
 - **Multiple processes.** The update lock and read cache are tested within one process only, which matches the single-instance deployment (section 8.3).
 
 ## 8\. Open Questions and Review
