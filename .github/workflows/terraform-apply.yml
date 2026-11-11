@@ -1,31 +1,37 @@
-# Apply the reviewed infrastructure and deploy the pinned commit.
+# Apply reviewed infrastructure changes (infra/). It deploys no code:
+# releases do that (release.yml).
 #
 # Manual only: it runs when someone starts it from the Actions tab (or
-# `gh workflow run`), and then waits for approval on the render-production
-# environment. No push, merge, schedule or other workflow ever triggers it,
-# and Render's own auto-deploy is off (infra/main.tf).
+# `gh workflow run`), and then waits for approval on the render-infrastructure
+# environment. No push, merge, schedule or other workflow ever triggers it.
 #
-# Steps: plan and apply the configuration on main, deploy exactly the
-# commit in infra/release.tf, check the deployed service reports that
-# commit, then plan again and fail unless it shows no changes, which proves a
-# repeated apply with unchanged inputs changes nothing.
+# Steps: work out the image digest a newly created or converted service starts
+# on, plan and apply the configuration on main, then plan again and fail
+# unless it shows no changes, which proves a repeated apply with unchanged
+# inputs changes nothing.
 
-name: Terraform apply and deploy
+name: Terraform apply
 
 on:
   workflow_dispatch:
     inputs:
-      commit_sha:
-        description: "Commit to deploy. Must equal commit_sha in infra/release.tf on main (a confirmation)."
-        required: true
+      disposable:
+        description: "Keep (or create) the disposable demo service. Leave unticked to remove it."
+        type: boolean
+        default: false
+      bootstrap_image_digest:
+        description: "Only for the very first apply (docs/DEPLOYMENT.md, bootstrap): the sha256:... digest to start on. Otherwise leave empty: the latest successful production release is used."
         type: string
+        required: false
 
 permissions:
   contents: read
 
-# One apply at a time; never cancel one halfway.
+# Shares the release workflow's group (release.yml), so applies, destroys
+# and releases never overlap, and none is cancelled halfway. A run started
+# while another waits in this group replaces the waiting one; re-run it.
 concurrency:
-  group: terraform-render
+  group: render-production
   cancel-in-progress: false
 
 jobs:
@@ -33,9 +39,13 @@ jobs:
     # Only reviewed, merged configuration is applied.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     # Required reviewers on this environment approve the run before it starts.
-    environment: render-production
+    environment: render-infrastructure
+    permissions:
+      contents: read
+      # Read the release record for the latest successful digest.
+      deployments: read
 
     defaults:
       run:
@@ -46,11 +56,44 @@ jobs:
       TF_INPUT: "0"
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
       RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
-      RENDER_API: https://api.render.com/v1
+      TF_VAR_disposable_enabled: ${{ inputs.disposable }}
 
     steps:
       - name: Check out main
         uses: actions/checkout@v7
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.12.17"
+          python-version: "3.13.5"
+
+      # Ignored for services that already run an image; it only matters for a
+      # service this apply creates or switches to the image runtime.
+      - name: Choose the digest a new service starts on
+        working-directory: .
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIVEN: ${{ inputs.bootstrap_image_digest }}
+        run: |
+          if [ -n "$GIVEN" ]; then
+            digest="$GIVEN"
+            echo "Using the digest given by hand: $digest"
+          else
+            uv sync --locked --no-dev
+            if ! known="$(uv run --locked --no-dev python -m scripts.release known-good \
+                --repo "$GITHUB_REPOSITORY" --environment render-production)"; then
+              echo "::error::No successful production release is recorded yet. For the first apply, give bootstrap_image_digest (docs/DEPLOYMENT.md, bootstrap)."
+              exit 1
+            fi
+            echo "$known"
+            digest="$(sed -n 's/^digest=//p' <<<"$known")"
+          fi
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::'$digest' is not an image digest (sha256:<64 hex>)."
+            exit 1
+          fi
+          echo "TF_VAR_bootstrap_image_digest=$digest" >> "$GITHUB_ENV"
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v4.0.1
@@ -70,104 +113,31 @@ jobs:
           {
             echo "## Plan applied by this run"
             echo
+            echo "Disposable service: \`$TF_VAR_disposable_enabled\`. Digest for a newly created or converted service: \`$TF_VAR_bootstrap_image_digest\`."
+            echo
             echo '```'
             cat plan.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Check the confirmation matches infra/release.tf
-        env:
-          CONFIRMED: ${{ inputs.commit_sha }}
-        run: |
-          pinned="$(terraform show -json tfplan | jq -r '.planned_values.outputs.commit_sha.value')"
-          if [ "$pinned" != "$CONFIRMED" ]; then
-            echo "Confirmation '$CONFIRMED' does not match commit_sha '$pinned' in infra/release.tf."
-            echo "Nothing was applied."
-            exit 1
-          fi
-          echo "Deploying $pinned."
-
       # Applies exactly the plan shown above.
       - name: Apply
         run: terraform apply -input=false -no-color -lock-timeout=5m tfplan
 
-      - name: Deploy the pinned commit
-        id: deploy
+      # The release workflow reads these from the GitHub environments.
+      - name: Show the service IDs and URLs
         run: |
-          service_id="$(terraform output -raw service_id)"
-          commit="$(terraform output -raw commit_sha)"
-          echo "url=$(terraform output -raw service_url)" >> "$GITHUB_OUTPUT"
-          echo "commit=$commit" >> "$GITHUB_OUTPUT"
-
-          render() {
-            curl -fsS -H "Authorization: Bearer $RENDER_API_KEY" -H "Accept: application/json" "$@"
-          }
-
-          # A free-instance Docker build takes several minutes, and a queued
-          # deploy waits for the one ahead of it. One limit covers both.
-          deadline=$((SECONDS + 1800))
-
-          response="$(render -X POST -H "Content-Type: application/json" \
-            -d "{\"commitId\": \"$commit\"}" "$RENDER_API/services/$service_id/deploys")"
-          deploy_id="$(jq -r '.id // empty' <<<"$response")"
-
-          # Render answers 202 Queued, with no body, while another deploy is
-          # running. That always happens on the first apply: creating a
-          # service starts a build of the branch head. The queued deploy is
-          # listed once it starts, so look for it by commit until then.
-          while [ -z "$deploy_id" ]; do
-            if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "Render did not start a deploy for $commit within 30 minutes."
-              exit 1
-            fi
-            echo "$(date -u +%H:%M:%S) deploy for $commit queued; waiting for it to start"
-            sleep 20
-            deploy_id="$(render "$RENDER_API/services/$service_id/deploys?limit=20" \
-              | jq -r --arg c "$commit" '[.[].deploy | select(.commit.id == $c)][0].id // empty')"
-          done
-          echo "Deploy $deploy_id started for $commit."
-
-          while true; do
-            status="$(render "$RENDER_API/services/$service_id/deploys/$deploy_id" | jq -r '.status')"
-            echo "$(date -u +%H:%M:%S) $status"
-            case "$status" in
-              live) break ;;
-              build_failed | update_failed | pre_deploy_failed | canceled | deactivated)
-                echo "Deploy $deploy_id ended as $status; see the Render dashboard logs."
-                exit 1 ;;
-            esac
-            if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "Deploy $deploy_id did not go live within 30 minutes."
-              exit 1
-            fi
-            sleep 20
-          done
-
-      - name: Check the service runs the pinned commit
-        env:
-          SERVICE_URL: ${{ steps.deploy.outputs.url }}
-          COMMIT: ${{ steps.deploy.outputs.commit }}
-        run: |
-          # A free instance can take about a minute to wake up.
-          for _ in $(seq 1 30); do
-            curl -fsS --max-time 30 "$SERVICE_URL/healthz" > /dev/null && break
-            sleep 10
-          done
-          curl -fsS --max-time 30 "$SERVICE_URL/healthz"
-          echo
-          ready="$(curl -sS --max-time 30 "$SERVICE_URL/readyz")"
-          echo "$ready"
-          deployed="$(jq -r '.commit' <<<"$ready")"
-          if [ "$deployed" != "$COMMIT" ]; then
-            echo "/readyz reports commit '$deployed', expected '$COMMIT'."
-            exit 1
-          fi
           {
-            echo "## Deployed"
+            echo "## Services"
             echo
-            echo "- URL: $SERVICE_URL"
-            echo "- Commit: \`$COMMIT\`"
-            echo "- /readyz: \`$ready\`"
+            echo "Set these as the \`RENDER_SERVICE_ID\` and \`SERVICE_URL\` variables of each GitHub environment."
+            echo
+            echo "| Environment | RENDER_SERVICE_ID | SERVICE_URL |"
+            echo "| --- | --- | --- |"
+            echo "| render-production | \`$(terraform output -raw service_id)\` | $(terraform output -raw service_url) |"
+            if [ "$TF_VAR_disposable_enabled" = "true" ]; then
+              echo "| render-disposable | \`$(terraform output -raw disposable_service_id)\` | $(terraform output -raw disposable_service_url) |"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Proof that applying again with unchanged inputs changes nothing:

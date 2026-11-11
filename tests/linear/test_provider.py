@@ -5,7 +5,6 @@ import pytest
 
 from app.interface import ClosableIssueProvider, IdempotentIssueProvider
 from app.providers.linear_provider import LinearIssueProvider
-from issue_tracker_contract.errors import ErrorCode, ServiceError
 from issue_tracker_contract.interface import IssueProvider
 from tests.linear.fake_linear import (
     AUTHENTICATION_BODY,
@@ -40,21 +39,6 @@ def test_every_read_queries_linear(linear: FakeLinear, fresh: bool) -> None:
     adapter.get_issue(ISSUE_ID, fresh=fresh)
 
     assert len(linear.requests) == 2
-
-
-def test_unimplemented_delete_refuses_without_a_request(
-    linear: FakeLinear,
-) -> None:
-    adapter = simulated_provider(linear)
-
-    with pytest.raises(ServiceError) as exc:
-        adapter.delete_issue(ISSUE_ID)
-
-    assert exc.value.code == ErrorCode.SERVICE_NOT_CONFIGURED
-    assert exc.value.cause == "operation_not_implemented"
-    assert not exc.value.provider_involved
-    assert not exc.value.may_have_applied
-    assert linear.requests == []
 
 
 def test_close_closes_the_http_client(linear: FakeLinear) -> None:

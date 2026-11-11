@@ -36,7 +36,7 @@ something is missing. `GET /healthz` (liveness) and `GET /readyz`
 It is packaged as a container image and deployed to Render with Terraform;
 see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
-GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests. It also builds the container image and checks it in a disposable container. Pull requests that change `infra/` get a `terraform plan` comment, and deploys run only by manual dispatch.
+GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests, and the shared conformance suite against the controlled implementation (the real service backed by an in-memory provider). It also builds the container image. One aggregate `checks` status passes only when all of these pass; branch protection requires it before merging to `main` (see [Merge gate](docs/DEPLOYMENT.md#merge-gate)). Every pull request gets Terraform formatting, validation and tests, and pull requests that change `infra/` also get a `terraform plan` comment. Every merge to `main` is released automatically by the release workflow; infrastructure changes are applied by hand, with approval.
 
 ## Project Structure
 
@@ -54,7 +54,7 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 - `app/providers/`: Provider adapters, one module per provider.
   - `app/providers/common.py`: What every adapter shares: the request timeout and the caller-facing error messages.
   - `app/providers/trello_provider.py`: Trello authentication, requests, and translation of Trello responses and failures.
-  - `app/providers/linear_provider.py`: Linear GraphQL requests and translation of Linear responses and failures (get and create; rename and delete not yet implemented).
+  - `app/providers/linear_provider.py`: Linear GraphQL requests and translation of Linear responses and failures (get, create and delete; rename not yet implemented).
 - `app/cache.py`: Caches successful reads and invalidates saved issues before updates or deletions.
 - `app/dependencies.py`: Creates one cached provider (Trello, or Linear with `ISSUE_PROVIDER=linear`) and the idempotency key store at application startup and supplies them to the endpoints.
 - `app/idempotency.py`: Durable idempotency key store and the logic that creates each keyed issue at most once.
@@ -67,12 +67,17 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
   - `tests/trello/test_provider.py`: Provider compatibility, translation, and error tests.
 - `tests/linear/`: Tests of the real Linear adapter with simulated GraphQL responses, through the real startup with `ISSUE_PROVIDER=linear`.
   - `tests/linear/test_get_issue.py`, `test_create_issue.py`: Retrieval and creation endpoint tests.
+  - `tests/linear/test_delete_issue.py`: Deletion, repeated deletion, cache invalidation, missing issues, unsuccessful responses, and timeout tests.
   - `tests/linear/test_provider.py`: Protocol compatibility, uncached reads, unimplemented operations, and `close()`.
   - `tests/linear/fake_linear.py`: The simulated Linear API and expected values shared by these tests.
 - `tests/test_provider_selection.py`: Startup builds the adapter named by `ISSUE_PROVIDER` and closes it at shutdown.
 - `tests/test_config.py`: Startup configuration checks, including that a server started with a variable missing exits without printing values.
 - `tests/test_health.py`: `/healthz`, `/readyz`, the provider check's caching, and the reported commit.
 - `tests/test_injected_provider.py`: Endpoint tests using supplied fake providers.
+- `tests/controlled/`: The controlled implementation CI runs the conformance suite against: `provider.py` (an in-memory provider that follows the contract, with optional injected faults) and `server.py` (the real app with that provider injected, started with uvicorn).
+- `tests/release/`: Tests of `scripts/release.py` against simulated Render, GitHub and service APIs.
+- `tests/test_smoke_check.py`: Runs `scripts/smoke_check.sh` against the controlled service, working and with injected faults.
+- `tests/test_controlled_provider.py`: The in-memory provider's contract behavior, its faults, and the real app running on it.
 - `tests/test_idempotency.py`: Repeated, overlapping, conflicting, expired and restarted keyed creations, unknown provider outcomes, and cache and logging integration.
 - `tests/test_errors.py`: Error response and failure-logging tests using a controlled provider.
 - `tests/expected_errors.py`: Expected error bodies shared by the endpoint tests.
@@ -80,14 +85,19 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 - `docs/providers.md`: Provider interface, error translation, dependency setup, and testing approach.
 - `docs/DEPLOYMENT.md`: Deploying, verifying, rolling back, and tearing down the Render deployment, plus the teammate walkthrough.
 - `Dockerfile`, `.dockerignore`: The deployable image: locked runtime dependencies, non-root user, no credentials.
-- `infra/`: Terraform for the Render deployment, with state in HCP Terraform. `release.tf` pins the deployed commit.
-- `scripts/disposable_env.sh`: Builds the image and checks it in a throwaway container with fake configuration.
+- `infra/`: Terraform for the Render deployment, with state in HCP Terraform. The services run images from GitHub's container registry, pinned by digest; `release.tf` names the image repository, the digest a new service starts on, and the disposable-service toggle. Which digest runs afterwards is set by releases, not Terraform.
+  - `infra/tests/`: `terraform test` checks with a mock Render provider: services start on the given digest, later digests are left to releases, and the disposable toggle.
+- `scripts/build_image.sh`: Builds the release image once, pushes it tagged with its full commit SHA, and reports its digest.
+- `scripts/release.py`: Release steps the release workflow runs: `deploy` points the Render service at an image digest (refusing anything but a digest), deploys it and waits until it is live; `check-ready` waits until `/readyz` is ready and reports the expected commit; `record` creates the release's GitHub Deployment (commit, digest, run, deploy window; `success` only after the smoke check passed); `known-good` prints the latest successful release (`GITHUB_TOKEN=$(gh auth token) uv run python -m scripts.release known-good --repo Tyler-Arciniaga/OSPSD-Team-4 --environment render-production`); `verify-rollback` refuses a commit and digest that were never released successfully.
+- `scripts/disposable_env.sh`: Checks the image in a throwaway container with fake configuration: one it builds from `HEAD`, or an already pushed image given by digest (`IMAGE_REF`).
 - `scripts/conformance_remote.sh`: Runs the conformance suite against a deployed service.
+- `scripts/smoke_check.sh`: The release's post-deployment smoke check: requires `/readyz` to be ready with the expected commit, runs the conformance suite against the live service, fails on any failing test, and lists issues it could not delete in the run summary.
 - `pyproject.toml`: Python requirement, dependencies, and tool configuration.
 - `uv.lock`: Locked dependency versions for reproducible installation.
-- `.github/workflows/ci.yml`: Automated linting, formatting, type checking, tests, and the container image check.
-- `.github/workflows/terraform-plan.yml`: Posts `terraform plan` on pull requests that change `infra/`.
-- `.github/workflows/terraform-apply.yml`: Manual, approved apply and deploy of the pinned commit, followed by a plan that must show no changes.
+- `.github/workflows/ci.yml`: Automated linting, formatting, type checking, tests, the conformance suite against the controlled implementation, the container image build, and the aggregate `checks` status that branch protection requires. Reusable from other workflows (`workflow_call`).
+- `.github/workflows/release.yml`: On every push to `main`: reruns the CI checks on that commit (all but the build-only image check, since the release builds the image itself), builds the image once, pushes it to GitHub's container registry tagged with the full commit SHA, checks that exact image (by digest) in a disposable container, then, unless a newer commit has reached `main`, deploys that digest to Render and confirms `/readyz` reports the commit, then runs the smoke check against the live service and records the release as a GitHub Deployment (`success` only if the smoke check passed). One release runs at a time. Started by hand, it can roll back to a known-good release (redeploying its recorded digest, no rebuild) or release to the disposable service.
+- `.github/workflows/terraform-plan.yml`: Checks Terraform formatting and validation on every pull request, and posts `terraform plan` on pull requests that change `infra/` or a Terraform workflow.
+- `.github/workflows/terraform-apply.yml`: Manual, approved apply of infrastructure changes only (it deploys no code), followed by a plan that must show no changes.
 - `.github/workflows/terraform-destroy.yml`: Manual, approved teardown of everything Terraform created.
 - `AGENTS.md`: Contribution and release workflow.
 
@@ -156,8 +166,8 @@ Use a dedicated Linear test workspace, or a test team in one, whose issues
 your team may create and delete.
 
 1. Sign in to the test workspace. Open **Settings > Personal > Security &
-   access**, create a personal API key with full access and access to your specific team. Then copy
-   it.
+   access**, create a personal API key with both Read and Write permissions,
+   restricted to your test team. Then copy it.
 2. Edit `.env` locally, set `ISSUE_PROVIDER=linear`, and fill in
    `LINEAR_API_KEY`.
 3. Set `LINEAR_TEAM_ID` in `.env` to the ID of the team new issues should be
@@ -222,7 +232,8 @@ because inside the image only `/app/data` is writable by the service's
 non-root user.
 
 `scripts/disposable_env.sh` builds the image and checks it in a
-throwaway container with fake configuration. See
+throwaway container with fake configuration. With `IMAGE_REF` set to a pushed
+image pinned by digest, it checks that image instead. See
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the Render deployment.
 
 ## API Usage
@@ -360,7 +371,7 @@ uv run --locked ruff format --check .
 Check for inconsistencies between type annotations and how values are used:
 
 ```bash
-uv run --locked mypy app tests contract/src contract/tests
+uv run --locked mypy app tests scripts contract/src contract/tests
 ```
 
 ### Automated Tests
@@ -385,7 +396,7 @@ Cache tests cover repeated reads, expiration, least-recently-used eviction,
 returned-copy isolation, invalidation before successful or failed writes,
 uncached failures, and reuse and reset across application lifespans.
 
-Linear tests in `tests/linear/` run retrieval and creation through the real
+Linear tests in `tests/linear/` run retrieval, creation and deletion through the real
 startup with `ISSUE_PROVIDER=linear` and simulated GraphQL responses,
 including Linear's HTTP 200 responses that carry errors, trashed issues,
 and malformed or short IDs.
@@ -398,9 +409,25 @@ verification is performed separately as described below.
 
 The shared conformance suite in `contract/tests/conformance/` checks that
 a consumer sees the same behavior from every provider. It sends real HTTP
-requests to a running service and creates real issues, so it is skipped
-(such as during CI) unless `CONFORMANCE_BASE_URL` is set. Start the service
-for one provider, then run:
+requests to a running service, so it is skipped unless
+`CONFORMANCE_BASE_URL` is set.
+
+CI runs it on every push and pull request against the controlled
+implementation: the real service with an in-memory provider injected, so no
+network or credentials are needed. To run that locally:
+
+```bash
+GIT_SHA="$(git rev-parse HEAD)" uv run --locked uvicorn tests.controlled.server:app
+# in another terminal
+CONFORMANCE_BASE_URL=http://127.0.0.1:8000 uv run --locked pytest contract/tests/conformance
+```
+
+Setting `CONTROLLED_FAULT=wrong_title` starts a deliberately broken service
+that the suite must fail against. When the suite grows (rename, delete),
+extend `tests/controlled/provider.py` in the same change so CI keeps passing.
+
+Against a real provider it creates real issues. Start the service for one
+provider, then run:
 
 ```bash
 CONFORMANCE_BASE_URL=http://127.0.0.1:8000 uv run --locked pytest contract/tests/conformance
@@ -524,9 +551,9 @@ for errors and supported IDs.
 
 ## Linear Verification
 
-The Linear adapter currently implements GET and POST; add steps here as
-PATCH and DELETE are implemented. Use the documented single-process startup
-command for this workflow so all requests share the same cache.
+The Linear adapter currently implements GET, POST and DELETE. PATCH is
+not yet implemented. Use the documented single-process startup command
+for this workflow so all requests share the same cache.
 
 1. In the test team on the Linear platform, create an issue named `HW1 Linear GET test`. Linear
    shows its short identifier (for example `TYL-5`); however the service accepts
@@ -575,12 +602,22 @@ command for this workflow so all requests share the same cache.
    with the same body.
 6. Repeat the request with `-d '{"title": ""}'`. Expect HTTP 422 and
    confirm no new issue appears in Linear.
-7. TODO (once deleteIssue operation is implemented for Linear):
-   Delete the issue created in step 6 in Linear, which moves it to the
-   trash. Wait at least 30 seconds after the step 6 GET, then repeat that
-   GET. Expect HTTP 404 and
-   `{"error":{"code":"not_found","message":"Issue not found"}}`, with
-   `"cause": "issue_trashed"` in the log line.
+7. Delete the issue created in step 5 through the service. Replace
+   `<new ID>` with its full UUID:
+
+   ```bash
+   curl -i -X DELETE "http://127.0.0.1:8000/issues/<new ID>"
+   curl -i "http://127.0.0.1:8000/issues/<new ID>"
+   curl -i -X DELETE "http://127.0.0.1:8000/issues/<new ID>"
+   ```
+
+   Expect HTTP 204 with an empty body, followed by HTTP 404 for both
+   GET and repeated DELETE. Both 404 responses should contain:
+   `{"error":{"code":"not_found","message":"Issue not found"}}`.
+
+   DELETE clears the affected local cache entry before attempting deletion.
+   The Linear adapter performs a fresh lookup and rejects missing or
+   already-trashed issues before sending the delete mutation.
 8. Rename the step 2 test issue through the service:
 
    ```bash
@@ -591,12 +628,8 @@ command for this workflow so all requests share the same cache.
 
    Expect HTTP 503 and
    `{"error":{"code":"service_not_configured","message":"Renaming issues for Linear issue provider is not available yet"}}`.
-   Confirm in Linear that the title did not change. Repeat with
-   `curl -i -X DELETE "http://127.0.0.1:8000/issues/$LINEAR_TEST_ISSUE_ID"`
-   and expect HTTP 503 with the message
-   `Deleting issues for Linear issue provider is not available yet`.
-   Confirm the issue still exists in Linear.
-9. Repeat the step 6 request with
+   Confirm in Linear that the title did not change.
+9. Repeat the valid POST request from step 5 with
     `-H "Idempotency-Key: 3f2b1c9e-8d4a-4f6b-9c1e-2a7d5e8f0b13"`. Expect
     HTTP 503 and
     `{"error":{"code":"service_not_configured","message":"Idempotent creation is not available"}}`,
@@ -624,10 +657,16 @@ command for this workflow so all requests share the same cache.
 
 ## Deployment
 
-The service runs on Render, described by Terraform in `infra/`. Pull requests
-show the plan, and deploys are manual and approved. See
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for prerequisites, deploy, verify,
-rollback, teardown, and the teammate walkthrough.
+The service runs on Render, described by Terraform in `infra/`. Every merge
+to `main` is released automatically: checked again, built once into an image
+identified by its digest, deployed by that digest, smoke-checked against the
+real provider, and recorded as a GitHub Deployment. `GET /readyz` reports the
+running commit. A failed smoke check marks the release failed; rolling back
+to the last known-good release is the same workflow started by hand.
+Infrastructure changes are applied by hand with approval. See
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the pipeline, finding the
+running commit, rollback, repairing provider data, the bootstrap, the faulty
+release demonstration, teardown, and the teammate walkthrough.
 
 ## Contributing
 
