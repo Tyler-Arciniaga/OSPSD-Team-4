@@ -74,9 +74,8 @@ cannot).
 ## Prerequisites (by hand, once)
 
 These steps cannot be automated. Whoever owns the accounts does them once.
-They are already done for this team, except where
-[the Level 2 checklist](#level-2-checklist-repository-admin) says otherwise;
-a teammate only needs the [walkthrough access](#teammate-walkthrough).
+They are already done for this team; a teammate only needs the
+[walkthrough access](#teammate-walkthrough).
 
 1. **HCP Terraform** (app.terraform.io, free):
    - Create the organization `ospsd-team-4`.
@@ -90,8 +89,22 @@ a teammate only needs the [walkthrough access](#teammate-walkthrough).
    - Trello: `TRELLO_API_KEY`, `TRELLO_TOKEN` and `TRELLO_LIST_ID`. Use a **dedicated test list**: every release's smoke check creates and deletes real cards there.
    - Create the token with `expiration=30days`, from the test account: `https://trello.com/1/authorize?expiration=30days&scope=read,write&response_type=token&name=OSPSD-Team4-Render&key=<TRELLO_API_KEY>`. The README's one-day token would expire under the running service.
    - Put the group's `evg-…` ID in `infra/release.tf`.
-4. **GitHub**: the environments, secrets and variables in the
-   [Level 2 checklist](#level-2-checklist-repository-admin).
+4. **GitHub** (repository admin):
+   - **Environments** (**Settings → Environments → New environment**):
+     - `render-production`: **Deployment branches** → *Selected branches* →
+       `main`. **No required reviewers** (merges release without a click).
+       Secret `RENDER_API_KEY`; variable `RENDER_OWNER_ID`.
+     - `render-disposable`: **no branch restriction** (a faulty release is
+       released from a throwaway branch), no reviewers. Secret
+       `RENDER_API_KEY`; variable `RENDER_OWNER_ID`.
+     - `render-infrastructure`: **Required reviewers**: the people allowed to
+       approve applies and teardown. Deployment branches: `main`. Secrets
+       `RENDER_API_KEY`, `TF_API_TOKEN`; variable `RENDER_OWNER_ID`.
+   - **Repository secrets** `RENDER_API_KEY` and `TF_API_TOKEN` and the
+     repository variable `RENDER_OWNER_ID`, for pull request plans only.
+   - **Actions permissions** (**Settings → Actions → General → Workflow
+     permissions**): leave the default *Read repository contents*; each job
+     asks for more itself.
 
 ## Merge gate
 
@@ -168,21 +181,27 @@ Any of these, from cheapest:
 2. **Repository → Environments → render-production** (or the
    **Deployments** list): the newest entry with a green **success** shows the
    commit and links to the run. Its payload holds the digest:
+
    ```bash
    gh api "repos/Tyler-Arciniaga/OSPSD-Team-4/deployments?environment=render-production&per_page=5" \
      --jq '.[] | {created_at, sha, digest: .payload.digest, run: .payload.run_url}'
    ```
+
    Or the latest successful release only:
+
    ```bash
    GITHUB_TOKEN="$(gh auth token)" uv run --locked python -m scripts.release known-good \
      --repo Tyler-Arciniaga/OSPSD-Team-4 --environment render-production
    ```
+
 3. The image itself records its commit:
+
    ```bash
    IMAGE=ghcr.io/tyler-arciniaga/ospsd-team4-issue-service@<digest>
    docker pull --quiet "$IMAGE" >/dev/null
    docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE"
    ```
+
 4. Render dashboard → the service → **Events** lists each deploy; the
    service's image setting (**Settings → Image**) names the digest the
    release set.
@@ -253,10 +272,12 @@ that environment. Rolling back redeploys its image digest: no rebuild, the
 same deploy, readiness and smoke checks, and a new release record.
 
 1. Find the known-good commit and digest:
+
    ```bash
    GITHUB_TOKEN="$(gh auth token)" uv run --locked python -m scripts.release known-good \
      --repo Tyler-Arciniaga/OSPSD-Team-4 --environment render-production
    ```
+
    (or read them from the newest green entry under **Environments →
    render-production**, as in [Find the commit](#find-the-commit-behind-the-running-service)).
 2. **Actions → Release → Run workflow**: branch `main`, target
@@ -287,15 +308,18 @@ wrote:
 
 1. **Get the window.** Open the faulty release's run summary (**Deployed**
    table, *Deploy window*) or its Deployment payload:
+
    ```bash
    gh api "repos/Tyler-Arciniaga/OSPSD-Team-4/deployments?environment=render-production&per_page=20" \
      --jq '.[] | {id, sha, started: .payload.deploy_started_at, finished: .payload.deploy_finished_at, run: .payload.run_url}'
    ```
+
    The faulty revision served from its `deploy_started_at` until the
    rollback's `deploy_finished_at`.
 2. **List what changed in the test list during that window.** In a shell,
    type the Trello key and token (never put them in a file or the
    repository), then ask Trello for the list's card actions in the window:
+
    ```bash
    read -rs TRELLO_API_KEY; read -rs TRELLO_TOKEN; export TRELLO_API_KEY TRELLO_TOKEN
    LIST=<TRELLO_LIST_ID>; SINCE=<faulty deploy_started_at>; BEFORE=<rollback deploy_finished_at>
@@ -303,6 +327,7 @@ wrote:
      "https://api.trello.com/1/lists/$LIST/actions?filter=createCard,updateCard,deleteCard&since=$SINCE&before=$BEFORE&limit=1000" \
      | jq -r '.[] | [.date, .type, .data.card.id, .data.card.name] | @tsv'
    ```
+
    A Trello card ID also encodes its creation time (its first 8 hex digits
    are Unix seconds), which confirms when a card was made.
 3. **Separate smoke data from real data.** Cards titled `Conformance …` came
@@ -419,8 +444,8 @@ source and Render's API docs):
 
 Steps:
 
-1. Do the [Level 2 checklist](#level-2-checklist-repository-admin) items 1
-   to 3 (environments, secrets, variables; leave `RENDER_SERVICE_ID` and
+1. Do [Prerequisites](#prerequisites-by-hand-once) step 4 (environments,
+   secrets, variables; leave `RENDER_SERVICE_ID` and
    `SERVICE_URL` unset for now).
 2. **Merge the Level 2 pull request.** The release passes `ci` and `build`
    (the image is pushed), then `deploy` **fails on purpose**: "The
@@ -456,100 +481,42 @@ Steps:
 To undo before step 6: revert the `infra/` change on `main` and apply; the
 service returns to the Docker runtime. After step 6, use [Roll back](#roll-back).
 
-## Faulty release demonstration
+## Faulty release and rollback
 
-The level asks to show that a faulty release is detected and stopped, and
-that the previous revision is restored and passes the same smoke check. This
-runs on the **disposable service**, so production is never involved. Run it
-before the teardown date (11/20/2026).
+A faulty release was run on the **disposable service** (production was
+never involved), caught by the smoke check, and rolled back.
 
-1. **Create the disposable service.** **Terraform apply** with `disposable`
-   ticked. Copy its ID and URL from the run's **Services** table into the
-   `render-disposable` environment variables `RENDER_SERVICE_ID` and
-   `SERVICE_URL`. It starts on the latest production release's digest.
-2. **Release a working revision.** **Actions → Release → Run workflow**,
-   branch `main`, target `disposable`, commit and digest empty. Expected:
-   every stage passes and the release is recorded `success` in
-   `render-disposable`. Note the commit and digest
-   (`known-good --environment render-disposable`).
-3. **Prepare the faulty revision** on a throwaway branch, never merged.
-   Proposed change (to be approved before use): in
-   `app/providers/trello_provider.py`, `_create_card` builds the create URL by
-   string formatting instead of `urlencode`:
-   ```python
-   url = f"https://api.trello.com/1/cards?idList={list_id}&name={title}"
-   if desc is not None:
-       url += f"&desc={desc}"
-   request = Request(url, headers=headers, method="POST")
-   ```
-   Why it makes a good demonstration: it is a plausible "simplification",
-   and every fast check passes (ruff, format, mypy, all unit tests, which
-   replace `urlopen` and parse the URL leniently) as does the conformance
-   suite against the in-memory provider, so the release builds and deploys
-   it. Against real Trello, Python's HTTP client refuses a URL containing the
-   spaces in `Conformance create test` before sending it, so `POST /issues`
-   returns 500 and the smoke check fails. (Checked locally on a copy: all
-   fast checks pass; the real client raises `InvalidURL` without opening a
-   connection.)
-4. **Release the faulty revision.** Run workflow from the throwaway branch,
-   target `disposable`. Expected: `ci`, `build`, `deploy` pass; `/readyz`
-   reports the faulty commit; `smoke` **fails** and the summary lists the
-   failing create tests; `record` records `failure` ("build: failed at
-   smoke"). The known-good revision is still step 2's.
-5. **Restore.** Run workflow from `main`, target `disposable`, with step 2's
-   commit and digest. Expected: no `ci` or `build`, `/readyz` reports the
-   step 2 commit again, the same smoke check passes, `record` records
-   `success` ("rollback: smoke check passed").
-6. **Capture evidence** in the table below.
-7. **Tear down.** Terraform apply with `disposable` unticked; the plan shows
-   the disposable service destroyed. Check the Trello test list has no
-   `Conformance` cards left, delete the throwaway branch, and clear the
-   `render-disposable` variables.
+Run on 11/11/2026 against `https://ospsd-team4-issue-tracker-disposable.onrender.com`.
 
-Optionally repeat only step 5 on production (target `production`, the
-production known-good commit and digest) to have a production rollback on
-record.
+Deploy windows are UTC.
 
-### Evidence
+| Step | Run link | Deployment record (environment, status) | `/readyz` commit |
+| --- | --- | --- | --- |
+| Working release | [42959623593](https://github.com/Tyler-Arciniaga/OSPSD-Team-4/actions/runs/42959623593) (04:31:25Z to 04:32:08Z) | `render-disposable`, success ("build: smoke check passed") | `e6d5adca41f33fdbaa888303fb657452efccd2c1` |
+| Faulty release | [42960374825](https://github.com/Tyler-Arciniaga/OSPSD-Team-4/actions/runs/42960374825) (04:39:06Z to 04:39:48Z) | `render-disposable`, failure ("build: failed at smoke") | `a915876441eb4a5eee4c54676e32a4132623e3b1` |
+| Rollback | [42963074679](https://github.com/Tyler-Arciniaga/OSPSD-Team-4/actions/runs/42963074679) (05:02:43Z to 05:03:26Z) | `render-disposable`, success ("rollback: smoke check passed") | `e6d5adca41f33fdbaa888303fb657452efccd2c1` |
 
-| Step | Run link | Deployment record (environment, status) | `/readyz` commit | Image digest |
-| --- | --- | --- | --- | --- |
-| 2. Working release | | `render-disposable`, success | | |
-| 4. Faulty release | | `render-disposable`, failure (failed at smoke) | | |
-| 5. Rollback | | `render-disposable`, success | | |
-| Production release after bootstrap | | `render-production`, success | | |
+**Detected and stopped.** The deliberate fault, on a throwaway branch that
+was never merged, made `_create_card` in `app/providers/trello_provider.py`
+build the Trello URL with an f-string instead of `urlencode`. The unit tests
+and the in-memory conformance suite do not catch it, but against real Trello
+a title with spaces makes Python's HTTP client refuse the URL before
+sending, so `POST /issues` returns 500. The faulty revision passed `ci`, `build` and
+`deploy`, and `/readyz` reported its commit. The smoke check against real
+Trello failed, so the release was recorded `failure` and the working release
+stayed the known-good revision. The pipeline stopped at the smoke check: the
+faulty release was never marked known-good, so it cannot be a rollback
+target, and it ran only on the disposable service, until the rollback.
 
-Failing tests named in step 4's summary:
+**Restored.** The rollback redeployed the working release's digest without a rebuild. `/readyz` reported the working release's commit again, and the smoke check passed. The rollback's smoke check ran the conformance suite from `main` at `d9dec7d`, which is the working release's suite plus the DELETE conformance test added in #46, so the restored revision passed a superset of the suite it was released with.
 
-Leftover issues listed in any summary, and how they were removed:
+**What this rollback could not undo.** The rollback restored the code and the
+service's image setting. It could not undo:
 
-## Level 2 checklist (repository admin)
-
-Things only a repository admin can do. In order:
-
-1. **GitHub environments** (**Settings → Environments → New environment**):
-   - `render-production`: **Deployment branches** → *Selected branches* →
-     `main`. **No required reviewers** (merges release without a click).
-     Secret `RENDER_API_KEY`; variable `RENDER_OWNER_ID`.
-   - `render-disposable`: **no branch restriction** (the demonstration
-     releases a throwaway branch), no reviewers. Secret `RENDER_API_KEY`;
-     variable `RENDER_OWNER_ID`.
-   - `render-infrastructure`: **Required reviewers**: the people allowed to
-     approve applies and teardown. Deployment branches: `main`. Secrets
-     `RENDER_API_KEY`, `TF_API_TOKEN`; variable `RENDER_OWNER_ID`.
-2. **Repository secrets** `RENDER_API_KEY` and `TF_API_TOKEN` and the
-   repository variable `RENDER_OWNER_ID` stay, for pull request plans only.
-3. **Actions permissions** (**Settings → Actions → General → Workflow
-   permissions**): leave the default *Read repository contents*; each job
-   asks for more itself.
-4. [Bootstrap](#bootstrap-docker-service-to-image-service-once), which
-   includes making the GHCR package **public** and setting
-   `RENDER_SERVICE_ID` and `SERVICE_URL` on `render-production`.
-5. [Branch protection](#branch-protection-repository-admin-once).
-6. Merge one small change and watch the release complete with no manual
-   step.
-7. The [faulty release demonstration](#faulty-release-demonstration),
-   including approving the faulty change it uses.
+- Writes the faulty revision made to Trello.
+- Idempotency keys.
+- Anything changed by hand in the Render environment group, the Render
+  dashboard or the Trello board.
 
 ## Tear down
 
@@ -609,6 +576,7 @@ The verification for this level: a teammate who did not write the pipeline
 follows this document from a fresh checkout.
 
 **Access the account owner gives you first:**
+
 - Write access to this repository.
 - Required reviewer on the `render-infrastructure` environment.
 - Membership in the HCP Terraform org.
@@ -652,7 +620,7 @@ of your own.
 | A release or an apply never started ("cancelled") | Another run in the same concurrency group replaced it while it waited ([Concurrency](#concurrency)). Start it again. |
 | Rollback refused: "was never released to …" or "never passed its smoke check" | Only a commit and digest recorded together as `success` in that environment can be restored. Use `known-good`. |
 | Apply fails: "No successful production release is recorded yet" | Before the first successful release, give `bootstrap_image_digest` by hand. |
-| Plan job says "No HCP Terraform or Render credentials" | The repository secrets are missing, or the pull request comes from a fork. See the [checklist](#level-2-checklist-repository-admin), item 2. |
+| Plan job says "No HCP Terraform or Render credentials" | The repository secrets are missing, or the pull request comes from a fork. See [Prerequisites](#prerequisites-by-hand-once), step 4. |
 | `init` fails with an organization or workspace error | Not logged in (`terraform login`), or the names in `infra/versions.tf` do not match HCP. |
 | Plan says it is running in HCP Terraform and fails | The workspace's execution mode is not **Local**. |
 | Service exits at start with "Missing required configuration for trello: …" | The named variable is missing from the environment group, or the group is not linked. The message never contains values. |
