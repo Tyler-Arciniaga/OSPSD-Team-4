@@ -44,17 +44,14 @@ def test_every_read_queries_linear(linear: FakeLinear, fresh: bool) -> None:
     assert len(linear.requests) == 2
 
 
-@pytest.mark.parametrize("operation", ["update", "delete"])
-def test_unimplemented_operations_refuse_without_a_request(
-    linear: FakeLinear, operation: str
+def test_unimplemented_delete_refuses_without_a_request(
+    linear: FakeLinear,
 ) -> None:
     adapter = simulated_provider(linear)
 
     with pytest.raises(ServiceError) as exc:
-        if operation == "update":
-            adapter.update_issue(ISSUE_ID, IssueUpdate(title=TITLE))
-        else:
-            adapter.delete_issue(ISSUE_ID)
+        adapter.delete_issue(ISSUE_ID)
+
 
     assert exc.value.code == ErrorCode.SERVICE_NOT_CONFIGURED
     assert exc.value.cause == "operation_not_implemented"
