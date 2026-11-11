@@ -70,6 +70,14 @@ mutation CreateIssue($input: IssueCreateInput!) {
 }
 """
 
+DELETE_ISSUE_MUTATION = """
+mutation DeleteIssue($id: String!) {
+  issueDelete(id: $id) {
+    success
+  }
+}
+"""
+
 # Linear `extensions.code` values this adapter recognises. Any other code is
 # logged only as "graphql_error", so provider text never reaches a log line.
 INPUT_ERROR = "INPUT_ERROR"
@@ -295,8 +303,38 @@ class LinearIssueProvider:
         raise _not_available("Renaming issues")
 
     def delete_issue(self, issue_id: str) -> None:
-        """Delete is not implemented for Linear yet (DESIGN.md 6.4, change 2)."""
-        raise _not_available("Deleting issues")
+        """Delete an existing Linear issue."""
+        try:
+            self.get_issue(issue_id, fresh=True)
+        except ServiceError as lookup_error:
+            lookup_error.may_have_applied = False
+            raise
+
+        status, body = self._send(
+            _credentials(),
+            DELETE_ISSUE_MUTATION,
+            {"id": issue_id},
+        )
+
+        codes = _error_codes(body)
+        if status != 200 or codes:
+            error = _translate_failure(status, codes)
+
+            if 400 <= status < 500:
+                error.may_have_applied = False
+            elif status >= 500:
+                error.may_have_applied = True
+            else:
+                error.may_have_applied = not all(
+                    code in REJECTION_CODES for code in codes
+                )
+
+            raise error
+        try:
+            if body["data"]["issueDelete"]["success"] is not True:
+                raise ValueError("Deletion not reported as successful")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise _unexpected_response(type(exc).__name__) from None
 
     def _send(
         self, api_key: str, query: str, variables: Mapping[str, Any]

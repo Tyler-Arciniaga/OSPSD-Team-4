@@ -150,15 +150,18 @@ def test_contract_break_fails_and_names_the_tests(
     assert "test_create_returns_the_new_issue_and_its_location" in result.summary
 
 
-def test_cleanup_failure_passes_but_lists_leftover_issues(
+def test_delete_failure_fails_and_lists_leftover_issues(
     start_server: StartServer, tmp_path: Path
 ) -> None:
     leaky = start_server("delete_fails")
 
     result = run_smoke(leaky.url, COMMIT, tmp_path)
 
-    assert result.status == 0, result.output
-    assert "## Smoke check: passed" in result.summary
+    assert result.status != 0
+    assert "## Smoke check: FAILED" in result.summary
+    assert "Failing tests:" in result.summary
+    assert "test_delete_makes_issue_unavailable" in result.summary
+
     assert "Leftover issues: remove by hand" in result.summary
     listed = [
         line for line in result.summary.splitlines() if line.endswith("(HTTP 502)`")

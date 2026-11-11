@@ -38,10 +38,10 @@ This allows application code to retrieve, create, update, and delete issues usin
 
 ### Operation: `delete_issue(issue_id: str) -> None`
 
-- **Purpose:** Permanently delete an existing issue.
+- **Purpose:** Delete an existing issue so it is no longer retrievable through this API.
 - **Input:** `issue_id` — a string identifying the issue, passed through unchanged by the endpoint.
 - **Return value:** `None` on success. The endpoint returns HTTP 204 with no body.
-- **External state:** Removes the issue. For Trello this deletes, rather than archives, the card.
+- **External state:** Trello permanently deletes the card. Linear moves the issue to trash; this API treats trashed issues as missing.
 - **Errors:** A missing issue raises `not_found` (HTTP 404); missing credentials raise `service_not_configured` (HTTP 503); a provider rejection or network failure raises `access_denied` or `provider_error`, as for the other operations. See [Errors](#errors).
 - **Assumptions:** Repeated deletion reports a missing issue. A provider failure can follow a completed deletion if the response is lost; no automatic retry occurs.
 
@@ -152,12 +152,29 @@ request URLs or other provider details.
 ### Linear mapping
 
 `LinearIssueProvider` (`app/providers/linear_provider.py`) implements
-`get_issue()` and `create_issue()` over Linear's GraphQL API
-(`https://api.linear.app/graphql`), requesting only `id`, `title` and, for
-reads, `trashed`. It holds one `httpx.Client` (10-second timeout) that
-`close()` releases (see [Adapter lifecycle](#adapter-lifecycle)).
-`update_issue()` and `delete_issue()` are not implemented yet and refuse
-with `service_not_configured` before any request.
+`get_issue()`, `create_issue()` and `delete_issue()` over Linear's GraphQL
+API (`https://api.linear.app/graphql`). Reads request `id`, `title` and
+`trashed`; creation requests `success`, `id` and `title`; deletion requests
+`success`. It holds one `httpx.Client` (10-second timeout) that `close()`
+releases (see [Adapter lifecycle](#adapter-lifecycle)).
+`update_issue()` is not implemented yet and refuses with
+`service_not_configured` before any request.
+
+Deletion first performs a fresh lookup directly through the adapter,
+bypassing the service cache. Missing or trashed issues return 404 without
+sending a delete mutation. Otherwise, it sends `issueDelete` and requires
+`success: true` before returning normally; the endpoint then returns 204.
+Linear moves the issue to trash, and later GET and DELETE requests handled
+by the same service process return 404. The cache removes the affected
+entry before the delete attempt; other processes may retain cached copies
+until they expire.
+
+A failed lookup sets `may_have_applied=False` because no deletion was
+attempted. Delete mutation failures follow creation's uncertainty rules:
+a lost response or unusable success body can mean deletion already
+happened. No automatic retry occurs. The lookup and mutation are separate
+provider calls; changes made by another process or an external client
+between them remain a limitation.
 
 The service accepts only Linear's full issue ID, a lowercase UUID, which is
 the `id` it returns. Linear itself also accepts short identifiers such as
@@ -176,21 +193,21 @@ checked. Only the HTTP status and a recognised `extensions.code` are kept.
 
 | Linear failure | Code | Logged `cause` |
 | --- | --- | --- |
-| ID for GET is not a lowercase UUID; checked before credentials, without a request | `not_found` | `malformed_issue_id` |
+| ID for GET or DELETE is not a lowercase UUID; checked before credentials, without a request | `not_found` | `malformed_issue_id` |
 | `LINEAR_API_KEY` missing | `service_not_configured` | `missing_credentials` |
 | `LINEAR_TEAM_ID` missing (creation only) | `service_not_configured` | `missing_target_team` |
-| GET answered HTTP 200 with `INPUT_ERROR` (missing issue) | `not_found` | `graphql_code=INPUT_ERROR` |
-| GET returned an issue with `trashed: true` | `not_found` | `issue_trashed` |
-| Creation answered with `INPUT_ERROR` (configuration such as the team is wrong) | `provider_error` | `graphql_code=INPUT_ERROR` |
+| GET, including the DELETE lookup, answered HTTP 200 with `INPUT_ERROR` (missing issue) | `not_found` | `graphql_code=INPUT_ERROR` |
+| GET, including the DELETE lookup, returned an issue with `trashed: true` | `not_found` | `issue_trashed` |
+| Create or delete mutation answered with `INPUT_ERROR` (the existing translation treats this as a rejected provider request) | `provider_error` | `graphql_code=INPUT_ERROR` |
 | HTTP 401, or `AUTHENTICATION_ERROR` | `access_denied` | `provider_status=401` or `graphql_code=AUTHENTICATION_ERROR` |
 | HTTP 429, or `RATELIMITED` | `provider_error` | `provider_status=429` or `graphql_code=RATELIMITED` |
 | HTTP 5xx | `provider_error` | `provider_status=<status>` |
-| Any other error (including HTTP 403 and `FORBIDDEN`, not yet observed) | `provider_error` | `graphql_error` or `provider_status=<status>` |
+| Any other error (including HTTP 403 and `FORBIDDEN`) | `provider_error` | `graphql_error` or `provider_status=<status>` |
 | Timeout | `provider_error` | `timeout` |
 | Other connection failure | `provider_error` | exception class name |
 | Invalid JSON, missing fields, a non-UUID ID, a different issue than requested, or `success` not `true` | `provider_error` | exception class name |
 
-For creation, `may_have_applied` is `False` for HTTP 4xx, for HTTP 200 whose
+For create and delete mutations, `may_have_applied` is `False` for HTTP 4xx, for HTTP 200 whose
 errors are all `INPUT_ERROR`, `AUTHENTICATION_ERROR` or `RATELIMITED`, for a
 failed connection, connect timeout or pool timeout, and for missing
 configuration. It is `True` for HTTP 5xx, any other GraphQL error, read or
@@ -520,14 +537,13 @@ to verify the normally configured service against a real test card.
 ## Current Scope
 
 The interface contains four operations: issue retrieval, issue creation,
-partial issue update (only `title` can currently be updated), and permanent
-deletion.
+partial issue update (only `title` can currently be updated), and deletion.
 Trello remains the provider during normal operation, while tests
 can supply controlled implementations without changing endpoint code.
 
 `ISSUE_PROVIDER=linear` selects the Linear adapter at startup (unset or
 `trello` selects Trello; any other value stops startup). The Linear adapter
-supports retrieval and creation only, and does not support
+supports retrieval, creation and deletion, and does not support
 `Idempotency-Key`, so a keyed creation returns `503`.
 
 ### Linear tests
@@ -547,8 +563,24 @@ real cache, routes and error handlers.
   with `Location` and a read-back; invalid bodies and missing configuration
   sending nothing; the logged `write_outcome` for every failure; and `503`
   for an `Idempotency-Key`.
+- `test_delete_issue.py`: successful deletion, repeated deletion, GET after
+  deletion with a previously cached issue, missing issues, unsuccessful
+  mutation responses, and timeout outcomes during lookup and deletion.
 - `test_provider.py`: protocol compatibility, every read querying Linear,
-  unimplemented operations, and `close()`.
+  the unimplemented update operation, and `close()`.
+
+Run the deletion tests with:
+
+```bash
+uv run --locked pytest tests/linear/test_delete_issue.py -q
+```
+
+Live verification with a disposable issue confirmed POST 201, GET 200,
+DELETE 204, immediate GET 404 and repeated DELETE 404. The automated cache
+invalidation test separately checks a GET performed before deletion so a
+previously cached issue cannot be returned afterward. Follow
+[Linear Verification](../README.md#linear-verification) to repeat the live
+workflow.
 
 `tests/test_provider_selection.py` checks the `ISSUE_PROVIDER` choices and
 that shutdown closes the adapter once for each provider.
