@@ -468,63 +468,10 @@ Steps:
 To undo before step 6: revert the `infra/` change on `main` and apply; the
 service returns to the Docker runtime. After step 6, use [Roll back](#roll-back).
 
-## Faulty release demonstration
+## Faulty release and rollback
 
-The level asks to show that a faulty release is detected and stopped, and
-that the previous revision is restored and passes the same smoke check. This
-runs on the **disposable service**, so production is never involved. Run it
-before the teardown date (11/20/2026).
-
-1. **Create the disposable service.** **Terraform apply** with `disposable`
-   ticked. Copy its ID and URL from the run's **Services** table into the
-   `render-disposable` environment variables `RENDER_SERVICE_ID` and
-   `SERVICE_URL`. It starts on the latest production release's digest.
-2. **Release a working revision.** **Actions → Release → Run workflow**,
-   branch `main`, target `disposable`, commit and digest empty. Expected:
-   every stage passes and the release is recorded `success` in
-   `render-disposable`. Note the commit and digest
-   (`known-good --environment render-disposable`).
-3. **Prepare the faulty revision** on a throwaway branch, never merged.
-   Proposed change (to be approved before use): in
-   `app/providers/trello_provider.py`, `_create_card` builds the create URL by
-   string formatting instead of `urlencode`:
-
-   ```python
-   url = f"https://api.trello.com/1/cards?idList={list_id}&name={title}"
-   if desc is not None:
-       url += f"&desc={desc}"
-   request = Request(url, headers=headers, method="POST")
-   ```
-
-   Why it makes a good demonstration: it is a plausible "simplification",
-   and every fast check passes (ruff, format, mypy, all unit tests, which
-   replace `urlopen` and parse the URL leniently) as does the conformance
-   suite against the in-memory provider, so the release builds and deploys
-   it. Against real Trello, Python's HTTP client refuses a URL containing the
-   spaces in `Conformance create test` before sending it, so `POST /issues`
-   returns 500 and the smoke check fails. (Checked locally on a copy: all
-   fast checks pass; the real client raises `InvalidURL` without opening a
-   connection.)
-4. **Release the faulty revision.** Run workflow from the throwaway branch,
-   target `disposable`. Expected: `ci`, `build`, `deploy` pass; `/readyz`
-   reports the faulty commit; `smoke` **fails** and the summary lists the
-   failing create tests; `record` records `failure` ("build: failed at
-   smoke"). The known-good revision is still step 2's.
-5. **Restore.** Run workflow from `main`, target `disposable`, with step 2's
-   commit and digest. Expected: no `ci` or `build`, `/readyz` reports the
-   step 2 commit again, the same smoke check passes, `record` records
-   `success` ("rollback: smoke check passed").
-6. **Capture evidence** in the table below.
-7. **Tear down.** Terraform apply with `disposable` unticked; the plan shows
-   the disposable service destroyed. Check the Trello test list has no
-   `Conformance` cards left, delete the throwaway branch, and clear the
-   `render-disposable` variables.
-
-Optionally repeat only step 5 on production (target `production`, the
-production known-good commit and digest) to have a production rollback on
-record.
-
-### Evidence
+A faulty release was run on the **disposable service** (production was
+never involved), caught by the smoke check, and rolled back.
 
 Run on 11/11/2026 against `https://ospsd-team4-issue-tracker-disposable.onrender.com`.
 
@@ -536,7 +483,12 @@ Deploy windows are UTC.
 | Faulty release | [42960374825](https://github.com/Tyler-Arciniaga/OSPSD-Team-4/actions/runs/42960374825) (04:39:06Z to 04:39:48Z) | `render-disposable`, failure ("build: failed at smoke") | `a915876441eb4a5eee4c54676e32a4132623e3b1` |
 | Rollback | [42963074679](https://github.com/Tyler-Arciniaga/OSPSD-Team-4/actions/runs/42963074679) (05:02:43Z to 05:03:26Z) | `render-disposable`, success ("rollback: smoke check passed") | `e6d5adca41f33fdbaa888303fb657452efccd2c1` |
 
-**Detected and stopped.** The faulty revision passed `ci`, `build` and
+**Detected and stopped.** The deliberate fault, on a throwaway branch that
+was never merged, made `_create_card` in `app/providers/trello_provider.py`
+build the Trello URL with an f-string instead of `urlencode`. The unit tests
+and the in-memory conformance suite do not catch it, but against real Trello
+a title with spaces makes Python's HTTP client refuse the URL before
+sending, so `POST /issues` returns 500. The faulty revision passed `ci`, `build` and
 `deploy`, and `/readyz` reported its commit. The smoke check against real
 Trello failed, so the release was recorded `failure` and the working release
 stayed the known-good revision. The pipeline stopped at the smoke check: the
@@ -578,8 +530,8 @@ Things only a repository admin can do. In order:
 5. [Branch protection](#branch-protection-repository-admin-once).
 6. Merge one small change and watch the release complete with no manual
    step.
-7. The [faulty release demonstration](#faulty-release-demonstration),
-   including approving the faulty change it uses.
+7. The [faulty release and rollback](#faulty-release-and-rollback) on the
+   disposable service (done 11/11/2026).
 
 ## Tear down
 
