@@ -7,11 +7,9 @@ from app.interface import ClosableIssueProvider, IdempotentIssueProvider
 from app.providers.linear_provider import LinearIssueProvider
 from issue_tracker_contract.errors import ErrorCode, ServiceError
 from issue_tracker_contract.interface import IssueProvider
-from issue_tracker_contract.models import IssueUpdate
 from tests.linear.fake_linear import (
     AUTHENTICATION_BODY,
     ISSUE_ID,
-    TITLE,
     FakeLinear,
     Handler,
     fail_with,
@@ -51,7 +49,6 @@ def test_unimplemented_delete_refuses_without_a_request(
 
     with pytest.raises(ServiceError) as exc:
         adapter.delete_issue(ISSUE_ID)
-
 
     assert exc.value.code == ErrorCode.SERVICE_NOT_CONFIGURED
     assert exc.value.cause == "operation_not_implemented"
