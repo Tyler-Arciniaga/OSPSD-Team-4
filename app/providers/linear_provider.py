@@ -26,6 +26,7 @@ from app.providers.common import (
     provider_error,
     target_not_configured,
 )
+from app.telemetry import provider_span
 from issue_tracker_contract.errors import ErrorCode, ServiceError
 from issue_tracker_contract.models import Issue, IssueUpdate
 
@@ -424,11 +425,12 @@ class LinearIssueProvider:
             "Authorization": api_key,
         }
         try:
-            response = self._client.post(
-                LINEAR_API_URL,
-                json={"query": query, "variables": dict(variables)},
-                headers=headers,
-            )
+            with provider_span("linear.request"):
+                response = self._client.post(
+                    LINEAR_API_URL,
+                    json={"query": query, "variables": dict(variables)},
+                    headers=headers,
+                )
         except httpx.TransportError as exc:
             error = _translate_transport_failure(exc)
             error.may_have_applied = not _never_sent(exc)

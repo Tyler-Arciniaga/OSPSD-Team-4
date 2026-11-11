@@ -9,6 +9,7 @@ from typing import Annotated, Any
 from fastapi import Depends, FastAPI, Header, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from opentelemetry.trace import get_current_span
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -33,6 +34,7 @@ from app.idempotency import (
     create_issue_idempotently,
 )
 from app.interface import IdempotentIssueProvider
+from app.tracing import RequestTracingMiddleware
 from issue_tracker_contract.errors import (
     ErrorBody,
     ErrorCode,
@@ -57,6 +59,7 @@ app = FastAPI(
 # must not be 0: that gzips empty bodies too, giving a 204 a 20-byte body that
 # corrupts the next response on a kept-alive connection.
 app.add_middleware(GZipMiddleware, minimum_size=1)
+app.add_middleware(RequestTracingMiddleware)
 
 health_logger = logging.getLogger("app.health")
 
@@ -77,7 +80,7 @@ def _error_responses(*statuses: int) -> dict[int | str, dict[str, Any]]:
 
 
 def _operation(request: Request) -> str:
-    """Name the endpoint handling the request, useed for failure logging."""
+    """Name the endpoint handling the request, used for failure logging."""
     endpoint = request.scope.get("endpoint")
     return getattr(endpoint, "__name__", "unknown")
 
@@ -93,6 +96,10 @@ def _error_response(
     details: list[ErrorDetail] | None = None,
     headers: Mapping[str, str] | None = None,
 ) -> JSONResponse:
+    # Record only the shared error category, never the error message or body.
+    # When no span is active, get_current_span() returns a no-op span.
+    get_current_span().set_attribute("outcome", code.value)
+
     body = ErrorResponse(error=ErrorBody(code=code, message=message, details=details))
     return JSONResponse(
         status_code=status,
