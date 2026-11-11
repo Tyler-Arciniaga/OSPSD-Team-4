@@ -44,7 +44,7 @@ def test_every_read_queries_linear(linear: FakeLinear, fresh: bool) -> None:
     assert len(linear.requests) == 2
 
 
-@pytest.mark.parametrize("operation", ["update", "delete"])
+@pytest.mark.parametrize("operation", ["update"])
 def test_unimplemented_operations_refuse_without_a_request(
     linear: FakeLinear, operation: str
 ) -> None:

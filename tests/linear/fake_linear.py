@@ -103,6 +103,7 @@ class FakeLinear:
 
     def __init__(self) -> None:
         self.issues: dict[str, str] = {}
+        self.trashed: set[str] = set()
         self.requests: list[httpx.Request] = []
         self.handler: Handler = self._simulate
         self._next_ids = iter([ISSUE_ID, "11111111-2222-4333-8444-555555555555"])
@@ -129,7 +130,22 @@ class FakeLinear:
         issue_id = variables["id"]
         if issue_id not in self.issues:
             return httpx.Response(200, json=NOT_FOUND_BODY)
-        return httpx.Response(200, json=issue_body(issue_id, self.issues[issue_id]))
+
+        if "issueDelete" in payload["query"]:
+            self.trashed.add(issue_id)
+            return httpx.Response(
+                200,
+                json={"data": {"issueDelete": {"success": True}}},
+            )
+
+        return httpx.Response(
+            200,
+            json=issue_body(
+                issue_id,
+                self.issues[issue_id],
+                trashed=issue_id in self.trashed,
+            ),
+        )
 
 
 def failure_records(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:

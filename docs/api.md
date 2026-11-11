@@ -51,11 +51,11 @@ provider fetch finishes. Repeated reads do not extend that lifetime.
 Each application process holds at most 100 entries, evicting the least
 recently used when full. Errors are not cached.
 
-Cache hits make no provider request. Changes made directly in Trello,
+Cache hits make no provider request. Changes made directly in the provider,
 including deletion or revoked permissions, may not be noticed until the
 entry expires. A cached read can also succeed during a provider outage.
 Missing configuration and provider errors are checked when a read reaches
-the underlying provider; the Trello provider rejects malformed IDs before making a network request.
+the underlying provider; both adapters reject malformed IDs before making a network request.
 
 PATCH and DELETE discard the affected entry in the process handling the
 write before contacting the provider, including when the write fails.
@@ -64,7 +64,7 @@ and may continue serving an older result until it expires. Restarting a
 process clears its cache. There is no public cache-bypass parameter.
 
 When checking the result of an uncertain write, account for this freshness
-window or verify directly in Trello. See
+window or verify directly in the provider. See
 [Cache behavior](providers.md#cache-behavior) for implementation details.
 
 ### Errors
@@ -235,7 +235,9 @@ curl -i -X POST http://127.0.0.1:8000/issues \
 ## Idempotent creation
 
 `POST /issues` accepts an optional `Idempotency-Key` header. This section is
-the complete guarantee.
+the complete guarantee for providers that support it. Trello supports
+idempotent creation; Linear currently rejects a valid keyed creation with
+`503 service_not_configured` before creating anything.
 
 ### The guarantee
 
@@ -322,139 +324,6 @@ breach, so a breach can produce a duplicate:
   another list, or deletes it before a retry, recovery cannot find it.
   Once a key has completed, later repeats use the database and never need
   the marker.
-
-## Update an issue
-
-Change one or more fields of an existing issue and return the updated issue.
-Fields left out of the request body are not changed.
-
-| Item | Value |
-| --- | --- |
-| Method | `PATCH` |
-| Route | `/issues/{issue_id}` |
-| Changes state? | Yes. Updates the issue in the provider. |
-| Success status | `200 OK` |
-
-### Parameters
-
-| Name | Location | Type | Required | Description |
-| --- | --- | --- | --- | --- |
-| `issue_id` | path | string | yes | The issue's `id`, exactly as the service returned it. The service does not define an ID format; the current Trello provider accepts only full card IDs (24 lowercase hexadecimal characters). |
-
-### Request body
-
-A JSON object containing at least one of the fields below.
-
-```json
-{
-  "title": "Renamed issue"
-}
-```
-
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `title` | string | no | The new title. 1 to 256 characters, containing at least one non-whitespace character. Sent to the provider as given, without trimming. |
-
-`title` is currently the only field that can be changed, and it follows the
-same rule as in [Create an issue](#create-an-issue). Unknown fields are
-rejected rather than ignored, so a typo cannot be silently dropped.
-
-### Successful response
-
-Status `200 OK`, with the updated issue in the same shape as
-[Get an issue](#get-an-issue):
-
-```json
-{
-  "id": "64f1c0a2b3d4e5f607182930",
-  "title": "Renamed issue"
-}
-```
-
-### Errors
-
-All errors use the shape described in [Error model](#error-model).
-
-| Situation | Status | Code |
-| --- | --- | --- |
-| No issue exists with the given `issue_id` | `404 Not Found` | `not_found` |
-| Identifier the issue tracker cannot recognise (with Trello, anything other than a full card ID, such as a short card link) | `404 Not Found` | `not_found` |
-| Body is missing or not JSON, the object is empty, or `title` is `null`, not a string, empty, whitespace-only, or longer than 256 characters | `422 Unprocessable Content` | `invalid_input`, with `details` |
-| Body contains a field other than `title` | `422 Unprocessable Content` | `invalid_input`, with `details` |
-| The issue tracker denies the service access | `403 Forbidden` | `access_denied` |
-| Service credentials are missing | `503 Service Unavailable` | `service_not_configured` |
-| The issue tracker cannot be reached, times out, is unavailable, rejects the request, or returns an unusable response | `502 Bad Gateway` | `provider_error` |
-
-The request body is validated before the identifier, so a request with both
-an invalid body and a malformed ID returns `422`. Rejected requests never
-reach the issue tracker.
-
-Setting the same title again returns `200` and leaves the issue unchanged,
-so repeating a successful request is safe. After a `502`, the update may or
-may not have been applied; read the issue with `GET` before retrying. A
-`403` or `503` requires operator action.
-
-### Example
-
-```bash
-curl -i -X PATCH http://127.0.0.1:8000/issues/64f1c0a2b3d4e5f607182930 \
-  -H "Content-Type: application/json" \
-  -d '{"title": "Renamed issue"}'
-```
-
-```json
-{"id": "64f1c0a2b3d4e5f607182930", "title": "Renamed issue"}
-```
-
-## Delete an issue
-
-Permanently delete an existing issue from the provider. With Trello this
-deletes the card, rather than archiving it.
-
-| Item | Value |
-| --- | --- |
-| Method | `DELETE` |
-| Route | `/issues/{issue_id}` |
-| Parameters | `issue_id`: the issue's `id`, exactly as the service returned it (with the current Trello provider, a full 24-character lowercase hexadecimal card ID) |
-| Request body | None required |
-| Changes state? | Yes. Permanently removes the issue. |
-| Success status | `204 No Content`, with an empty body |
-
-### Errors and repetition
-
-All errors use the shape described in [Error model](#error-model).
-
-| Situation | Status | Code |
-| --- | --- | --- |
-| Missing issue, including an issue already deleted | `404 Not Found` | `not_found` |
-| Identifier the issue tracker cannot recognise (with Trello, anything other than a full card ID, such as a short card link) | `404 Not Found` | `not_found` |
-| The issue tracker denies the service access | `403 Forbidden` | `access_denied` |
-| Service credentials are missing | `503 Service Unavailable` | `service_not_configured` |
-| The issue tracker cannot be reached, times out, is unavailable, or rejects the request | `502 Bad Gateway` | `provider_error` |
-
-Malformed IDs are rejected before any provider operation. A `403` or `503`
-requires operator action.
-
-After a successful deletion, GET and repeated DELETE requests return 404.
-Repeated deletion does not restore or create an issue, although the status
-changes from 204 to 404.
-
-A 502 does not prove that the card still exists: Trello may have deleted it
-before the response was lost. Check with GET before deciding whether to
-retry. The service sends one DELETE request and never automatically retries
-or makes a preliminary GET request.
-
-### Example
-
-Use a disposable test card; deletion is permanent.
-
-```bash
-curl -i -X DELETE http://127.0.0.1:8000/issues/64f1c0a2b3d4e5f607182930
-```
-
-```http
-HTTP/1.1 204 No Content
-```
 
 ## Update an issue
 
@@ -574,17 +443,30 @@ curl -i -X PATCH http://127.0.0.1:8000/issues/64f1c0a2b3d4e5f607182930 \
 
 ## Delete an issue
 
-Permanently delete an existing issue from the provider. With Trello this
-deletes the card, rather than archiving it.
+Delete an existing issue so it is no longer retrievable through this API.
+Trello permanently deletes the card rather than archiving it. Linear moves
+it to trash; this API treats trashed issues as missing.
 
 | Item | Value |
 | --- | --- |
 | Method | `DELETE` |
 | Route | `/issues/{issue_id}` |
-| Parameters | `issue_id`: the issue's `id`, exactly as the service returned it (with the current Trello provider, a full 24-character lowercase hexadecimal card ID) |
+| Parameters | `issue_id`: the issue's `id`, exactly as the service returned it. Trello accepts a full 24-character lowercase hexadecimal card ID; Linear accepts a full lowercase UUID, not a short identifier such as `NYU-1`. |
 | Request body | None required |
-| Changes state? | Yes. Permanently removes the issue. |
+| Changes state? | Yes. Deletes the Trello card or moves the Linear issue to trash. |
 | Success status | `204 No Content`, with an empty body |
+
+### Provider behavior
+
+The Trello adapter sends one DELETE request without a preliminary lookup.
+The Linear adapter first performs a fresh lookup directly against Linear,
+bypassing the service cache. A missing or already-trashed issue returns 404
+without a delete mutation. Otherwise, it sends `issueDelete` and requires
+`success: true` before the endpoint returns 204.
+
+The Linear lookup and mutation are separate provider calls. Another process
+or an external client can change the issue between them; this is not an
+atomic existence check and deletion.
 
 ### Errors and repetition
 
@@ -592,36 +474,61 @@ All errors use the shape described in [Error model](#error-model).
 
 | Situation | Status | Code |
 | --- | --- | --- |
-| Missing issue, including an issue already deleted | `404 Not Found` | `not_found` |
-| Identifier the issue tracker cannot recognise (with Trello, anything other than a full card ID, such as a short card link) | `404 Not Found` | `not_found` |
-| The issue tracker denies the service access | `403 Forbidden` | `access_denied` |
+| Missing issue, including an issue already deleted or trashed, detected by the provider lookup | `404 Not Found` | `not_found` |
+| Identifier the provider cannot recognise, including Trello short links and Linear short identifiers | `404 Not Found` | `not_found` |
+| The provider reports an authentication failure | `403 Forbidden` | `access_denied` |
 | Service credentials are missing | `503 Service Unavailable` | `service_not_configured` |
-| The issue tracker cannot be reached, times out, is unavailable, or rejects the request | `502 Bad Gateway` | `provider_error` |
+| The provider cannot be reached, times out, is unavailable, rejects the request for another reason, or returns an unusable response | `502 Bad Gateway` | `provider_error` |
 
-The Trello provider rejects malformed IDs before making a network request.
-A `403` or `503` requires operator action.
+Both adapters reject malformed IDs before making a network request. A
+`403` or `503` requires operator action. Provider-specific failures use the
+existing translation described in [Linear mapping](providers.md#linear-mapping);
+not every provider permission error is currently classified as `access_denied`.
 
 After a successful deletion, GET requests handled by the same process and
 repeated DELETE requests return 404 when the provider confirms the issue
-is missing. Another process may still serve its cached copy until expiry.
-Repeated deletion does not restore or create an issue, although the status
-changes from 204 to 404.
+is missing or trashed. The process clears the affected cache entry before
+the delete attempt, including when it fails. Another process may still
+serve its cached copy until expiry. Repeated deletion does not restore or
+create an issue, although the status changes from 204 to 404.
 
-A 502 does not prove that the card still exists: Trello may have deleted it
-before the response was lost. Check with GET before deciding whether to
-retry. The service sends one DELETE request and never automatically retries
-or makes a preliminary GET request.
+A 502 does not prove that the issue still exists: the provider may have
+deleted it before the response was lost. Check with GET before deciding
+whether to retry, accounting for the [read freshness policy](#read-freshness-and-caching).
+The service never automatically retries deletion.
+
+For Linear, a failed initial lookup is logged with
+`write_outcome: not_applied`, because no delete mutation was sent. A timeout
+while waiting for the delete mutation's response, or an unusable mutation
+response, is logged with `write_outcome: unknown`.
 
 ### Example
 
-Use a disposable test card; deletion is permanent.
+Use a disposable test issue. Replace `<issue-id>` with its full ID for the
+configured provider, then run:
 
 ```bash
-curl -i -X DELETE http://127.0.0.1:8000/issues/64f1c0a2b3d4e5f607182930
+curl -i -X DELETE "http://127.0.0.1:8000/issues/<issue-id>"
 ```
 
 ```http
 HTTP/1.1 204 No Content
+```
+
+Repeat GET and DELETE for that ID:
+
+```bash
+curl -i "http://127.0.0.1:8000/issues/<issue-id>"
+curl -i -X DELETE "http://127.0.0.1:8000/issues/<issue-id>"
+```
+
+Both should return:
+
+```http
+HTTP/1.1 404 Not Found
+content-type: application/json
+
+{"error":{"code":"not_found","message":"Issue not found"}}
 ```
 
 ## Health checks
@@ -759,7 +666,7 @@ every failed request:
 | `error` | The error code returned to the caller. |
 | `status` | The HTTP status returned to the caller. |
 | `provider_involved` | `true` only when the service attempted a request to the issue tracker. Malformed IDs, invalid bodies and missing configuration are rejected before that, so they log `false`. |
-| `write_outcome` | `null` for reads. For POST, PATCH and DELETE: `not_applied` when the service rejected the request before sending it, or the issue tracker refused it (`not_found`, `access_denied`); `unknown` for `provider_error` and `internal_error`, because the request may have been processed even though no usable answer came back. Exception: a creation failure the issue tracker guarantees wrote nothing (it rejected the request with a 4xx status, or the connection was never made) is `not_applied`. The same judgement decides whether an `Idempotency-Key` is released, so the log and the key always agree. |
+| `write_outcome` | `null` for reads. For POST, PATCH and DELETE, `not_applied` means the adapter knows the write did not happen; `unknown` means it may have happened. The adapter's `ServiceError.may_have_applied` determines this, defaulting to unknown for `provider_error` and `internal_error`. Linear DELETE lookup failures are `not_applied`, since no mutation was sent. Create and Linear delete mutations rejected with HTTP 4xx, or never sent because the connection failed, are also `not_applied`. A read timeout after sending a mutation leaves the outcome unknown. For idempotent creation, the same certainty flag helps decide whether the key can be released. |
 | `cause` | A short internal reason, such as `provider_status=429`, `timeout`, `URLError`, `malformed_issue_id`, `missing_credentials`, `fingerprint_mismatch` or `key_leased`. It is `null` when nothing more specific is known. |
 
 The `app.idempotency` logger also writes a JSON line if an attempt finishes
@@ -781,7 +688,7 @@ The service has no request or correlation identifier.
 - Requests sharing an `Idempotency-Key` create at most one issue within 24 hours of the key's first use, subject to [Limits of the guarantee](#limits-of-the-guarantee).
 - A `PATCH` changes only the fields included in the request body.
 - A `PATCH` with a stale `If-Match` changes nothing and returns `412`.
-- A successful DELETE returns `204` with no body and removes the issue.
+- A successful DELETE returns `204` with no body. Subsequent reads through the same service process report the deleted or trashed issue as missing; other processes follow the read freshness policy.
 - Every error response has the shape in [Error model](#error-model), and its `error.code` is one of the codes listed there. A failed operation is never reported with a success status.
 - The routes, methods, and response shapes above will not change without an update to this document.
 
@@ -792,7 +699,7 @@ These affect observable behavior and are not guaranteed by the assignment spec, 
 - **`id` is an opaque string.** Callers should treat it as an identifier to pass back to the service. They should not parse it or assume a format. Only the `id` the service returned is accepted: with Linear, short identifiers such as `TYL-5` return `404`, although Linear itself accepts them.
 - **`title` is always present.** An issue without a title is not part of this contract.
 - **Real data.** The example ID and title illustrate the response shape; they are not seeded resources. Supply a full card ID accessible to the configured Trello account. Card short links are not supported, ensuring the response ID equals the requested ID.
-- **Provider translation.** GET and POST translate Trello's `id` into `id` and `name` into `title`. Successful GET results may be cached as described above. POST creates a Trello card. PATCH sends `title` as the card's `name` and returns the card as Trello reports it afterwards. DELETE permanently removes the Trello card and returns no provider data.
+- **Provider translation.** GET and POST translate Trello's `id` into `id` and `name` into `title`. Successful GET results may be cached as described above. POST creates a Trello card. PATCH sends `title` as the card's `name` and returns the card as Trello reports it afterwards. DELETE permanently removes the Trello card or moves the Linear issue to trash, and returns no provider data.
 - **Created and updated titles.** POST and PATCH share one title rule (`IssueTitle` in `contract/src/issue_tracker_contract/models.py`). The title is sent to the provider as given, without trimming. A provider may trim leading and trailing whitespace when it stores the title (Linear does). The response returns the title as the provider reports it after creation or update, and later reads return the same title.
 - **Title limit.** The 256-character limit is a service rule for a short title, not a provider limit. Any provider must accept titles at least that long.
 - **Where new issues go.** New issues are created in a single target location chosen by the service operator (for Trello, the list named by `TRELLO_LIST_ID`). Callers cannot choose it. Support for more than one location would be added as a provider-independent field, not as a provider ID.

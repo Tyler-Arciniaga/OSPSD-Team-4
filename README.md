@@ -54,7 +54,7 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 - `app/providers/`: Provider adapters, one module per provider.
   - `app/providers/common.py`: What every adapter shares: the request timeout and the caller-facing error messages.
   - `app/providers/trello_provider.py`: Trello authentication, requests, and translation of Trello responses and failures.
-  - `app/providers/linear_provider.py`: Linear GraphQL requests and translation of Linear responses and failures (get and create; rename and delete not yet implemented).
+  - `app/providers/linear_provider.py`: Linear GraphQL requests and translation of Linear responses and failures (get, create and delete; rename not yet implemented).
 - `app/cache.py`: Caches successful reads and invalidates saved issues before updates or deletions.
 - `app/dependencies.py`: Creates one cached provider (Trello, or Linear with `ISSUE_PROVIDER=linear`) and the idempotency key store at application startup and supplies them to the endpoints.
 - `app/idempotency.py`: Durable idempotency key store and the logic that creates each keyed issue at most once.
@@ -67,6 +67,7 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
   - `tests/trello/test_provider.py`: Provider compatibility, translation, and error tests.
 - `tests/linear/`: Tests of the real Linear adapter with simulated GraphQL responses, through the real startup with `ISSUE_PROVIDER=linear`.
   - `tests/linear/test_get_issue.py`, `test_create_issue.py`: Retrieval and creation endpoint tests.
+  - `tests/linear/test_delete_issue.py`: Deletion, repeated deletion, cache invalidation, missing issues, unsuccessful responses, and timeout tests.
   - `tests/linear/test_provider.py`: Protocol compatibility, uncached reads, unimplemented operations, and `close()`.
   - `tests/linear/fake_linear.py`: The simulated Linear API and expected values shared by these tests.
 - `tests/test_provider_selection.py`: Startup builds the adapter named by `ISSUE_PROVIDER` and closes it at shutdown.
@@ -156,8 +157,8 @@ Use a dedicated Linear test workspace, or a test team in one, whose issues
 your team may create and delete.
 
 1. Sign in to the test workspace. Open **Settings > Personal > Security &
-   access**, create a personal API key with full access and access to your specific team. Then copy
-   it.
+   access**, create a personal API key with both Read and Write permissions,
+   restricted to your test team. Then copy it.
 2. Edit `.env` locally, set `ISSUE_PROVIDER=linear`, and fill in
    `LINEAR_API_KEY`.
 3. Set `LINEAR_TEAM_ID` in `.env` to the ID of the team new issues should be
@@ -385,7 +386,7 @@ Cache tests cover repeated reads, expiration, least-recently-used eviction,
 returned-copy isolation, invalidation before successful or failed writes,
 uncached failures, and reuse and reset across application lifespans.
 
-Linear tests in `tests/linear/` run retrieval and creation through the real
+Linear tests in `tests/linear/` run retrieval, creation and deletion through the real
 startup with `ISSUE_PROVIDER=linear` and simulated GraphQL responses,
 including Linear's HTTP 200 responses that carry errors, trashed issues,
 and malformed or short IDs.
@@ -524,9 +525,9 @@ for errors and supported IDs.
 
 ## Linear Verification
 
-The Linear adapter currently implements GET and POST; add steps here as
-PATCH and DELETE are implemented. Use the documented single-process startup
-command for this workflow so all requests share the same cache.
+The Linear adapter currently implements GET, POST and DELETE. PATCH is
+not yet implemented. Use the documented single-process startup command
+for this workflow so all requests share the same cache.
 
 1. In the test team on the Linear platform, create an issue named `HW1 Linear GET test`. Linear
    shows its short identifier (for example `TYL-5`); however the service accepts
@@ -575,12 +576,22 @@ command for this workflow so all requests share the same cache.
    with the same body.
 6. Repeat the request with `-d '{"title": ""}'`. Expect HTTP 422 and
    confirm no new issue appears in Linear.
-7. TODO (once deleteIssue operation is implemented for Linear):
-   Delete the issue created in step 6 in Linear, which moves it to the
-   trash. Wait at least 30 seconds after the step 6 GET, then repeat that
-   GET. Expect HTTP 404 and
-   `{"error":{"code":"not_found","message":"Issue not found"}}`, with
-   `"cause": "issue_trashed"` in the log line.
+7. Delete the issue created in step 5 through the service. Replace
+   `<new ID>` with its full UUID:
+
+   ```bash
+   curl -i -X DELETE "http://127.0.0.1:8000/issues/<new ID>"
+   curl -i "http://127.0.0.1:8000/issues/<new ID>"
+   curl -i -X DELETE "http://127.0.0.1:8000/issues/<new ID>"
+   ```
+
+   Expect HTTP 204 with an empty body, followed by HTTP 404 for both
+   GET and repeated DELETE. Both 404 responses should contain:
+   `{"error":{"code":"not_found","message":"Issue not found"}}`.
+
+   DELETE clears the affected local cache entry before attempting deletion.
+   The Linear adapter performs a fresh lookup and rejects missing or
+   already-trashed issues before sending the delete mutation.
 8. Rename the step 2 test issue through the service:
 
    ```bash
@@ -591,12 +602,8 @@ command for this workflow so all requests share the same cache.
 
    Expect HTTP 503 and
    `{"error":{"code":"service_not_configured","message":"Renaming issues for Linear issue provider is not available yet"}}`.
-   Confirm in Linear that the title did not change. Repeat with
-   `curl -i -X DELETE "http://127.0.0.1:8000/issues/$LINEAR_TEST_ISSUE_ID"`
-   and expect HTTP 503 with the message
-   `Deleting issues for Linear issue provider is not available yet`.
-   Confirm the issue still exists in Linear.
-9. Repeat the step 6 request with
+   Confirm in Linear that the title did not change.
+9. Repeat the valid POST request from step 5 with
     `-H "Idempotency-Key: 3f2b1c9e-8d4a-4f6b-9c1e-2a7d5e8f0b13"`. Expect
     HTTP 503 and
     `{"error":{"code":"service_not_configured","message":"Idempotent creation is not available"}}`,
