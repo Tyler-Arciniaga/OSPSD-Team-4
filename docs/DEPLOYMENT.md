@@ -409,8 +409,10 @@ source and Render's API docs):
   docs do not say whether the API accepts the switch; step 4 is where that is
   shown. If it refuses, the apply fails and the service is unchanged.
 - An image service needs an image that already exists and can be pulled:
-  Render pulls a public GHCR package without credentials, and the first push
-  creates the package as private.
+  Render pulls a public GHCR package without credentials.
+- With `num_instances` set, the provider calls Render's scale endpoint on
+  every update, which the free plan refuses, so `infra/main.tf` leaves it
+  unset (free services run one instance anyway).
 - Deploying a digest through Render's API does not change the service's
   image setting, so `scripts/release.py deploy` sets it first; Terraform
   ignores later digest changes so plans stay clean.
@@ -425,16 +427,21 @@ Steps:
    render-production environment is missing: RENDER_SERVICE_ID SERVICE_URL…
    nothing was deployed". Production keeps serving the old commit. Copy the
    digest from the run summary's **Artifact** table.
-3. **Make the package public**: GitHub → your profile → **Packages** →
-   `ospsd-team4-issue-service` → **Package settings** → **Change visibility**
-   → Public. Check from a logged-out Docker:
+3. **Check the package is public.** A package pushed from a public
+   repository's workflow may already be. If not: GitHub → your profile →
+   **Packages** → `ospsd-team4-issue-service` → **Package settings** →
+   **Change visibility** → Public. Either way, check from a logged-out Docker:
    `docker logout ghcr.io && docker pull ghcr.io/tyler-arciniaga/ospsd-team4-issue-service@<digest>`.
 4. **Apply.** **Actions → Terraform apply → Run workflow** on `main`,
-   `disposable` unticked, `bootstrap_image_digest` = that digest. Before
-   approving, read the plan: `render_web_service.api` must be **updated in
-   place** (runtime docker → image, digest = that digest) and nothing
-   destroyed. **If it shows a replacement, reject it and stop**: the URL
-   would change.
+   `disposable` unticked, `bootstrap_image_digest` = that digest. The
+   approval comes **before** the job plans, and the job applies its plan
+   straight away, so read the plan first: the one the Terraform plan
+   workflow posted on the merged pull request, or a
+   [local plan](#run-terraform-from-your-machine-optional) with
+   `-var bootstrap_image_digest=<digest>`. `render_web_service.api` must be
+   **updated in place** (runtime docker → image) and nothing destroyed.
+   **If it shows a replacement, reject the run and stop**: the URL would
+   change.
 5. **Variables.** Copy the **Services** table from the apply run into the
    `render-production` environment variables `RENDER_SERVICE_ID` and
    `SERVICE_URL`.
