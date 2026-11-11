@@ -22,6 +22,7 @@ from app.providers.common import (
     provider_error,
     target_not_configured,
 )
+from app.telemetry import provider_span
 from issue_tracker_contract.errors import ServiceError
 from issue_tracker_contract.models import Issue, IssueUpdate
 
@@ -171,7 +172,10 @@ class TrelloIssueProvider:
                 headers=_trello_headers(),
                 method="GET",
             )
-            with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            with (
+                provider_span("trello.request"),
+                urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response,
+            ):
                 body = json.load(response)
             return isinstance(body, dict) and isinstance(body.get("id"), str)
         except (ServiceError, OSError, ValueError):
@@ -231,7 +235,10 @@ class TrelloIssueProvider:
         )
         marker = _token_marker(creation_token)
         try:
-            with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            with (
+                provider_span("trello.request"),
+                urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response,
+            ):
                 cards = json.load(response)
             if not isinstance(cards, list):
                 raise TypeError("Unexpected card list")
@@ -268,7 +275,10 @@ class TrelloIssueProvider:
             method="POST",
         )
         try:
-            with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            with (
+                provider_span("trello.request"),
+                urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response,
+            ):
                 card = json.load(response)
             return _created_card_to_issue(card)
         except HTTPError as exc:
@@ -300,7 +310,10 @@ class TrelloIssueProvider:
             url += f"?{urlencode(params)}"
         request = Request(url, headers=headers, method=method)
         try:
-            with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            with (
+                provider_span("trello.request"),
+                urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response,
+            ):
                 if method == "DELETE":
                     return None
                 return json.load(response)

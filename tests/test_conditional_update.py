@@ -46,9 +46,10 @@ def store(monkeypatch: pytest.MonkeyPatch) -> Iterator[InMemoryProvider]:
 
 
 def test_stale_overwrite_is_rejected(
-    store: InMemoryProvider, caplog: pytest.LogCaptureFixture
+    store: InMemoryProvider,
+    caplog: pytest.LogCaptureFixture,
+    client: TestClient,
 ) -> None:
-    client = TestClient(app)
     # Two clients read the same version.
     etag_a = client.get(f"/issues/{ISSUE_ID}").headers["ETag"]
     etag_b = client.get(f"/issues/{ISSUE_ID}").headers["ETag"]
@@ -180,10 +181,10 @@ def test_empty_responses_are_not_gzipped(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_issue_responses_are_gzipped_with_a_strong_etag(
     store: InMemoryProvider,
+    client: TestClient,
 ) -> None:
     # Behind Render's edge, the ETag stays strong only when the service
     # compresses the response itself.
-    client = TestClient(app)
     read = client.get(f"/issues/{ISSUE_ID}", headers={"Accept-Encoding": "gzip"})
     assert read.headers["Content-Encoding"] == "gzip"
     assert read.json() == {"id": ISSUE_ID, "title": "Original"}

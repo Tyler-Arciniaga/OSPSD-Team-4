@@ -9,7 +9,7 @@ from typing import Annotated, Any
 from fastapi import Depends, FastAPI, Header, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from opentelemetry.trace import SpanKind, StatusCode
+from opentelemetry.trace import get_current_span
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -34,6 +34,7 @@ from app.idempotency import (
     create_issue_idempotently,
 )
 from app.interface import IdempotentIssueProvider
+from app.tracing import RequestTracingMiddleware
 from issue_tracker_contract.errors import (
     ErrorBody,
     ErrorCode,
@@ -58,6 +59,7 @@ app = FastAPI(
 # must not be 0: that gzips empty bodies too, giving a 204 a 20-byte body that
 # corrupts the next response on a kept-alive connection.
 app.add_middleware(GZipMiddleware, minimum_size=1)
+app.add_middleware(RequestTracingMiddleware)
 
 health_logger = logging.getLogger("app.health")
 
@@ -78,7 +80,7 @@ def _error_responses(*statuses: int) -> dict[int | str, dict[str, Any]]:
 
 
 def _operation(request: Request) -> str:
-    """Name the endpoint handling the request, useed for failure logging."""
+    """Name the endpoint handling the request, used for failure logging."""
     endpoint = request.scope.get("endpoint")
     return getattr(endpoint, "__name__", "unknown")
 
@@ -94,6 +96,10 @@ def _error_response(
     details: list[ErrorDetail] | None = None,
     headers: Mapping[str, str] | None = None,
 ) -> JSONResponse:
+    # Record only the shared error category, never the error message or body.
+    # When no span is active, get_current_span() returns a no-op span.
+    get_current_span().set_attribute("outcome", code.value)
+
     body = ErrorResponse(error=ErrorBody(code=code, message=message, details=details))
     return JSONResponse(
         status_code=status,
@@ -229,28 +235,13 @@ def readyz(
 )
 def get_issue(
     issue_id: str,
-    request: Request,
     response: Response,
     provider: Annotated[IssueProvider, Depends(get_issue_provider)],
 ) -> Issue:
     """Retrieve an issue by its ID using the supplied provider."""
-    with request.app.state.tracer.start_as_current_span(
-        "get_issue",
-        kind=SpanKind.SERVER,
-        record_exception=False,
-        set_status_on_exception=False,
-    ) as span:
-        try:
-            issue = provider.get_issue(issue_id)
-            response.headers["ETag"] = _etag(issue)
-        except ServiceError as exc:
-            span.set_attribute("outcome", exc.code.value)
-            span.set_status(StatusCode.ERROR)
-            raise
-        else:
-            span.set_attribute("outcome", "success")
-            span.set_status(StatusCode.OK)
-            return issue
+    issue = provider.get_issue(issue_id)
+    response.headers["ETag"] = _etag(issue)
+    return issue
 
 
 @app.patch(
