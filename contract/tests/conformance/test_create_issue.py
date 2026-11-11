@@ -109,17 +109,18 @@ def test_each_create_makes_a_new_issue(
     ],
 )
 def test_invalid_body_returns_422(
-    service: httpx.Client, body: dict[str, Any], field: str
+    post_issue: Callable[..., httpx.Response], body: dict[str, Any], field: str
 ) -> None:
-    response = service.post("/issues", json=body)
+    response = post_issue(json=body)
 
     assert field in assert_invalid_input(response)
     assert "Location" not in response.headers
 
 
-def test_body_that_is_not_json_returns_422(service: httpx.Client) -> None:
-    response = service.post(
-        "/issues",
+def test_body_that_is_not_json_returns_422(
+    post_issue: Callable[..., httpx.Response],
+) -> None:
+    response = post_issue(
         content=b"not json",
         headers={"Content-Type": "application/json"},
     )

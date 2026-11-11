@@ -55,8 +55,11 @@ CONFORMANCE_BASE_URL=http://127.0.0.1:8000 uv run --locked pytest contract/tests
 
 ## Cleanup
 
-The `create_issue` fixture tracks each issue it creates and attempts to
-delete it after the test, including when the test fails.
+The `post_issue` fixture sends `POST /issues` with any body and tracks
+every issue that returns `201`. It attempts to delete each one after the
+test, including when the test fails. `create_issue` builds on it for valid
+titles. Tests that expect a create to be rejected also use `post_issue`, so
+an issue the service wrongly creates is still removed.
 
 Cleanup accepts `204` when it deletes the issue and `404` when the test
 already deleted it. Other HTTP statuses produce a `CleanupWarning`
