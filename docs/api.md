@@ -397,6 +397,12 @@ versions, and writes, all while holding a lock that
 every PATCH takes. Another PATCH through the same service process therefore
 cannot run between the check and the write.
 
+**Linear lookup:** Linear accepts updates to trashed issues, so the Linear
+adapter first performs a fresh lookup and returns `404` without sending the
+update if the issue is missing or trashed. A conditional PATCH therefore
+makes two fresh reads before the write. The lookup and update are separate
+Linear requests, so an issue trashed between them is still renamed.
+
 **Limits:**
 
 - The lock lives in one process. Running several workers or instances lets
@@ -412,7 +418,7 @@ All errors use the shape described in [Error model](#error-model).
 
 | Situation | Status | Code |
 | --- | --- | --- |
-| No issue exists with the given `issue_id` | `404 Not Found` | `not_found` |
+| No issue exists with the given `issue_id`, including one already deleted (with Linear, moved to trash) | `404 Not Found` | `not_found` |
 | Identifier the issue tracker cannot recognise (with Trello, anything other than a full card ID, such as a short card link) | `404 Not Found` | `not_found` |
 | `If-Match` was sent and the issue's current version differs | `412 Precondition Failed` | `precondition_failed` |
 | Body is missing or not JSON, the object is empty, or `title` is `null`, not a string, empty, whitespace-only, or longer than 256 characters | `422 Unprocessable Content` | `invalid_input`, with `details` |
@@ -667,7 +673,7 @@ every failed request:
 | `error` | The error code returned to the caller. |
 | `status` | The HTTP status returned to the caller. |
 | `provider_involved` | `true` only when the service attempted a request to the issue tracker. Malformed IDs, invalid bodies and missing configuration are rejected before that, so they log `false`. |
-| `write_outcome` | `null` for reads. For POST, PATCH and DELETE, `not_applied` means the adapter knows the write did not happen; `unknown` means it may have happened. The adapter's `ServiceError.may_have_applied` determines this, defaulting to unknown for `provider_error` and `internal_error`. Linear DELETE lookup failures are `not_applied`, since no mutation was sent. Create and Linear delete mutations rejected with HTTP 4xx, or never sent because the connection failed, are also `not_applied`. A read timeout after sending a mutation leaves the outcome unknown. For idempotent creation, the same certainty flag helps decide whether the key can be released. |
+| `write_outcome` | `null` for reads. For POST, PATCH and DELETE, `not_applied` means the adapter knows the write did not happen; `unknown` means it may have happened. The adapter's `ServiceError.may_have_applied` determines this, defaulting to unknown for `provider_error` and `internal_error`. Linear PATCH and DELETE lookup failures are `not_applied`, since no mutation was sent. Create and Linear delete mutations rejected with HTTP 4xx, or never sent because the connection failed, are also `not_applied`. A read timeout after sending a mutation leaves the outcome unknown. For idempotent creation, the same certainty flag helps decide whether the key can be released. |
 | `cause` | A short internal reason, such as `provider_status=429`, `timeout`, `URLError`, `malformed_issue_id`, `missing_credentials`, `fingerprint_mismatch` or `key_leased`. It is `null` when nothing more specific is known. |
 
 The `app.idempotency` logger also writes a JSON line if an attempt finishes

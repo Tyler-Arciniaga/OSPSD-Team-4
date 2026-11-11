@@ -530,6 +530,7 @@ See section 6.4 followed by 8.1 for the team’s next actions.
 
 ### Change Log
 
+- Linear request cost (section 5.4): Linear's `GET` and `POST` still make one request each, but `PATCH` and `DELETE` may make more than one. Both first do a fresh lookup and return `404` for a missing or trashed issue without sending the mutation, because Linear would otherwise rename a trashed issue or accept a repeated delete. A successful update or delete is therefore two requests. A `PATCH` rejected by Linear makes a third request, a lookup to tell a missing issue from a rejected update. A `PATCH` with `If-Match` adds the service's own fresh read for the version check.
 - Level 2 release pipeline (section 5.5): every merge to `main` is checked, built once into an image identified by digest, deployed by digest, smoke-checked against the real provider and recorded as a GitHub Deployment. Rollback redeploys a recorded known-good digest. Deploys are no longer manual; Terraform applies remain manual and approved. See [docs/DEPLOYMENT.md](DEPLOYMENT.md#release-pipeline).
 - HW2 deployment (sections 5.2 and 5.5): startup configuration check, `/healthz` and `/readyz`, container image, Terraform for Render with HCP Terraform state, plan on pull requests, and a manual, approved apply and deploy. Secrets live in a hand-made Render environment group, which keeps their values out of Terraform state. See [docs/DEPLOYMENT.md](DEPLOYMENT.md).
 - Every adapter now implements `ping()` (on `ClosableIssueProvider`), used only for the readiness report.
