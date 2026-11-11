@@ -1,5 +1,5 @@
-# Settings that rarely change. What is deployed (commit, branch, secrets
-# group) is in release.tf.
+# Settings that rarely change. What the services run from (image repository,
+# first digest, disposable toggle, secrets group) is in release.tf.
 
 variable "issue_provider" {
   description = "Issue tracker the service uses: trello or linear."
@@ -10,12 +10,6 @@ variable "issue_provider" {
     condition     = contains(["trello", "linear"], var.issue_provider)
     error_message = "issue_provider must be \"trello\" or \"linear\"."
   }
-}
-
-variable "repo_url" {
-  description = "Git repository Render builds the Dockerfile from."
-  type        = string
-  default     = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4"
 }
 
 variable "service_name" {

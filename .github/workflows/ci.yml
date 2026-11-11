@@ -3,10 +3,22 @@
 
 name: CI
 
-# Run when commits are pushed or pull requests are opened or updated.
+# Run when commits are pushed or pull requests are opened or updated. The
+# release workflow also calls it (workflow_call) on the exact commit it is
+# about to build and deploy, so a commit cannot deploy without passing these
+# checks, even if it reached main without a pull request.
 on:
   push:
   pull_request:
+  workflow_call:
+    inputs:
+      skip_image_build:
+        description: >-
+          Skip the docker-image job. The release workflow sets this because it
+          builds the deployable image itself right after these checks, and
+          that build fails the release if the image does not build.
+        type: boolean
+        default: false
 
 # Allow the workflow to read the repository.
 permissions:
@@ -44,21 +56,112 @@ jobs:
 
       # Check type annotations against how values are used.
       - name: Run type checks
-        run: uv run --locked mypy app tests contract/src contract/tests
+        run: uv run --locked mypy app tests scripts contract/src contract/tests
 
       # Run the project's tests inside that environment.
       - name: Run tests
         run: uv run --locked pytest
 
-  # Build the deployable image and check it in a throwaway container with
-  # fake configuration (scripts/disposable_env.sh). Nothing is pushed or
-  # deployed: deploys are manual (terraform-apply.yml).
-  docker-image:
+  # The shared conformance suite against the controlled implementation: the
+  # real service, started with uvicorn, backed by an in-memory provider
+  # (tests/controlled/). No network access or provider credentials.
+  conformance-controlled:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      - name: Build the image and check it in a disposable container
-        run: scripts/disposable_env.sh
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.12.17"
+          python-version: "3.13.5"
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      # The server keeps running in the background for the next step.
+      - name: Start the service with the in-memory provider
+        env:
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          nohup uv run --locked uvicorn tests.controlled.server:app \
+            --host 127.0.0.1 --port 8000 > controlled-server.log 2>&1 &
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/healthz > /dev/null 2>&1; then
+              curl -fsS http://127.0.0.1:8000/readyz
+              echo
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "The controlled service did not answer /healthz within 30 seconds."
+          cat controlled-server.log
+          exit 1
+
+      # Fails if any test fails, and also if any is skipped: a skipped suite
+      # (for example, CONFORMANCE_BASE_URL not reaching pytest) proves nothing.
+      - name: Run the conformance suite
+        env:
+          CONFORMANCE_BASE_URL: http://127.0.0.1:8000
+        run: |
+          uv run --locked pytest contract/tests/conformance -v -rs | tee conformance.log
+          if grep -Eq '[0-9]+ skipped' conformance.log; then
+            echo "Conformance tests were skipped; the suite must run in full."
+            exit 1
+          fi
+
+      - name: Show the service log
+        if: failure()
+        run: cat controlled-server.log
+
+  # Check that the deployable image builds. Nothing is run, pushed or
+  # deployed here: the release workflow (release.yml) builds the image that
+  # is deployed, pushes it, and checks that exact image in a disposable
+  # container before deploying it.
+  docker-image:
+    # On push and pull_request there are no inputs, so this always runs.
+    if: ${{ !inputs.skip_image_build }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Build the image
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --build-arg GIT_SHA="$GITHUB_SHA" \
+            --tag "ospsd-team4-ci:$GITHUB_SHA" \
+            .
+
+  # The one status that branch protection requires (docs/DEPLOYMENT.md#merge-gate).
+  # It passes only when every job above succeeded; a failed, cancelled or
+  # skipped job fails it. The one exception is docker-image when the caller
+  # asked to skip it. Add each new check job to `needs`.
+  checks:
+    if: always()
+    needs: [tests, conformance-controlled, docker-image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Require every check to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          SKIP_ALLOWED: ${{ inputs.skip_image_build && 'docker-image' || '' }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$RESULTS"
+          not_passed="$(jq -r --arg allowed "$SKIP_ALLOWED" '[to_entries[]
+            | select(.value.result != "success")
+            | select((.value.result == "skipped" and .key == $allowed) | not)
+            | .key] | join(", ")' <<<"$RESULTS")"
+          if [ -n "$not_passed" ]; then
+            echo "Did not pass: $not_passed"
+            exit 1
+          fi
+          echo "All checks passed."
