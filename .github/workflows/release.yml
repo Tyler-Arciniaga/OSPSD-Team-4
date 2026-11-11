@@ -335,7 +335,9 @@ jobs:
 
   smoke:
     needs: [resolve, deploy]
-    if: needs.deploy.outputs.skip == 'false'
+    # always() is needed for a rollback: without it, the skipped ci and build
+    # jobs upstream of deploy would skip this job too.
+    if: always() && needs.deploy.result == 'success' && needs.deploy.outputs.skip == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # No environment and no secrets: the checks go through the service's
