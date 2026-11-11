@@ -74,9 +74,8 @@ cannot).
 ## Prerequisites (by hand, once)
 
 These steps cannot be automated. Whoever owns the accounts does them once.
-They are already done for this team, except where
-[the Level 2 checklist](#level-2-checklist-repository-admin) says otherwise;
-a teammate only needs the [walkthrough access](#teammate-walkthrough).
+They are already done for this team; a teammate only needs the
+[walkthrough access](#teammate-walkthrough).
 
 1. **HCP Terraform** (app.terraform.io, free):
    - Create the organization `ospsd-team-4`.
@@ -90,8 +89,22 @@ a teammate only needs the [walkthrough access](#teammate-walkthrough).
    - Trello: `TRELLO_API_KEY`, `TRELLO_TOKEN` and `TRELLO_LIST_ID`. Use a **dedicated test list**: every release's smoke check creates and deletes real cards there.
    - Create the token with `expiration=30days`, from the test account: `https://trello.com/1/authorize?expiration=30days&scope=read,write&response_type=token&name=OSPSD-Team4-Render&key=<TRELLO_API_KEY>`. The README's one-day token would expire under the running service.
    - Put the group's `evg-…` ID in `infra/release.tf`.
-4. **GitHub**: the environments, secrets and variables in the
-   [Level 2 checklist](#level-2-checklist-repository-admin).
+4. **GitHub** (repository admin):
+   - **Environments** (**Settings → Environments → New environment**):
+     - `render-production`: **Deployment branches** → *Selected branches* →
+       `main`. **No required reviewers** (merges release without a click).
+       Secret `RENDER_API_KEY`; variable `RENDER_OWNER_ID`.
+     - `render-disposable`: **no branch restriction** (a faulty release is
+       released from a throwaway branch), no reviewers. Secret
+       `RENDER_API_KEY`; variable `RENDER_OWNER_ID`.
+     - `render-infrastructure`: **Required reviewers**: the people allowed to
+       approve applies and teardown. Deployment branches: `main`. Secrets
+       `RENDER_API_KEY`, `TF_API_TOKEN`; variable `RENDER_OWNER_ID`.
+   - **Repository secrets** `RENDER_API_KEY` and `TF_API_TOKEN` and the
+     repository variable `RENDER_OWNER_ID`, for pull request plans only.
+   - **Actions permissions** (**Settings → Actions → General → Workflow
+     permissions**): leave the default *Read repository contents*; each job
+     asks for more itself.
 
 ## Merge gate
 
@@ -431,8 +444,8 @@ source and Render's API docs):
 
 Steps:
 
-1. Do the [Level 2 checklist](#level-2-checklist-repository-admin) items 1
-   to 3 (environments, secrets, variables; leave `RENDER_SERVICE_ID` and
+1. Do [Prerequisites](#prerequisites-by-hand-once) step 4 (environments,
+   secrets, variables; leave `RENDER_SERVICE_ID` and
    `SERVICE_URL` unset for now).
 2. **Merge the Level 2 pull request.** The release passes `ci` and `build`
    (the image is pushed), then `deploy` **fails on purpose**: "The
@@ -504,34 +517,6 @@ service's image setting. It could not undo:
 - Idempotency keys.
 - Anything changed by hand in the Render environment group, the Render
   dashboard or the Trello board.
-
-## Level 2 checklist (repository admin)
-
-Things only a repository admin can do. In order:
-
-1. **GitHub environments** (**Settings → Environments → New environment**):
-   - `render-production`: **Deployment branches** → *Selected branches* →
-     `main`. **No required reviewers** (merges release without a click).
-     Secret `RENDER_API_KEY`; variable `RENDER_OWNER_ID`.
-   - `render-disposable`: **no branch restriction** (the demonstration
-     releases a throwaway branch), no reviewers. Secret `RENDER_API_KEY`;
-     variable `RENDER_OWNER_ID`.
-   - `render-infrastructure`: **Required reviewers**: the people allowed to
-     approve applies and teardown. Deployment branches: `main`. Secrets
-     `RENDER_API_KEY`, `TF_API_TOKEN`; variable `RENDER_OWNER_ID`.
-2. **Repository secrets** `RENDER_API_KEY` and `TF_API_TOKEN` and the
-   repository variable `RENDER_OWNER_ID` stay, for pull request plans only.
-3. **Actions permissions** (**Settings → Actions → General → Workflow
-   permissions**): leave the default *Read repository contents*; each job
-   asks for more itself.
-4. [Bootstrap](#bootstrap-docker-service-to-image-service-once), which
-   includes making the GHCR package **public** and setting
-   `RENDER_SERVICE_ID` and `SERVICE_URL` on `render-production`.
-5. [Branch protection](#branch-protection-repository-admin-once).
-6. Merge one small change and watch the release complete with no manual
-   step.
-7. The [faulty release and rollback](#faulty-release-and-rollback) on the
-   disposable service (done 11/11/2026).
 
 ## Tear down
 
@@ -635,7 +620,7 @@ of your own.
 | A release or an apply never started ("cancelled") | Another run in the same concurrency group replaced it while it waited ([Concurrency](#concurrency)). Start it again. |
 | Rollback refused: "was never released to …" or "never passed its smoke check" | Only a commit and digest recorded together as `success` in that environment can be restored. Use `known-good`. |
 | Apply fails: "No successful production release is recorded yet" | Before the first successful release, give `bootstrap_image_digest` by hand. |
-| Plan job says "No HCP Terraform or Render credentials" | The repository secrets are missing, or the pull request comes from a fork. See the [checklist](#level-2-checklist-repository-admin), item 2. |
+| Plan job says "No HCP Terraform or Render credentials" | The repository secrets are missing, or the pull request comes from a fork. See [Prerequisites](#prerequisites-by-hand-once), step 4. |
 | `init` fails with an organization or workspace error | Not logged in (`terraform login`), or the names in `infra/versions.tf` do not match HCP. |
 | Plan says it is running in HCP Terraform and fails | The workspace's execution mode is not **Local**. |
 | Service exits at start with "Missing required configuration for trello: …" | The named variable is missing from the environment group, or the group is not linked. The message never contains values. |
