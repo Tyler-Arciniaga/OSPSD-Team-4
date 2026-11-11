@@ -12,9 +12,11 @@ tested behavior follows the same contract.
   issue each time; and rejects invalid bodies with `422 invalid_input`.
 - `test_get_issue.py`: GET of a created issue returns the same body with an
   `ETag`; repeated reads agree; unknown IDs return `404 not_found`.
-- `test_delete_issue.py`: creates and fetches an issue to populate the
-  cache, verifies DELETE returns `204` with an empty body, then checks
-  that immediate GET and repeated DELETE return `404 not_found`.
+- `test_delete_issue.py`: DELETE returns `204` with an empty, uncompressed
+  body and no `ETag`; GET afterwards returns `404 not_found`, whether or not
+  the issue was cached first; repeated DELETE, PATCH (including with a
+  stale `If-Match`) and DELETE of unknown IDs return `404 not_found`; and
+  deleting one issue leaves others readable.
 
 Rename and conditional-update checks will be added when those operations
 are implemented for both providers.
