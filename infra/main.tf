@@ -25,9 +25,11 @@ resource "render_web_service" "api" {
   plan   = "free"
   region = var.region
 
-  # Free services run one instance, which the design requires: the update
-  # lock and read cache live in one process (DESIGN.md 5.5).
-  num_instances = 1
+  # Free services always run one instance, which the design requires: the
+  # update lock and read cache live in one process (DESIGN.md 5.5).
+  # num_instances is left unset on purpose: when it is set, provider 1.9.1
+  # calls Render's scale endpoint on every update, and Render refuses that on
+  # the free plan ("Plan requires payment information on file").
 
   # Liveness only. A provider outage must not make Render restart the
   # service, so the provider is not checked here (docs/api.md#health-checks).
@@ -60,8 +62,7 @@ resource "render_web_service" "disposable" {
   name              = "${var.service_name}-disposable"
   plan              = "free"
   region            = var.region
-  num_instances     = 1
-  health_check_path = "/healthz"
+  health_check_path = "/healthz" # num_instances unset, as for api above
 
   runtime_source = {
     image = {
