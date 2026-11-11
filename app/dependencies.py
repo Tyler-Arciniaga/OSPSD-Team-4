@@ -12,6 +12,7 @@ from app.idempotency import IdempotencyStore
 from app.interface import ClosableIssueProvider
 from app.providers.linear_provider import LinearIssueProvider
 from app.providers.trello_provider import TrelloIssueProvider
+from app.telemetry import create_tracer_provider
 from issue_tracker_contract.interface import IssueProvider
 
 logger = logging.getLogger("app.config")
@@ -62,6 +63,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 30 seconds. The check is sent only when /readyz is requested.
     app.state.provider_probe = ProviderProbe(adapter.ping)
 
+    tracer_provider = create_tracer_provider()
+    app.state.tracer = tracer_provider.get_tracer("issue-service")
+
     try:
         # Pause this function while the application handles requests.
         # The saved provider remains available and is reused.
@@ -75,6 +79,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Whoever creates the adapter closes it. Every adapter implements
         # close(), so shutdown is always called regardless of the provider configured.
         adapter.close()
+        tracer_provider.shutdown()
+        del app.state.tracer
 
 
 def get_issue_provider(request: Request) -> IssueProvider:

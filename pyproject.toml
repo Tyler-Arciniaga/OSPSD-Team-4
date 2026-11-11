@@ -6,6 +6,8 @@ dependencies = [
     "fastapi[standard]>=0.142.2",
     "httpx>=0.28.1",
     "issue-tracker-contract",
+    "opentelemetry-exporter-otlp-proto-http>=1.39,<2",
+    "opentelemetry-sdk>=1.39,<2",
 ]
 
 # The shared contract lives in contract/ and is installed from this repository.

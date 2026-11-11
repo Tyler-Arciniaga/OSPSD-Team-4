@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.11.5"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -968,6 +968,8 @@ dependencies = [
     { name = "fastapi", extra = ["standard"] },
     { name = "httpx" },
     { name = "issue-tracker-contract" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
 ]
 
 [package.dev-dependencies]
@@ -982,6 +984,8 @@ requires-dist = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.142.2" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "issue-tracker-contract", editable = "contract" },
+    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.39,<2" },
+    { name = "opentelemetry-sdk", specifier = ">=1.39,<2" },
 ]
 
 [package.metadata.requires-dev]

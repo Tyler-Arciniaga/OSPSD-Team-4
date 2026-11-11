@@ -9,6 +9,7 @@ from typing import Annotated, Any
 from fastapi import Depends, FastAPI, Header, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from opentelemetry.trace import SpanKind, StatusCode
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -228,13 +229,28 @@ def readyz(
 )
 def get_issue(
     issue_id: str,
+    request: Request,
     response: Response,
     provider: Annotated[IssueProvider, Depends(get_issue_provider)],
 ) -> Issue:
     """Retrieve an issue by its ID using the supplied provider."""
-    issue = provider.get_issue(issue_id)
-    response.headers["ETag"] = _etag(issue)
-    return issue
+    with request.app.state.tracer.start_as_current_span(
+        "get_issue",
+        kind=SpanKind.SERVER,
+        record_exception=False,
+        set_status_on_exception=False,
+    ) as span:
+        try:
+            issue = provider.get_issue(issue_id)
+            response.headers["ETag"] = _etag(issue)
+        except ServiceError as exc:
+            span.set_attribute("outcome", exc.code.value)
+            span.set_status(StatusCode.ERROR)
+            raise
+        else:
+            span.set_attribute("outcome", "success")
+            span.set_status(StatusCode.OK)
+            return issue
 
 
 @app.patch(
