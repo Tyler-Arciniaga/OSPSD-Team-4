@@ -25,20 +25,20 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=0
 
+# uv needs git to fetch the shared contract from its tagged revision.
+# Only this build stage has it; the runtime image does not.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Dependencies first, so code changes reuse this cached layer.
+# Install the locked runtime dependencies, including the shared contract at
+# the tag named in pyproject.toml (not the local contract/ folder). The root
+# project is not a package, so the service runs from /app.
 COPY pyproject.toml uv.lock ./
-COPY contract/pyproject.toml contract/README.md contract/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-install-project --no-install-workspace
-
-# Then the shared contract package (a workspace member, installed into the
-# environment) and the service code. The root project is not a package, so
-# the service runs from /app.
-COPY contract/src contract/src
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-editable
+    uv sync --locked --no-dev --no-install-project --no-editable
 
 # Stage 2: the runtime image, without uv, build caches or sources it does not run.
 FROM ${PYTHON_IMAGE}
