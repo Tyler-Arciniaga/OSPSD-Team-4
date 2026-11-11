@@ -36,7 +36,7 @@ something is missing. `GET /healthz` (liveness) and `GET /readyz`
 It is packaged as a container image and deployed to Render with Terraform;
 see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
-GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests. It also builds the container image and checks it in a disposable container. Pull requests that change `infra/` get a `terraform plan` comment, and deploys run only by manual dispatch.
+GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests, and the shared conformance suite against the controlled implementation (the real service backed by an in-memory provider). It also builds the container image. One aggregate `checks` status passes only when all of these pass; branch protection requires it before merging to `main` (see [Merge gate](docs/DEPLOYMENT.md#merge-gate)). Every pull request gets Terraform formatting, validation and tests, and pull requests that change `infra/` also get a `terraform plan` comment. Every merge to `main` is released automatically by the release workflow; infrastructure changes are applied by hand, with approval.
 
 ## Project Structure
 
@@ -73,6 +73,10 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 - `tests/test_config.py`: Startup configuration checks, including that a server started with a variable missing exits without printing values.
 - `tests/test_health.py`: `/healthz`, `/readyz`, the provider check's caching, and the reported commit.
 - `tests/test_injected_provider.py`: Endpoint tests using supplied fake providers.
+- `tests/controlled/`: The controlled implementation CI runs the conformance suite against: `provider.py` (an in-memory provider that follows the contract, with optional injected faults) and `server.py` (the real app with that provider injected, started with uvicorn).
+- `tests/release/`: Tests of `scripts/release.py` against simulated Render, GitHub and service APIs.
+- `tests/test_smoke_check.py`: Runs `scripts/smoke_check.sh` against the controlled service, working and with injected faults.
+- `tests/test_controlled_provider.py`: The in-memory provider's contract behavior, its faults, and the real app running on it.
 - `tests/test_idempotency.py`: Repeated, overlapping, conflicting, expired and restarted keyed creations, unknown provider outcomes, and cache and logging integration.
 - `tests/test_errors.py`: Error response and failure-logging tests using a controlled provider.
 - `tests/expected_errors.py`: Expected error bodies shared by the endpoint tests.
@@ -80,14 +84,19 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 - `docs/providers.md`: Provider interface, error translation, dependency setup, and testing approach.
 - `docs/DEPLOYMENT.md`: Deploying, verifying, rolling back, and tearing down the Render deployment, plus the teammate walkthrough.
 - `Dockerfile`, `.dockerignore`: The deployable image: locked runtime dependencies, non-root user, no credentials.
-- `infra/`: Terraform for the Render deployment, with state in HCP Terraform. `release.tf` pins the deployed commit.
-- `scripts/disposable_env.sh`: Builds the image and checks it in a throwaway container with fake configuration.
+- `infra/`: Terraform for the Render deployment, with state in HCP Terraform. The services run images from GitHub's container registry, pinned by digest; `release.tf` names the image repository, the digest a new service starts on, and the disposable-service toggle. Which digest runs afterwards is set by releases, not Terraform.
+  - `infra/tests/`: `terraform test` checks with a mock Render provider: services start on the given digest, later digests are left to releases, and the disposable toggle.
+- `scripts/build_image.sh`: Builds the release image once, pushes it tagged with its full commit SHA, and reports its digest.
+- `scripts/release.py`: Release steps the release workflow runs: `deploy` points the Render service at an image digest (refusing anything but a digest), deploys it and waits until it is live; `check-ready` waits until `/readyz` is ready and reports the expected commit; `record` creates the release's GitHub Deployment (commit, digest, run, deploy window; `success` only after the smoke check passed); `known-good` prints the latest successful release (`GITHUB_TOKEN=$(gh auth token) uv run python -m scripts.release known-good --repo Tyler-Arciniaga/OSPSD-Team-4 --environment render-production`); `verify-rollback` refuses a commit and digest that were never released successfully.
+- `scripts/disposable_env.sh`: Checks the image in a throwaway container with fake configuration: one it builds from `HEAD`, or an already pushed image given by digest (`IMAGE_REF`).
 - `scripts/conformance_remote.sh`: Runs the conformance suite against a deployed service.
+- `scripts/smoke_check.sh`: The release's post-deployment smoke check: requires `/readyz` to be ready with the expected commit, runs the conformance suite against the live service, fails on any failing test, and lists issues it could not delete in the run summary.
 - `pyproject.toml`: Python requirement, dependencies, and tool configuration.
 - `uv.lock`: Locked dependency versions for reproducible installation.
-- `.github/workflows/ci.yml`: Automated linting, formatting, type checking, tests, and the container image check.
-- `.github/workflows/terraform-plan.yml`: Posts `terraform plan` on pull requests that change `infra/`.
-- `.github/workflows/terraform-apply.yml`: Manual, approved apply and deploy of the pinned commit, followed by a plan that must show no changes.
+- `.github/workflows/ci.yml`: Automated linting, formatting, type checking, tests, the conformance suite against the controlled implementation, the container image build, and the aggregate `checks` status that branch protection requires. Reusable from other workflows (`workflow_call`).
+- `.github/workflows/release.yml`: On every push to `main`: reruns the CI checks on that commit (all but the build-only image check, since the release builds the image itself), builds the image once, pushes it to GitHub's container registry tagged with the full commit SHA, checks that exact image (by digest) in a disposable container, then, unless a newer commit has reached `main`, deploys that digest to Render and confirms `/readyz` reports the commit, then runs the smoke check against the live service and records the release as a GitHub Deployment (`success` only if the smoke check passed). One release runs at a time. Started by hand, it can roll back to a known-good release (redeploying its recorded digest, no rebuild) or release to the disposable service.
+- `.github/workflows/terraform-plan.yml`: Checks Terraform formatting and validation on every pull request, and posts `terraform plan` on pull requests that change `infra/` or a Terraform workflow.
+- `.github/workflows/terraform-apply.yml`: Manual, approved apply of infrastructure changes only (it deploys no code), followed by a plan that must show no changes.
 - `.github/workflows/terraform-destroy.yml`: Manual, approved teardown of everything Terraform created.
 - `AGENTS.md`: Contribution and release workflow.
 
@@ -222,7 +231,8 @@ because inside the image only `/app/data` is writable by the service's
 non-root user.
 
 `scripts/disposable_env.sh` builds the image and checks it in a
-throwaway container with fake configuration. See
+throwaway container with fake configuration. With `IMAGE_REF` set to a pushed
+image pinned by digest, it checks that image instead. See
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the Render deployment.
 
 ## API Usage
@@ -360,7 +370,7 @@ uv run --locked ruff format --check .
 Check for inconsistencies between type annotations and how values are used:
 
 ```bash
-uv run --locked mypy app tests contract/src contract/tests
+uv run --locked mypy app tests scripts contract/src contract/tests
 ```
 
 ### Automated Tests
@@ -398,9 +408,25 @@ verification is performed separately as described below.
 
 The shared conformance suite in `contract/tests/conformance/` checks that
 a consumer sees the same behavior from every provider. It sends real HTTP
-requests to a running service and creates real issues, so it is skipped
-(such as during CI) unless `CONFORMANCE_BASE_URL` is set. Start the service
-for one provider, then run:
+requests to a running service, so it is skipped unless
+`CONFORMANCE_BASE_URL` is set.
+
+CI runs it on every push and pull request against the controlled
+implementation: the real service with an in-memory provider injected, so no
+network or credentials are needed. To run that locally:
+
+```bash
+GIT_SHA="$(git rev-parse HEAD)" uv run --locked uvicorn tests.controlled.server:app
+# in another terminal
+CONFORMANCE_BASE_URL=http://127.0.0.1:8000 uv run --locked pytest contract/tests/conformance
+```
+
+Setting `CONTROLLED_FAULT=wrong_title` starts a deliberately broken service
+that the suite must fail against. When the suite grows (rename, delete),
+extend `tests/controlled/provider.py` in the same change so CI keeps passing.
+
+Against a real provider it creates real issues. Start the service for one
+provider, then run:
 
 ```bash
 CONFORMANCE_BASE_URL=http://127.0.0.1:8000 uv run --locked pytest contract/tests/conformance
@@ -624,10 +650,16 @@ command for this workflow so all requests share the same cache.
 
 ## Deployment
 
-The service runs on Render, described by Terraform in `infra/`. Pull requests
-show the plan, and deploys are manual and approved. See
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for prerequisites, deploy, verify,
-rollback, teardown, and the teammate walkthrough.
+The service runs on Render, described by Terraform in `infra/`. Every merge
+to `main` is released automatically: checked again, built once into an image
+identified by its digest, deployed by that digest, smoke-checked against the
+real provider, and recorded as a GitHub Deployment. `GET /readyz` reports the
+running commit. A failed smoke check marks the release failed; rolling back
+to the last known-good release is the same workflow started by hand.
+Infrastructure changes are applied by hand with approval. See
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the pipeline, finding the
+running commit, rollback, repairing provider data, the bootstrap, the faulty
+release demonstration, teardown, and the teammate walkthrough.
 
 ## Contributing
 

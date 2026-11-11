@@ -323,13 +323,13 @@ Every choice below favors tools that are free, need no payment method, and take 
 | --- | --- | --- | --- | --- |
 | Provisioning | Terraform | Simple, covered in lecture, and keeps the deployment reviewable in the repository. | Tyler | $0 |
 | Hosting | Render, free web service, one instance | Free and no payment method needed. A single instance matches our design, because the update lock and read cache live in one process. | Tyler | $0 |
-| CI and delivery | GitHub Actions (HW1 already runs lint and tests with a locked `uv` environment). HW2 adds a container build check on every push, a `terraform plan` comment on pull requests that change `infra/`, and a manual, approved apply-and-deploy workflow. | Already in use, so no new account. | N/A | $0 |
+| CI and delivery | GitHub Actions (HW1 already runs lint and tests with a locked `uv` environment). HW2 adds a container build check on every push, a `terraform plan` comment on pull requests that change `infra/`, and a manual, approved apply workflow. Level 2 adds the release workflow: every merge to `main` is checked, built once, deployed by image digest, smoke-checked and recorded, with no manual step. | Already in use, so no new account. | N/A | $0 |
 | Infrastructure state | HCP Terraform free plan, workspace in Local execution mode | Shared and locked state for the team without storing the Render key in HCP: plans and applies run where the key is. | Tyler | $0 |
 | Telemetry | OpenTelemetry SDK, sent to Grafana Cloud's free plan | Free plan with no credit card: 10k metric series, 50 GB each of logs and traces, 14 day retention. | Tyler | $0 |
 
 **Teardown date:** 11/20/2026. All resources are removed on this date (unless a grader requests an extension), with `terraform destroy` and by deleting the Grafana Cloud stack. `terraform destroy` runs through a manual, approved workflow, so any teammate can run it without a Render key. The resources made by hand are removed by the checklist in [docs/DEPLOYMENT.md](DEPLOYMENT.md#tear-down): the environment group, API keys and tokens, the HCP workspace, and the GitHub secrets.
 
-**Deployment flow (HW2).** The artifact is the container image Render builds from the `Dockerfile` at one pinned commit, with dependencies from `uv.lock`.
+**Deployment flow (HW2, superseded by Level 2 below).** The artifact is the container image Render builds from the `Dockerfile` at one pinned commit, with dependencies from `uv.lock`.
 - `infra/release.tf` pins the commit. A deploy is a pull request that changes it, and the plan is posted on the pull request.
 - After merge, a manual workflow with a required approval:
   1. applies exactly the reviewed plan;
@@ -338,6 +338,14 @@ Every choice below favors tools that are free, need no payment method, and take 
   4. plans again and fails unless nothing would change.
 - Nothing deploys on push or merge. Render's auto-deploy is off, and the provider's redeploy after a settings change is disabled (`skip_deploy_after_service_update`).
 - The pin goes through the deploy API because Render's Terraform provider can only name a branch, not a commit.
+
+**Release pipeline (Level 2).** Shipping no longer depends on anyone running commands: every merge to `main` runs the release workflow, and deploys need no approval. Infrastructure changes still need one. Details, rollback and the provider-data repair runbook are in [docs/DEPLOYMENT.md](DEPLOYMENT.md#release-pipeline).
+- **The artifact** is now built once per release by GitHub Actions, pushed to GitHub's container registry tagged with the full commit SHA, and identified by its **digest**. The pushed image, pulled back by digest, is checked in a disposable container. Render runs exactly that digest (an image-backed service), so a rollback redeploys an old digest with no rebuild.
+- **Before merge**, branch protection requires one `checks` status: lint, format, types, tests, the conformance suite against an in-memory provider (the controlled implementation), and an image build. Terraform changes are validated, tested and planned on the pull request. **Before deploy**, the same checks run again on the merge commit.
+- **Deploy and identify.** `scripts/release.py` points the service at the digest and deploys it, then `/readyz` must report the commit. One release runs at a time, and a pushed release that is no longer the tip of `main` skips its deploy.
+- **Smoke check.** The conformance suite runs against the live service and the real Trello test list. A release is recorded `success` (a GitHub Deployment holding the commit, digest, run and deploy window) only if it passes. A failure is recorded `failure` and leaves the previous success as the known-good revision; it does not roll back automatically.
+- **Rollback** is the same workflow started by hand with a known-good commit and digest; it refuses anything not recorded as a success in that environment. It restores code and image settings, not data written to the provider, environment-group values changed by hand, or idempotency keys.
+- **Terraform** no longer deploys code. It creates the services pinned to a first digest and ignores later digests, so a plan after a release shows no changes. A disposable second service can be switched on to demonstrate a faulty release and a rollback.
 
 **Liveness and readiness (HW2).** Render's health check uses `/healthz`, which only says the process is serving. A brief provider outage therefore never makes Render restart a healthy service in a loop. `/readyz` reports whether the process can serve:
 - 503 only if a dependency the configured provider uses is broken. Today that is the idempotency store, for Trello.
@@ -504,6 +512,7 @@ See section 6.4 followed by 8.1 for the team’s next actions.
 
 ### Change Log
 
+- Level 2 release pipeline (section 5.5): every merge to `main` is checked, built once into an image identified by digest, deployed by digest, smoke-checked against the real provider and recorded as a GitHub Deployment. Rollback redeploys a recorded known-good digest. Deploys are no longer manual; Terraform applies remain manual and approved. See [docs/DEPLOYMENT.md](DEPLOYMENT.md#release-pipeline).
 - HW2 deployment (sections 5.2 and 5.5): startup configuration check, `/healthz` and `/readyz`, container image, Terraform for Render with HCP Terraform state, plan on pull requests, and a manual, approved apply and deploy. Secrets live in a hand-made Render environment group, which keeps their values out of Terraform state. See [docs/DEPLOYMENT.md](DEPLOYMENT.md).
 - Every adapter now implements `ping()` (on `ClosableIssueProvider`), used only for the readiness report.
 

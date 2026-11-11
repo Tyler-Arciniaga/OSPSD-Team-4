@@ -8,6 +8,7 @@ from app.dependencies import get_issue_provider
 from app.main import app
 from issue_tracker_contract.errors import ErrorCode, ServiceError
 from issue_tracker_contract.models import Issue, IssueUpdate
+from tests.controlled.provider import InMemoryIssueProvider
 
 ISSUE_ID = "64f1c0a2b3d4e5f607182930"
 
@@ -159,6 +160,22 @@ def test_failed_fresh_read_prevents_conditional_write(
         assert store.updates == 0
         # A failed refresh must not leave the old successful value available.
         assert client.get(f"/issues/{ISSUE_ID}").status_code == status
+
+
+def test_empty_responses_are_not_gzipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A 204 must not carry a body. A gzipped empty body is 20 bytes, which a
+    # client reading the 204 leaves on the connection, breaking the next
+    # response on it.
+    provider = InMemoryIssueProvider()
+    issue = provider.create_issue("To delete")
+    monkeypatch.setitem(app.dependency_overrides, get_issue_provider, lambda: provider)
+    client = TestClient(app)
+
+    deleted = client.delete(f"/issues/{issue.id}", headers={"Accept-Encoding": "gzip"})
+
+    assert deleted.status_code == 204
+    assert "Content-Encoding" not in deleted.headers
+    assert deleted.headers.get("Content-Length", "0") == "0"
 
 
 def test_issue_responses_are_gzipped_with_a_strong_etag(
