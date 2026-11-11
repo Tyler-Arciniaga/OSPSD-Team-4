@@ -257,16 +257,10 @@ class TrelloIssueProvider:
         headers = _trello_headers()
         list_id = _target_list_id()
 
-        fields = {"idList": list_id, "name": title}
+        url = f"https://api.trello.com/1/cards?idList={list_id}&name={title}"
         if desc is not None:
-            fields["desc"] = desc
-        params = urlencode(fields)
-
-        request = Request(
-            f"https://api.trello.com/1/cards?{params}",
-            headers=headers,
-            method="POST",
-        )
+            url += f"&desc={desc}"
+        request = Request(url, headers=headers, method="POST")
         try:
             with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
                 card = json.load(response)
