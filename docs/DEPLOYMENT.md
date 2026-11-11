@@ -539,7 +539,9 @@ Deploy windows are UTC.
 **Detected and stopped.** The faulty revision passed `ci`, `build` and
 `deploy`, and `/readyz` reported its commit. The smoke check against real
 Trello failed, so the release was recorded `failure` and the working release
-stayed the known-good revision.
+stayed the known-good revision. The pipeline stopped at the smoke check: the
+faulty release was never marked known-good, so it cannot be a rollback
+target, and it ran only on the disposable service, until the rollback.
 
 **Restored.** The rollback redeployed the working release's digest without a rebuild. `/readyz` reported the working release's commit again, and the smoke check passed. The rollback's smoke check ran the conformance suite from `main` at `d9dec7d`, which is the working release's suite plus the DELETE conformance test added in #46, so the restored revision passed a superset of the suite it was released with.
 
