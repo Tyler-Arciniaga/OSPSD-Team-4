@@ -152,13 +152,18 @@ request URLs or other provider details.
 ### Linear mapping
 
 `LinearIssueProvider` (`app/providers/linear_provider.py`) implements
-`get_issue()`, `create_issue()` and `delete_issue()` over Linear's GraphQL
-API (`https://api.linear.app/graphql`). Reads request `id`, `title` and
-`trashed`; creation requests `success`, `id` and `title`; deletion requests
-`success`. It holds one `httpx.Client` (10-second timeout) that `close()`
-releases (see [Adapter lifecycle](#adapter-lifecycle)).
-`update_issue()` is not implemented yet and refuses with
-`service_not_configured` before any request.
+`get_issue()`, `create_issue()`, `update_issue()` and `delete_issue()` over
+Linear's GraphQL API (`https://api.linear.app/graphql`). Reads request `id`,
+`title` and `trashed`; creation and updates request `success`, `id` and
+`title`; deletion requests `success`. It holds one `httpx.Client` (10-second
+timeout) that `close()` releases (see [Adapter lifecycle](#adapter-lifecycle)).
+
+Updates, like deletion, first perform a fresh lookup directly through the
+adapter. Linear's `issueUpdate` succeeds on a trashed issue, so without the
+lookup a PATCH could rename an issue this API reports as missing. Missing or
+trashed issues return 404 without sending `issueUpdate`, and a failed lookup
+sets `may_have_applied=False`. Otherwise, the adapter sends `issueUpdate`
+and requires `success: true` and the requested ID in the response.
 
 Deletion first performs a fresh lookup directly through the adapter,
 bypassing the service cache. Missing or trashed issues return 404 without
@@ -193,11 +198,11 @@ checked. Only the HTTP status and a recognised `extensions.code` are kept.
 
 | Linear failure | Code | Logged `cause` |
 | --- | --- | --- |
-| ID for GET or DELETE is not a lowercase UUID; checked before credentials, without a request | `not_found` | `malformed_issue_id` |
+| ID for GET, PATCH or DELETE is not a lowercase UUID; checked before credentials, without a request | `not_found` | `malformed_issue_id` |
 | `LINEAR_API_KEY` missing | `service_not_configured` | `missing_credentials` |
 | `LINEAR_TEAM_ID` missing (creation only) | `service_not_configured` | `missing_target_team` |
-| GET, including the DELETE lookup, answered HTTP 200 with `INPUT_ERROR` (missing issue) | `not_found` | `graphql_code=INPUT_ERROR` |
-| GET, including the DELETE lookup, returned an issue with `trashed: true` | `not_found` | `issue_trashed` |
+| GET, including the PATCH and DELETE lookups, answered HTTP 200 with `INPUT_ERROR` (missing issue) | `not_found` | `graphql_code=INPUT_ERROR` |
+| GET, including the PATCH and DELETE lookups, returned an issue with `trashed: true` | `not_found` | `issue_trashed` |
 | Create or delete mutation answered with `INPUT_ERROR` (the existing translation treats this as a rejected provider request) | `provider_error` | `graphql_code=INPUT_ERROR` |
 | HTTP 401, or `AUTHENTICATION_ERROR` | `access_denied` | `provider_status=401` or `graphql_code=AUTHENTICATION_ERROR` |
 | HTTP 429, or `RATELIMITED` | `provider_error` | `provider_status=429` or `graphql_code=RATELIMITED` |
