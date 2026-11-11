@@ -160,7 +160,7 @@ def test_delete_failure_fails_and_lists_leftover_issues(
     assert result.status != 0
     assert "## Smoke check: FAILED" in result.summary
     assert "Failing tests:" in result.summary
-    assert "test_delete_makes_issue_unavailable" in result.summary
+    assert "test_delete_returns_204_with_empty_body" in result.summary
 
     assert "Leftover issues: remove by hand" in result.summary
     listed = [

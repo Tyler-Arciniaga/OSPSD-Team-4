@@ -12,9 +12,11 @@ tested behavior follows the same contract.
   issue each time; and rejects invalid bodies with `422 invalid_input`.
 - `test_get_issue.py`: GET of a created issue returns the same body with an
   `ETag`; repeated reads agree; unknown IDs return `404 not_found`.
-- `test_delete_issue.py`: creates and fetches an issue to populate the
-  cache, verifies DELETE returns `204` with an empty body, then checks
-  that immediate GET and repeated DELETE return `404 not_found`.
+- `test_delete_issue.py`: DELETE returns `204` with an empty, uncompressed
+  body and no `ETag`; GET afterwards returns `404 not_found`, whether or not
+  the issue was cached first; repeated DELETE, PATCH (including with a
+  stale `If-Match`) and DELETE of unknown IDs return `404 not_found`; and
+  deleting one issue leaves others readable.
 
 Rename and conditional-update checks will be added when those operations
 are implemented for both providers.
@@ -53,8 +55,11 @@ CONFORMANCE_BASE_URL=http://127.0.0.1:8000 uv run --locked pytest contract/tests
 
 ## Cleanup
 
-The `create_issue` fixture tracks each issue it creates and attempts to
-delete it after the test, including when the test fails.
+The `post_issue` fixture sends `POST /issues` with any body and tracks
+every issue that returns `201`. It attempts to delete each one after the
+test, including when the test fails. `create_issue` builds on it for valid
+titles. Tests that expect a create to be rejected also use `post_issue`, so
+an issue the service wrongly creates is still removed.
 
 Cleanup accepts `204` when it deletes the issue and `404` when the test
 already deleted it. Other HTTP statuses produce a `CleanupWarning`

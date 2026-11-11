@@ -314,6 +314,12 @@ class LinearIssueProvider:
         """Rename a Linear issue using the shared IssueProvider contract."""
         _require_issue_id(issue_id)
 
+        try:
+            self.get_issue(issue_id, fresh=True)
+        except ServiceError as lookup_error:
+            lookup_error.may_have_applied = False
+            raise
+
         # The shared model currently permits only title updates.
         status, body = self._send(
             _credentials(),

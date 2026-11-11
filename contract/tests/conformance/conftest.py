@@ -9,6 +9,7 @@ real provider, so it runs only when `CONFORMANCE_BASE_URL` names the service
 import os
 import warnings
 from collections.abc import Callable, Iterator
+from typing import Any, Protocol
 
 import httpx
 import pytest
@@ -40,22 +41,42 @@ def service() -> Iterator[httpx.Client]:
         yield client
 
 
+class PostIssue(Protocol):
+    """Sends `POST /issues` with any body, valid or not."""
+
+    def __call__(
+        self,
+        *,
+        json: Any = None,
+        content: bytes | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response: ...
+
+
 @pytest.fixture
-def create_issue(service: httpx.Client) -> Iterator[CreateIssue]:
-    """Create disposable issues, deleting each one after the test, even on failure.
+def post_issue(service: httpx.Client) -> Iterator[PostIssue]:
+    """Send `POST /issues`, deleting any issue it creates after the test, even on failure.
+
+    Tests that expect a rejection use this too, so an issue the service
+    wrongly creates is still removed.
 
     A delete that fails is reported as a `CleanupWarning` naming the issue,
     rather than failing the test, so the issue can be removed by hand.
     """
     created: list[str] = []
 
-    def create(title: str) -> httpx.Response:
-        response = service.post("/issues", json={"title": title})
+    def post(
+        *,
+        json: Any = None,
+        content: bytes | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        response = service.post("/issues", json=json, content=content, headers=headers)
         if response.status_code == 201:
             created.append(response.json()["id"])
         return response
 
-    yield create
+    yield post
 
     for issue_id in created:
         response = service.delete(f"/issues/{issue_id}")
@@ -67,3 +88,9 @@ def create_issue(service: httpx.Client) -> Iterator[CreateIssue]:
                 CleanupWarning,
                 stacklevel=1,
             )
+
+
+@pytest.fixture
+def create_issue(post_issue: PostIssue) -> CreateIssue:
+    """Create disposable issues by title; cleanup is as for `post_issue`."""
+    return lambda title: post_issue(json={"title": title})
