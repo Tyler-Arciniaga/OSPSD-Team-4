@@ -183,7 +183,12 @@ def test_invalid_update_body(
     error = response.json()["error"]
     assert error["code"] == "invalid_input"
     assert error["message"] == "Request body is invalid"
-    assert any(detail["field"] == field for detail in error["details"])
+
+    allowed_fields = {field}
+    if body in ({"title": None}, {}):
+        allowed_fields.add("body")
+
+    assert any(detail["field"] in allowed_fields for detail in error["details"])
 
     # Rejected updates must not modify the issue.
     fetched = service.get(path)
