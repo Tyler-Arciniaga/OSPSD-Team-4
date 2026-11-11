@@ -168,21 +168,27 @@ Any of these, from cheapest:
 2. **Repository → Environments → render-production** (or the
    **Deployments** list): the newest entry with a green **success** shows the
    commit and links to the run. Its payload holds the digest:
+
    ```bash
    gh api "repos/Tyler-Arciniaga/OSPSD-Team-4/deployments?environment=render-production&per_page=5" \
      --jq '.[] | {created_at, sha, digest: .payload.digest, run: .payload.run_url}'
    ```
+
    Or the latest successful release only:
+
    ```bash
    GITHUB_TOKEN="$(gh auth token)" uv run --locked python -m scripts.release known-good \
      --repo Tyler-Arciniaga/OSPSD-Team-4 --environment render-production
    ```
+
 3. The image itself records its commit:
+
    ```bash
    IMAGE=ghcr.io/tyler-arciniaga/ospsd-team4-issue-service@<digest>
    docker pull --quiet "$IMAGE" >/dev/null
    docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE"
    ```
+
 4. Render dashboard → the service → **Events** lists each deploy; the
    service's image setting (**Settings → Image**) names the digest the
    release set.
@@ -253,10 +259,12 @@ that environment. Rolling back redeploys its image digest: no rebuild, the
 same deploy, readiness and smoke checks, and a new release record.
 
 1. Find the known-good commit and digest:
+
    ```bash
    GITHUB_TOKEN="$(gh auth token)" uv run --locked python -m scripts.release known-good \
      --repo Tyler-Arciniaga/OSPSD-Team-4 --environment render-production
    ```
+
    (or read them from the newest green entry under **Environments →
    render-production**, as in [Find the commit](#find-the-commit-behind-the-running-service)).
 2. **Actions → Release → Run workflow**: branch `main`, target
@@ -287,15 +295,18 @@ wrote:
 
 1. **Get the window.** Open the faulty release's run summary (**Deployed**
    table, *Deploy window*) or its Deployment payload:
+
    ```bash
    gh api "repos/Tyler-Arciniaga/OSPSD-Team-4/deployments?environment=render-production&per_page=20" \
      --jq '.[] | {id, sha, started: .payload.deploy_started_at, finished: .payload.deploy_finished_at, run: .payload.run_url}'
    ```
+
    The faulty revision served from its `deploy_started_at` until the
    rollback's `deploy_finished_at`.
 2. **List what changed in the test list during that window.** In a shell,
    type the Trello key and token (never put them in a file or the
    repository), then ask Trello for the list's card actions in the window:
+
    ```bash
    read -rs TRELLO_API_KEY; read -rs TRELLO_TOKEN; export TRELLO_API_KEY TRELLO_TOKEN
    LIST=<TRELLO_LIST_ID>; SINCE=<faulty deploy_started_at>; BEFORE=<rollback deploy_finished_at>
@@ -303,6 +314,7 @@ wrote:
      "https://api.trello.com/1/lists/$LIST/actions?filter=createCard,updateCard,deleteCard&since=$SINCE&before=$BEFORE&limit=1000" \
      | jq -r '.[] | [.date, .type, .data.card.id, .data.card.name] | @tsv'
    ```
+
    A Trello card ID also encodes its creation time (its first 8 hex digits
    are Unix seconds), which confirms when a card was made.
 3. **Separate smoke data from real data.** Cards titled `Conformance …` came
@@ -476,12 +488,14 @@ before the teardown date (11/20/2026).
    Proposed change (to be approved before use): in
    `app/providers/trello_provider.py`, `_create_card` builds the create URL by
    string formatting instead of `urlencode`:
+
    ```python
    url = f"https://api.trello.com/1/cards?idList={list_id}&name={title}"
    if desc is not None:
        url += f"&desc={desc}"
    request = Request(url, headers=headers, method="POST")
    ```
+
    Why it makes a good demonstration: it is a plausible "simplification",
    and every fast check passes (ruff, format, mypy, all unit tests, which
    replace `urlopen` and parse the URL leniently) as does the conformance
@@ -512,16 +526,30 @@ record.
 
 ### Evidence
 
-| Step | Run link | Deployment record (environment, status) | `/readyz` commit | Image digest |
-| --- | --- | --- | --- | --- |
-| 2. Working release | | `render-disposable`, success | | |
-| 4. Faulty release | | `render-disposable`, failure (failed at smoke) | | |
-| 5. Rollback | | `render-disposable`, success | | |
-| Production release after bootstrap | | `render-production`, success | | |
+Run on 11/11/2026 against `https://ospsd-team4-issue-tracker-disposable.onrender.com`.
 
-Failing tests named in step 4's summary:
+Deploy windows are UTC.
 
-Leftover issues listed in any summary, and how they were removed:
+| Step | Run link | Deployment record (environment, status) | `/readyz` commit |
+| --- | --- | --- | --- |
+| Working release | [42959623593](https://github.com/Tyler-Arciniaga/OSPSD-Team-4/actions/runs/42959623593) (04:31:25Z to 04:32:08Z) | `render-disposable`, success ("build: smoke check passed") | `e6d5adca41f33fdbaa888303fb657452efccd2c1` |
+| Faulty release | [42960374825](https://github.com/Tyler-Arciniaga/OSPSD-Team-4/actions/runs/42960374825) (04:39:06Z to 04:39:48Z) | `render-disposable`, failure ("build: failed at smoke") | `a915876441eb4a5eee4c54676e32a4132623e3b1` |
+| Rollback | [42963074679](https://github.com/Tyler-Arciniaga/OSPSD-Team-4/actions/runs/42963074679) (05:02:43Z to 05:03:26Z) | `render-disposable`, success ("rollback: smoke check passed") | `e6d5adca41f33fdbaa888303fb657452efccd2c1` |
+
+**Detected and stopped.** The faulty revision passed `ci`, `build` and
+`deploy`, and `/readyz` reported its commit. The smoke check against real
+Trello failed, so the release was recorded `failure` and the working release
+stayed the known-good revision.
+
+**Restored.** The rollback redeployed the working release's digest without a rebuild. `/readyz` reported the working release's commit again, and the smoke check passed. The rollback's smoke check ran the conformance suite from `main` at `d9dec7d`, which is the working release's suite plus the DELETE conformance test added in #46, so the restored revision passed a superset of the suite it was released with.
+
+**What this rollback could not undo.** The rollback restored the code and the
+service's image setting. It could not undo:
+
+- Writes the faulty revision made to Trello.
+- Idempotency keys.
+- Anything changed by hand in the Render environment group, the Render
+  dashboard or the Trello board.
 
 ## Level 2 checklist (repository admin)
 
@@ -609,6 +637,7 @@ The verification for this level: a teammate who did not write the pipeline
 follows this document from a fresh checkout.
 
 **Access the account owner gives you first:**
+
 - Write access to this repository.
 - Required reviewer on the `render-infrastructure` environment.
 - Membership in the HCP Terraform org.
