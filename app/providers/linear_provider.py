@@ -338,9 +338,7 @@ class LinearIssueProvider:
 
             error = _translate_failure(status, codes)
             error.may_have_applied = status >= 500 or (
-                status == 200 and not all(
-                    code in REJECTION_CODES for code in codes
-                )
+                status == 200 and not all(code in REJECTION_CODES for code in codes)
             )
             raise error
 
@@ -361,7 +359,6 @@ class LinearIssueProvider:
             raise error from None
 
         return issue
-
 
     def delete_issue(self, issue_id: str) -> None:
         """Delete is not implemented for Linear yet (DESIGN.md 6.4, change 2)."""

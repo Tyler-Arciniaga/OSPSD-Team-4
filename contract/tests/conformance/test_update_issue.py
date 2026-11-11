@@ -1,4 +1,3 @@
-
 """Conformance: Test PATCH /issues/{issue_id} with every provider."""
 
 from collections.abc import Callable

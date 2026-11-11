@@ -1,4 +1,3 @@
-
 """PATCH /issues/{issue_id} with the real Linear adapter and simulated responses."""
 
 import json
@@ -74,9 +73,7 @@ def test_patch_returns_provider_stored_title(
 ) -> None:
     linear.handler = respond(200, updated_body(title=NEW_TITLE.strip()))
 
-    response = client.patch(
-        f"/issues/{ISSUE_ID}", json={"title": f"  {NEW_TITLE}  "}
-    )
+    response = client.patch(f"/issues/{ISSUE_ID}", json={"title": f"  {NEW_TITLE}  "})
 
     assert response.status_code == 200
     assert response.json()["title"] == NEW_TITLE
