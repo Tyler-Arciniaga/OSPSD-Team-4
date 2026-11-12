@@ -269,6 +269,9 @@ def test_patch_uses_supplied_provider(
         def create_issue(self, title: str) -> Issue:
             raise AssertionError("PATCH must not create an issue")
 
+        def list_issues(self, *, limit: int) -> list[Issue]:
+            raise AssertionError("This test must not list issues")
+
         def delete_issue(self, issue_id: str) -> None:
             raise AssertionError("PATCH must not delete the issue")
 
@@ -312,6 +315,9 @@ def test_patch_rejected_input_does_not_call_provider(
         def create_issue(self, title: str) -> Issue:
             raise AssertionError("PATCH must not create an issue")
 
+        def list_issues(self, *, limit: int) -> list[Issue]:
+            raise AssertionError("This test must not list issues")
+
         def delete_issue(self, issue_id: str) -> None:
             raise AssertionError("Rejected requests must not reach the provider")
 
@@ -342,6 +348,9 @@ def test_patch_provider_missing_issue_returns_404(
 
         def create_issue(self, title: str) -> Issue:
             raise AssertionError("PATCH must not create an issue")
+
+        def list_issues(self, *, limit: int) -> list[Issue]:
+            raise AssertionError("This test must not list issues")
 
         def delete_issue(self, issue_id: str) -> None:
             raise AssertionError("PATCH must not delete the issue")

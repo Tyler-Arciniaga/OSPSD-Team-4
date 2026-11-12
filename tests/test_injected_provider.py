@@ -21,6 +21,9 @@ def test_endpoint_uses_supplied_provider(monkeypatch: pytest.MonkeyPatch) -> Non
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
             raise AssertionError("GET must not update the issue")
 
+        def list_issues(self, *, limit: int) -> list[Issue]:
+            raise AssertionError("This test must not list issues")
+
         def delete_issue(self, issue_id: str) -> None:
             raise AssertionError("GET must not delete an issue")
 
@@ -76,6 +79,9 @@ def test_endpoints_pass_any_id_to_supplied_provider(
             received.append(("update", issue_id))
             return Issue(id=issue_id, title=changes.title or "")
 
+        def list_issues(self, *, limit: int) -> list[Issue]:
+            raise AssertionError("This test must not list issues")
+
         def delete_issue(self, issue_id: str) -> None:
             received.append(("delete", issue_id))
 
@@ -115,6 +121,9 @@ def test_provider_missing_issue_returns_404(
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
             raise AssertionError("GET must not update the issue")
 
+        def list_issues(self, *, limit: int) -> list[Issue]:
+            raise AssertionError("This test must not list issues")
+
         def delete_issue(self, issue_id: str) -> None:
             raise AssertionError("GET must not delete an issue")
 
@@ -149,6 +158,9 @@ def test_create_uses_supplied_provider(monkeypatch: pytest.MonkeyPatch) -> None:
 
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
             raise AssertionError("This test must not update an issue")
+
+        def list_issues(self, *, limit: int) -> list[Issue]:
+            raise AssertionError("This test must not list issues")
 
         def delete_issue(self, issue_id: str) -> None:
             raise AssertionError("POST must not delete an issue")
@@ -208,6 +220,9 @@ def test_invalid_create_body_does_not_call_provider(
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
             raise AssertionError("This test must not update an issue")
 
+        def list_issues(self, *, limit: int) -> list[Issue]:
+            raise AssertionError("This test must not list issues")
+
         def delete_issue(self, issue_id: str) -> None:
             raise AssertionError("Invalid bodies must not reach the provider")
 
@@ -240,6 +255,9 @@ def test_create_accepts_maximum_title_length(
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
             raise AssertionError("This test must not update an issue")
 
+        def list_issues(self, *, limit: int) -> list[Issue]:
+            raise AssertionError("This test must not list issues")
+
         def delete_issue(self, issue_id: str) -> None:
             raise AssertionError("POST must not delete an issue")
 
@@ -271,6 +289,9 @@ def test_provider_create_failure_is_passed_through(
 
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
             raise AssertionError("This test must not update an issue")
+
+        def list_issues(self, *, limit: int) -> list[Issue]:
+            raise AssertionError("This test must not list issues")
 
         def delete_issue(self, issue_id: str) -> None:
             raise AssertionError("POST must not delete an issue")

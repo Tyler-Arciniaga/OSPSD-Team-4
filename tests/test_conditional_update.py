@@ -31,6 +31,9 @@ class InMemoryProvider:
         self.issue = Issue(id=issue_id, title=changes.title or self.issue.title)
         return self.issue
 
+    def list_issues(self, *, limit: int) -> list[Issue]:
+        raise AssertionError("This test must not list issues")
+
     def delete_issue(self, issue_id: str) -> None:
         raise AssertionError("not used")
 

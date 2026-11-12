@@ -151,6 +151,9 @@ def test_provider_interchangeability() -> None:
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
             return Issue(id=issue_id, title=changes.title or "Fake issue")
 
+        def list_issues(self, *, limit: int) -> list[Issue]:
+            raise AssertionError("This test must not list issues")
+
         def delete_issue(self, issue_id: str) -> None:
             pass
 

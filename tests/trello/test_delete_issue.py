@@ -150,6 +150,9 @@ def test_delete_uses_injected_provider_and_cannot_be_retrieved_or_deleted_again(
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
             raise AssertionError("DELETE must not update an issue")
 
+        def list_issues(self, *, limit: int) -> list[Issue]:
+            raise AssertionError("This test must not list issues")
+
         def delete_issue(self, issue_id: str) -> None:
             if issue_id not in issues:
                 raise ServiceError(
