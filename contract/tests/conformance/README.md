@@ -18,8 +18,10 @@ tested behavior follows the same contract.
   stale `If-Match`) and DELETE of unknown IDs return `404 not_found`; and
   deleting one issue leaves others readable.
 
-Rename and conditional-update checks will be added when those operations
-are implemented for both providers.
+- `test_update_issue.py`: PATCH returns the updated issue; GET after PATCH and
+  repeated PATCH agree; matching `If-Match` succeeds and stale `If-Match` returns
+  `412`; invalid bodies and unknown IDs return the shared errors; maximum-length
+  titles are accepted.
 
 ## Running it
 
