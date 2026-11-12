@@ -2,6 +2,7 @@
 
 import io
 import json
+import logging
 from email.message import Message
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -9,6 +10,7 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import Request
 
 import pytest
+from fastapi.testclient import TestClient
 
 from app.providers import trello_provider as provider_module
 from app.providers.trello_provider import TrelloIssueProvider
@@ -249,3 +251,57 @@ def test_missing_list_fails_without_contacting_trello(
     assert exc_info.value.code is ErrorCode.SERVICE_NOT_CONFIGURED
     assert exc_info.value.message == "Issue tracker target list not configured"
     assert not exc_info.value.provider_involved
+
+
+def test_get_issues_lists_through_the_service(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The real startup, cache and route around the Trello adapter.
+    requests = answer_with(
+        monkeypatch,
+        [card(OLDEST, "Oldest"), card(NEWEST, "Newest"), card(MIDDLE, "Middle")],
+    )
+
+    first = client.get("/issues", params={"limit": 2})
+    second = client.get("/issues", params={"limit": 2})
+
+    assert first.status_code == 200
+    assert first.json() == {
+        "issues": [
+            {"id": NEWEST, "title": "Newest"},
+            {"id": MIDDLE, "title": "Middle"},
+        ]
+    }
+    assert second.json() == first.json()
+    # Lists are never served from the cache.
+    assert len(requests) == 2
+
+
+def test_get_issues_failure_is_logged_as_a_read(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fail_with(monkeypatch, http_error(404))
+
+    with caplog.at_level(logging.WARNING, logger="app.errors"):
+        response = client.get("/issues")
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "error": {
+            "code": "provider_error",
+            "message": "The issue tracker rejected the request",
+        }
+    }
+    [record] = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == "app.errors"
+    ]
+    assert record["operation"] == "list_issues"
+    assert record["error"] == "provider_error"
+    assert record["provider_involved"] is True
+    assert record["cause"] == "provider_status=404"
+    assert record["write_outcome"] is None
+    assert PROVIDER_TEXT not in caplog.text

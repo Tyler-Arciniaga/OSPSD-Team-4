@@ -322,3 +322,142 @@ def test_provider_create_failure_is_passed_through(
             "message": "The issue tracker is currently unavailable",
         }
     }
+
+
+class ListingProvider:
+    """Records each list request's limit and answers with fixed issues."""
+
+    def __init__(self, issues: list[Issue]) -> None:
+        self.issues = issues
+        self.limits: list[int] = []
+
+    def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
+        raise AssertionError("A list must not read single issues")
+
+    def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
+        raise AssertionError("A list must not update issues")
+
+    def list_issues(self, *, limit: int) -> list[Issue]:
+        self.limits.append(limit)
+        return self.issues[:limit]
+
+    def delete_issue(self, issue_id: str) -> None:
+        raise AssertionError("A list must not delete issues")
+
+    def create_issue(self, title: str) -> Issue:
+        raise AssertionError("A list must not create issues")
+
+
+def supply(monkeypatch: pytest.MonkeyPatch, provider: IssueProvider) -> None:
+    monkeypatch.setitem(app.dependency_overrides, get_issue_provider, lambda: provider)
+
+
+def test_list_returns_the_providers_issues_in_an_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = ListingProvider(
+        [Issue(id="newest", title="Newest"), Issue(id="older", title="Older")]
+    )
+    supply(monkeypatch, provider)
+
+    with TestClient(app) as client:
+        response = client.get("/issues")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "issues": [
+            {"id": "newest", "title": "Newest"},
+            {"id": "older", "title": "Older"},
+        ]
+    }
+    # The provider's order is kept, and the default limit is applied.
+    assert provider.limits == [50]
+
+
+@pytest.mark.parametrize("limit", [1, 2, 100])
+def test_list_passes_the_limit_to_the_provider(
+    monkeypatch: pytest.MonkeyPatch, limit: int
+) -> None:
+    provider = ListingProvider([Issue(id=str(n), title=f"Issue {n}") for n in range(3)])
+    supply(monkeypatch, provider)
+
+    with TestClient(app) as client:
+        response = client.get("/issues", params={"limit": limit})
+
+    assert response.status_code == 200
+    assert len(response.json()["issues"]) == min(limit, 3)
+    assert provider.limits == [limit]
+
+
+def test_empty_list_returns_an_empty_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
+    supply(monkeypatch, ListingProvider([]))
+
+    with TestClient(app) as client:
+        response = client.get("/issues")
+
+    assert response.status_code == 200
+    assert response.json() == {"issues": []}
+
+
+@pytest.mark.parametrize("limit", ["0", "101", "-1", "abc", "1.5", ""])
+def test_invalid_limit_is_rejected_before_the_provider(
+    monkeypatch: pytest.MonkeyPatch, limit: str
+) -> None:
+    provider = ListingProvider([])
+    supply(monkeypatch, provider)
+
+    with TestClient(app) as client:
+        response = client.get(f"/issues?limit={limit}")
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"]["code"] == "invalid_input"
+    assert [detail["field"] for detail in body["error"]["details"]] == ["limit"]
+    assert provider.limits == []
+
+
+def test_list_failure_uses_the_error_format(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FailingListProvider(ListingProvider):
+        def list_issues(self, *, limit: int) -> list[Issue]:
+            raise ServiceError(
+                ErrorCode.PROVIDER_ERROR,
+                "The issue tracker rejected the request",
+                provider_involved=True,
+                cause="provider_status=404",
+            )
+
+    supply(monkeypatch, FailingListProvider([]))
+
+    with TestClient(app) as client:
+        response = client.get("/issues")
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "error": {
+            "code": "provider_error",
+            "message": "The issue tracker rejected the request",
+        }
+    }
+
+
+def test_limit_below_one_returns_the_documented_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supply(monkeypatch, ListingProvider([]))
+
+    with TestClient(app) as client:
+        response = client.get("/issues?limit=0")
+
+    # Pinned because docs/api.md shows this exact response.
+    assert response.json() == {
+        "error": {
+            "code": "invalid_input",
+            "message": "Request body is invalid",
+            "details": [
+                {
+                    "field": "limit",
+                    "message": "Input should be greater than or equal to 1",
+                }
+            ],
+        }
+    }
