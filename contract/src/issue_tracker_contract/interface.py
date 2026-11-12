@@ -35,3 +35,16 @@ class IssueProvider(Protocol):
     def create_issue(self, title: str) -> Issue:
         """Create an issue with the given title and return it."""
         ...
+
+    def list_issues(self, *, limit: int) -> list[Issue]:
+        """Return at most `limit` issues, newest first.
+
+        Lists the collection `create_issue` creates issues in (for example a
+        Trello list or a Linear team). Archived and deleted issues are left
+        out. `limit` has already been validated as 1 to `MAX_LIST_LIMIT`.
+        An empty collection returns an empty list. The collection being
+        missing is a configuration problem and is reported as
+        `provider_error`, never `not_found`. Results must not be served from
+        a saved copy.
+        """
+        ...

@@ -24,6 +24,23 @@ class Issue(BaseModel):
     title: str
 
 
+# How many issues a list returns when the caller gives no limit.
+DEFAULT_LIST_LIMIT = 50
+
+# Largest limit a caller may ask for.
+MAX_LIST_LIMIT = 100
+
+
+class IssueList(BaseModel):
+    """A page of issues as our API presents it to callers.
+
+    An object rather than a bare array, so fields such as a cursor can be
+    added later without breaking callers.
+    """
+
+    issues: list[Issue]
+
+
 class IssueCreate(BaseModel):
     """The fields a caller supplies to create an issue."""
 

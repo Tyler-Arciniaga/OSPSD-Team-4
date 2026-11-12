@@ -1,6 +1,6 @@
 [project]
 name = "issue-tracker-contract"
-version = "1.0.0"
+version = "1.1.0"
 description = "Shared issue tracker contract: models, provider interface, and error types."
 requires-python = ">=3.11.5"
 dependencies = [
