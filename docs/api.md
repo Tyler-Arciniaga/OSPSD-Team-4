@@ -770,12 +770,28 @@ The `app.idempotency` logger also writes a JSON line if an attempt finishes
 after its lease ran out (`idempotency_lease_lost`) or its result could not be
 recorded (`idempotency_record_failed`). Neither line contains the key.
 
-Logs never contain credentials, authorization data, request URLs,
-request or response bodies, or exception messages from the issue tracker client.
+Expected failure diagnostics and explicitly emitted OTLP outcome records omit
+credentials, authorization data, request URLs, request/response bodies, and
+exception messages from the issue tracker client. Unexpected-exception stack
+traces in server logs need separate review before those logs are forwarded.
 Expected failures are logged without a stack trace.
 Only `internal_error` includes one, because it is needed to find the bug.
 
-The service has no request or correlation identifier.
+### Request correlation and outcome logs
+
+With the normal application lifespan active, `RequestTracingMiddleware` adds an
+`X-Trace-ID` response header to responses passing through it, including expected
+4xx and provider-error responses. Search that ID in Grafana's traces source,
+then find the matching outcome log. Errors generated outside this middleware,
+such as an unhandled exception handled by the outer server error handler, may
+not carry the header.
+
+`app/telemetry.py` emits one structured outcome record for each completed HTTP
+request: `operation`, `outcome`, `status`, `release`, `duration_ms`, `trace_id`,
+and `span_id`. Success is recorded as well as failure. This OTLP outcome stream
+is separate from the existing `app.errors` and `app.idempotency` diagnostics;
+those Python loggers are not automatically forwarded by this application's
+OTLP logger provider. See [Observability](OBSERVABILITY.md).
 
 ## What callers can rely on
 

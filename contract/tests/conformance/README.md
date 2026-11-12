@@ -24,8 +24,10 @@ tested behavior follows the same contract.
   `422 invalid_input` naming `limit`. The tests check only the issues they
   create, so other issues in the live list or team do not affect them.
 
-Rename and conditional-update checks will be added when those operations
-are implemented for both providers.
+- `test_update_issue.py`: PATCH returns the updated issue; GET after PATCH and
+  repeated PATCH agree; matching `If-Match` succeeds and stale `If-Match` returns
+  `412`; invalid bodies and unknown IDs return the shared errors; maximum-length
+  titles are accepted.
 
 ## Running it
 

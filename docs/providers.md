@@ -256,6 +256,21 @@ The Trello implementation is responsible for:
 - Translating Trello's `id` and `name` fields into the service's `Issue` model.
 - Keeping provider-specific request and response structures hidden from application code.
 
+## Provider tracing
+
+The adapters wrap outbound network work in `provider_span`: `trello.request`
+for Trello and `linear.request` for Linear. The active request tracer is supplied
+through a context variable; when no request tracer is active the helper yields a
+no-op span. No credentials, raw provider URLs, query variables, issue IDs, or
+request/response bodies are attached by this helper. It disables automatic
+exception-message recording.
+
+The HTTP request span carries the final shared outcome. A provider child span's
+status alone does not prove application success: Linear response parsing and
+GraphQL error translation occur after the network span exits. Cache hits and
+validation failures may have no outbound provider span. See
+[Observability](OBSERVABILITY.md) for correlation and interpretation.
+
 ## Provider Boundary
 
 The endpoints in `app/main.py` receive an object satisfying the
@@ -541,7 +556,7 @@ for that experiment; the tests pass with the real check.
 
 `contract/tests/conformance/` holds one HTTP suite that runs unchanged
 against a live service configured for Trello and then Linear (DESIGN.md
-section 7). It covers get and create today. It uses no adapter code, only
+section 7). It covers get, create, update (including conditional updates), and delete. It uses no adapter code, only
 the routes, so it checks what a consumer observes, including provider
 assumptions the simulated tests cannot. It is skipped unless
 `CONFORMANCE_BASE_URL` is set; see its README for running it.
@@ -554,14 +569,15 @@ to verify the normally configured service against a real test card.
 
 ## Current Scope
 
-The interface contains four operations: issue retrieval, issue creation,
-partial issue update (only `title` can currently be updated), and deletion.
+The interface contains retrieval, creation, partial update (only `title` can
+currently be updated), deletion, and bounded listing. Listing is used internally
+by the service; there is no public list endpoint.
 Trello remains the provider during normal operation, while tests
 can supply controlled implementations without changing endpoint code.
 
 `ISSUE_PROVIDER=linear` selects the Linear adapter at startup (unset or
 `trello` selects Trello; any other value stops startup). The Linear adapter
-supports retrieval, creation and deletion, and does not support
+supports retrieval, creation, update, deletion and listing, and does not support
 `Idempotency-Key`, so a keyed creation returns `503`.
 
 ### Linear tests
@@ -584,8 +600,10 @@ real cache, routes and error handlers.
 - `test_delete_issue.py`: successful deletion, repeated deletion, GET after
   deletion with a previously cached issue, missing issues, unsuccessful
   mutation responses, and timeout outcomes during lookup and deletion.
+- `test_update_issue.py`: PATCH mutation, returned title, validation, missing/trashed
+  issues, lookup and mutation failures, and logged write outcomes.
 - `test_provider.py`: protocol compatibility, every read querying Linear,
-  the unimplemented update operation, and `close()`.
+  readiness probes, and `close()`.
 
 Run the deletion tests with:
 

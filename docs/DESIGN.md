@@ -8,7 +8,7 @@
 
 #### Status: Approved
 
-#### Last Update Date: 11/11/2026
+#### Last Update Date: 11/12/2026
 
 #### Relevant Links
 
@@ -47,7 +47,14 @@ The shared decision memo defines the agreed behavior. This design explains how o
 
 ## 2\. Proposed Architecture and Request Flow
 
-Labels: **HW1** means it exists in the HW1 repo today. **Proposal** means it is new in this design. Linear is not yet implemented, so every Linear detail is a proposal or an observed provider behavior from our live calls.
+The **HW1** and **Proposal** labels below preserve the origin of the design,
+not the current implementation status. Both Trello and Linear now implement
+create, get, update, delete, and bounded listing; the shared HTTP conformance
+suite covers all four public CRUD operations. Linear still rejects keyed
+creation. Runtime behavior is documented in [the API contract](api.md) and
+[provider guide](providers.md). OpenTelemetry implementation and recorded
+verification are documented in [Observability](OBSERVABILITY.md). Historical
+review notes and proposed follow-up work below are retained as design history.
 
 ### 2.1 Components and responsibilities
 
@@ -64,8 +71,8 @@ Labels: **HW1** means it exists in the HW1 repo today. **Proposal** means it is 
 ### 2.2 Who creates and closes provider clients, and who owns state
 
 - **Creation/Provider Selection (Proposal).** `lifespan` in `app/dependencies.py` is the only place that constructs an adapter. A configuration value (`ISSUE_PROVIDER=trello|linear`) selects it, unset defaults to `trello`. HW1 already builds one provider per process this way, and construction sends no request to the provider.  
-- **Closing (Proposal).** The Linear adapter holds one long-lived HTTP client for connection reuse, so it exposes `close()`. Every adapter implements `close()`, and `lifespan` always calls it in its `finally` block, so shutdown looks the same for both adapters. For Linear it closes the client. The Trello adapter keeps its HW1 per-request `urlopen` calls, so it has no client and its `close()` does nothing. `CachedIssueProvider` forwards `close()` to the adapter it wraps, because the cache is what `lifespan` holds. Without that forwarding, Linear's client would never be closed. We do not rewrite Trello's internals for consistency, because that would churn tests that currently mock `urlopen` and gain nothing for the contract.  
-- **Contract boundary.** `close()` is not part of the shared `IssueProvider` contract, because consumers never close a provider. The "must have `close()`" rule is a small startup-side protocol defined in the service (not in the contract package) that `lifespan` and the cache wrapper rely on. Whoever creates a resource closes it, and that ownership stays in startup code.  
+- **Closing (Proposal).** The Linear adapter holds one long-lived HTTP client for connection reuse, so it exposes `close()`. Every adapter implements `close()`, and `lifespan` always calls it in its `finally` block, so shutdown looks the same for both adapters. For Linear it closes the client. The Trello adapter keeps its HW1 per-request `urlopen` calls, so it has no client and its `close()` does nothing. `lifespan` retains the underlying adapter and calls its `close()` directly; the cache wrapper does not own client cleanup. We do not rewrite Trello's internals for consistency, because that would churn tests that currently mock `urlopen` and gain nothing for the contract.
+- **Contract boundary.** `close()` is not part of the shared `IssueProvider` contract, because consumers never close a provider. The "must have `close()`" rule is a small startup-side protocol defined in the service (not in the contract package) that `lifespan` and the cache wrapper rely on. Whoever creates a resource closes it, and that ownership stays in startup code.
 - **State ownership.** The read cache is owned by the application and lives per process, as in HW1. The idempotency store is owned by the application and is a file path shared by all processes, as in HW1. Neither belongs to an adapter.&nbsp;  
 - **No runtime switching.** One process talks to one tracker for its whole life.
 
@@ -110,7 +117,7 @@ Startup (lifespan): reads config -> builds ONE adapter -> wraps in cache -> clos
 3. The route calls `provider.create_issue(title)` on the cache wrapper, which passes writes straight through.  
 4. **Domain conversion (adapter).** `LinearIssueProvider` sends an `issueCreate` GraphQL mutation using the configured team ID, and the workflow state if the operator set one. It reads the returned issue and converts it to the shared `Issue` with `id` and `title` only.  
 5. The route returns `201` with the issue body and a `Location: /issues/{id}` header naming the new issue, exactly as in HW1 (`app/main.py` sets it from the returned `id`). The route builds `Location` from the shared `Issue`, so it is identical for Trello and Linear. Reads of this issue later carry an `ETag` computed by the application.  
-6. **Logging.** None from the application. HW1 logs only failures (`log_failure`) and idempotency events, so a successful create writes no application log line. Server-level access logging, if enabled, is outside this design.&nbsp;
+6. **Observability.** The request middleware records request count and duration, emits a structured success outcome log, and returns `X-Trace-ID`. The request span identifies `create_issue`; an outbound `linear.request` child span separates provider time. Service resource attributes identify the service and release. See [Observability](OBSERVABILITY.md).
 
 **Trace B: expected failure, `GET /issues/{id}` for an issue that does not exist (Linear).**
 
@@ -119,7 +126,7 @@ Startup (lifespan): reads config -> builds ONE adapter -> wraps in cache -> clos
 3. The adapter sends the GraphQL query. **Observed in our live calls:** Linear answers HTTP 200 with `data: null` and an `errors` entry with code `INPUT_ERROR` and the message "Entity not found: Issue". A malformed ID gives the same result.  
 4. **Error translation (adapter).** The adapter must inspect the response body, not just the status line. It maps this case to `ServiceError(not_found)`. An unrecognized error body maps to `provider_error`.  
 5. **Error translation (HTTP layer).** The `ServiceError` handler in `app/main.py` builds the shared body `{"error": {"code": "not_found", "message": ...}}` with status `404`.  
-6. **Logging.** The handler calls `log_failure`, which records the operation, code, status and a short cause. It does not record request payloads or credentials.
+6. **Logging.** The handler calls `log_failure`, which records the operation, code, status and a short cause. It does not record request payloads or credentials. Separately, the request middleware emits the correlated outcome log and records an error counter with the shared error category.
 
 ### 2.6 Layer check
 
@@ -307,10 +314,17 @@ One Linear-specific consequence (Observed): a GraphQL response can be HTTP 200 a
 
 ### 5.3 Limits and cleanup
 
+OpenTelemetry uses background export, bounded log/span queues (256 records each,
+64 per export batch), and aggregated metrics with bounded operation/outcome
+values. The [observability guide](OBSERVABILITY.md#export-failure-behavior)
+describes exporter timeouts, loss on overflow, startup validation, and the scope
+of resilience verification.
+
+
 | Limit | Value | Source |
 | :---- | :---- | :---- |
 | Title length | 1 to 256 characters, not only whitespace | HW1 contract |
-| Provider call timeout | 10 seconds per network operation | HW1 for Trello; will use the same for Linear |
+| Provider call timeout | 10 seconds per network operation | Shared adapter timeout (`app/providers/common.py`) |
 | Read cache | 30 seconds, 100 entries, per process | HW1 |
 | Idempotency key retention | 24 hours, then purged | HW1 |
 | Linear request budget | 2,500 requests and 3,000,000 complexity points per hour | Observed in response headers; the over-limit response is not yet observed |

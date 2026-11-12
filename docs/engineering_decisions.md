@@ -9,7 +9,7 @@
 
 Our Issue Tracker service was designed around a provider-independent `IssueProvider` interface, allowing the application to interact with an issue-tracking provider without depending on its specific implementation.
 
-During our team discussion, we considered implementing an internal ID mapping system for potential cross-provider identity management. However, we decided against it because our current implementation integrates with a single provider, and maintaining a separate mapping system would introduce additional storage, synchronization, and maintenance requirements beyond our current scope.
+During our team discussion, we considered implementing an internal ID mapping system for potential cross-provider identity management. However, we decided against it because each running service selects a single provider at startup, and maintaining a separate mapping system would introduce additional storage, synchronization, and maintenance requirements beyond our current scope.
 
 An alternative would be to generate service-owned issue identifiers and maintain a mapping between those identifiers and the corresponding provider IDs. This could preserve issue identities across provider migrations but would increase implementation complexity.
 
@@ -29,13 +29,15 @@ Our observation is that this approach supports our current Trello integration wh
 
 Our current approach keeps issue retrieval straightforward and avoids introducing an additional storage layer. The tradeoff is that issue identifiers remain associated with the underlying provider. If we later migrate issues to another provider, we cannot guarantee that clients will be able to reference those same issues using their existing identifiers. Cache keys would change along with the IDs, although this costs little because the cache is in memory and cleared on restart.
 
-We accepted this limitation because cross-provider identity management is not required for our current implementation. The remaining uncertainty is how identifiers would be managed if multiple providers were introduced, particularly when preserving existing issue references. With several providers behind one cache, two providers could also return the same ID string for different issues, so cache keys would need to include the provider.
+We accepted this limitation because cross-provider identity management is not required for our current implementation. The remaining uncertainty is how identifiers would be managed across simultaneous providers or a provider migration, particularly when preserving existing issue references. With several providers behind one cache, two providers could also return the same ID string for different issues, so cache keys would need to include the provider.
 
 We would revisit this decision if the service needed to support multiple providers simultaneously, migrate existing issues between providers, or maintain consistent issue references across providers.
 
 ## 6.2 / Rubric 12.2: Explain the Cost of One Operation (1 Point)
 
-`POST /issues`
+`POST /issues` without `Idempotency-Key`, with Trello selected. Keyed creation
+also performs durable-store coordination and may perform reconciliation reads;
+see [Idempotent creation](api.md#idempotent-creation).
 
 **1. Input size and relevant data structures**
 
@@ -61,7 +63,7 @@ For an accepted request, t ≤ 256, so local work is dominated by reading the re
 
 **3. Space complexity: O(b + n)**
 
-The parsed request body takes O(b) space and the parsed Trello response takes O(n). The returned `Issue` and the encoded request URL take O(t). Nothing is retained after the request finishes: POST does not populate the cache.
+The parsed request body takes O(b) space and the parsed Trello response takes O(n). The returned `Issue` and the encoded request URL take O(t). POST does not populate the read cache. OpenTelemetry retains aggregated measurements and temporarily queues bounded outcome logs and spans for export; see [Observability](OBSERVABILITY.md#export-failure-behavior).
 
 **4. Provider calls and assumptions**
 
@@ -73,7 +75,7 @@ Each request creates at most one issue and returns one record. The number of Tre
 | Invalid body (`422 invalid_input`) | 0 (rejected before the provider is called) |
 | Credentials or `TRELLO_LIST_ID` missing (`503 service_not_configured`) | 0 |
 
-The implementation uses a 10-second request timeout and never retries. Creation is not idempotent: after a `502`, especially a timeout, the card may already exist, so a caller who retries can create a duplicate.
+The implementation uses a 10-second request timeout and never retries. Creation without `Idempotency-Key` is not idempotent: after a `502`, especially a timeout, the card may already exist, so a caller who retries can create a duplicate. Trello supports keyed creation through the shared idempotency store; Linear currently rejects keyed creation with `503`.
 
 **5. Delegated work and remaining uncertainty**
 

@@ -48,6 +48,8 @@ production, in the disposable service and in a local container.
 | `ISSUE_PROVIDER`, `IDEMPOTENCY_DB_PATH` | Configuration | `infra/main.tf` (service variables) | Anyone with repository access |
 | Image repository, first digest, disposable toggle, environment group ID | Configuration | `infra/release.tf` | Anyone with repository access |
 | `TRELLO_API_KEY`, `TRELLO_TOKEN`, `TRELLO_LIST_ID` (or `LINEAR_API_KEY`, `LINEAR_TEAM_ID`) | Secret | Render environment group, by hand | Render workspace members; the running service |
+| `OTEL_ENABLED`, `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_MEMORY_LIMIT_MB` | Telemetry configuration | Linked Render environment group, by hand | Render workspace members; the running service |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Secret | Linked Render environment group, by hand | Render workspace members; the running service |
 | `RENDER_API_KEY` | Secret | GitHub environment secrets (`render-production`, `render-disposable`, `render-infrastructure`) and one repository secret for PR plans | Its owner; the workflows using those environments |
 | HCP Terraform API token (`TF_API_TOKEN`) | Secret | GitHub: `render-infrastructure` environment secret and one repository secret for PR plans; `~/.terraform.d` via `terraform login` locally | Its owner; the Terraform workflows |
 | `RENDER_OWNER_ID` | Configuration | GitHub environment variables and one repository variable | Repository collaborators |
@@ -70,6 +72,28 @@ workspace; that is why the key lives only in GitHub environments limited to
 `main`, plus one repository secret the PR plan needs (a residual risk:
 same-repository pull requests can reach it; pull requests from forks
 cannot).
+
+## Observability configuration
+
+Configure Grafana OTLP export in the existing linked Render environment group:
+`OTEL_ENABLED=true`, `OTEL_SERVICE_NAME=ospsd-team4-render`,
+`OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`, `OTEL_MEMORY_LIMIT_MB=512`,
+and the Grafana-provided `OTEL_EXPORTER_OTLP_ENDPOINT` and secret
+`OTEL_EXPORTER_OTLP_HEADERS`. Use the actual service memory allocation if it
+changes. Save and redeploy so the running process receives the new environment.
+
+Keep these settings in the environment group: `infra/main.tf` replaces the
+service-variable list on an infrastructure update. Do not add credentials to
+Terraform or Git. The same group is linked to the optional disposable service;
+if it shares the service name, its telemetry will also match the dashboard filter.
+Use release/instance labels to distinguish it, or arrange separate environment
+groups before relying on service name alone.
+
+Follow [Observability](OBSERVABILITY.md) for endpoint/header setup, dashboard
+queries, trace/log lookup, and verification. A successful deployment or API
+response alone does not establish that telemetry arrived in Grafana. The
+recorded examples in that guide identify the tested release; a later merge is
+not retroactively covered by that evidence.
 
 ## Prerequisites (by hand, once)
 
