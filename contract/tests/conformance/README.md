@@ -17,6 +17,12 @@ tested behavior follows the same contract.
   the issue was cached first; repeated DELETE, PATCH (including with a
   stale `If-Match`) and DELETE of unknown IDs return `404 not_found`; and
   deleting one issue leaves others readable.
+- `test_list_issues.py`: `GET /issues` returns `{"issues": [...]}` with
+  only `id` and `title` per issue; a new issue is among the five newest; a
+  rename shows the current title; a deleted issue is left out; at most
+  `limit` issues are returned; and a `limit` outside 1 to 100 returns
+  `422 invalid_input` naming `limit`. The tests check only the issues they
+  create, so other issues in the live list or team do not affect them.
 
 Rename and conditional-update checks will be added when those operations
 are implemented for both providers.
