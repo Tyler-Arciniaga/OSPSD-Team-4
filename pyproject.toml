@@ -5,7 +5,7 @@ requires-python = ">=3.11.5"
 dependencies = [
     "fastapi[standard]>=0.142.2",
     "httpx>=0.28.1",
-    "issue-tracker-contract==1.0.0",
+    "issue-tracker-contract==1.1.0",
     "opentelemetry-exporter-otlp-proto-http>=1.39,<2",
     "opentelemetry-sdk>=1.39,<2",
 ]
@@ -13,7 +13,7 @@ dependencies = [
 # The shared contract is installed from a tagged revision of this repository,
 # not from the local contract/ folder. See README "Contract versioning".
 [tool.uv.sources]
-issue-tracker-contract = { git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git", tag = "issue-tracker-contract-v1.0.0", subdirectory = "contract" }
+issue-tracker-contract = { git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git", tag = "issue-tracker-contract-v1.1.0", subdirectory = "contract" }
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

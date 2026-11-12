@@ -105,6 +105,96 @@ HTTP/1.1 404 Not Found
 {"error":{"code":"not_found","message":"Issue not found"}}
 ```
 
+## List issues
+
+Return the newest issues, at most `limit` of them.
+
+| Item | Value |
+| --- | --- |
+| Method | `GET` |
+| Route | `/issues` |
+| Changes state? | No. Read-only operation. |
+| Success status | `200 OK` |
+
+### Parameters
+
+| Name | Location | Type | Required | Description |
+| --- | --- | --- | --- | --- |
+| `limit` | query | integer | no | The most issues to return, from 1 to 100. Defaults to 50. |
+
+### Successful response
+
+Status `200 OK`, with a JSON body:
+
+```json
+{
+  "issues": [
+    {"id": "64f1c0a2b3d4e5f607182930", "title": "Newest issue"},
+    {"id": "60aaaaaaaaaaaaaaaaaaaaaa", "title": "Older issue"}
+  ]
+}
+```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `issues` | array | The issues, newest first, each with exactly the `id` and `title` fields described in [Get an issue](#get-an-issue). Empty when there are none. |
+
+The response is an object, not a bare array, so fields such as a page cursor
+can be added later without breaking callers. There is no cursor yet: a
+caller sees only the newest `limit` issues.
+
+### What is listed
+
+- **Scope.** The issues in the location new issues are created in (see
+  [Assumptions](#assumptions)): with Trello, the cards in the list named by
+  `TRELLO_LIST_ID`; with Linear, the issues of the team named by
+  `LINEAR_TEAM_ID`.
+- **Order.** Newest first, by creation time. Renaming an issue does not move it.
+- **Left out.** Deleted issues, archived Trello cards, and archived or trashed
+  Linear issues. An archived Trello card can still be read with
+  [Get an issue](#get-an-issue).
+- **Freshness.** Lists are never cached: every request reads from the issue
+  tracker. A list neither fills nor clears the cache that GET uses, so a
+  list can show a newer title than a cached GET until that entry expires.
+
+### Errors
+
+All errors use the shape described in [Error model](#error-model).
+
+| Situation | Status | Code |
+| --- | --- | --- |
+| `limit` is not a whole number from 1 to 100 | `422 Unprocessable Content` | `invalid_input`, with a `limit` entry in `details` |
+| The issue tracker denies the service access | `403 Forbidden` | `access_denied` |
+| Service credentials or the issue location are missing | `503 Service Unavailable` | `service_not_configured` |
+| The configured issue location does not exist in the issue tracker, or the tracker cannot be reached, times out, is unavailable, or returns an unusable response | `502 Bad Gateway` | `provider_error` |
+
+A list never returns `404`. Like GET, it changes no provider data, so a caller
+may retry after a `502`; a `502` caused by a wrong issue location repeats
+until the operator corrects it. The `422` message is
+`Request body is invalid`, the same as for every rejected request.
+
+### Example
+
+```bash
+curl 'http://127.0.0.1:8000/issues?limit=2'
+```
+
+```json
+{"issues":[{"id":"64f1c0a2b3d4e5f607182930","title":"Newest issue"},{"id":"60aaaaaaaaaaaaaaaaaaaaaa","title":"Older issue"}]}
+```
+
+An invalid limit:
+
+```bash
+curl -i 'http://127.0.0.1:8000/issues?limit=0'
+```
+
+```
+HTTP/1.1 422 Unprocessable Content
+
+{"error":{"code":"invalid_input","message":"Request body is invalid","details":[{"field":"limit","message":"Input should be greater than or equal to 1"}]}}
+```
+
 ## Create an issue
 
 Create one issue with the given title.
@@ -609,10 +699,10 @@ A `422` response lists every problem with the body:
 
 | Code | Status | When it occurs | Can the caller retry? |
 | --- | --- | --- | --- |
-| `invalid_input` | `422 Unprocessable Content` | The request body is missing, not JSON, contains an unknown field, or breaks a field rule (such as the title rule). Also used with status `405` for an unsupported method on a known route. | No. Correct the request first. |
+| `invalid_input` | `422 Unprocessable Content` | The request body is missing, not JSON, contains an unknown field, or breaks a field rule (such as the title rule), or a list's `limit` is out of range. Also used with status `405` for an unsupported method on a known route. | No. Correct the request first. |
 | `not_found` | `404 Not Found` | No issue exists with the given ID (including one already deleted), the ID is malformed, or the route does not exist. | No. |
 | `access_denied` | `403 Forbidden` | The issue tracker rejected the service's credentials or does not allow it to access the issue. | No. The service operator must fix the credentials or permissions. |
-| `service_not_configured` | `503 Service Unavailable` | The service is missing its issue tracker credentials, or (for creation) its target issue list. | No. The service operator must complete the configuration. |
+| `service_not_configured` | `503 Service Unavailable` | The service is missing its issue tracker credentials, or (for creation and listing) its target issue list. | No. The service operator must complete the configuration. |
 | `precondition_failed` | `412 Precondition Failed` | A PATCH sent `If-Match` with a version that is no longer current. Nothing was changed. | Only after reading the issue again with GET and sending its new `ETag`. |
 | `provider_error` | `502 Bad Gateway` | The issue tracker could not be reached, timed out, rate-limited the service, was unavailable, rejected the request for another reason, or returned a response the service could not use. | Reads: yes, after a short wait. Writes: only after checking with GET, because the change may already have been applied. Exception: a creation with an `Idempotency-Key` can be retried with the same key. |
 | `idempotency_key_reused` | `422 Unprocessable Content` | An `Idempotency-Key` was sent with a different body than its first use. Nothing was created. | No. Use a new key for a different request. |
@@ -706,6 +796,7 @@ OTLP logger provider. See [Observability](OBSERVABILITY.md).
 ## What callers can rely on
 
 - A GET or PATCH `200` or POST `201` response always contains `id` and `title` and nothing else.
+- A list `200` response contains only `issues`, holding at most `limit` issues, newest first, each with only `id` and `title`. Lists are never served from the cache.
 - Repeating a GET request does not change provider data. Results follow the [read freshness policy](#read-freshness-and-caching).
 - Each `201` response without `Idempotency-Replayed` means exactly one new issue was created. A `201` with it returns an issue an earlier request with the same key created. A `409`, `422` or `503` response means this request created none.
 - Requests sharing an `Idempotency-Key` create at most one issue within 24 hours of the key's first use, subject to [Limits of the guarantee](#limits-of-the-guarantee).

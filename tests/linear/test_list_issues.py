@@ -1,9 +1,11 @@
 """LinearIssueProvider.list_issues with simulated GraphQL responses, no network."""
 
+import logging
 from typing import Any
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 
 from app.providers.common import REQUEST_TIMEOUT_SECONDS
 from app.providers.linear_provider import LINEAR_API_URL, LIST_ISSUES_QUERY
@@ -21,6 +23,7 @@ from tests.linear.fake_linear import (
     Handler,
     assert_no_provider_details,
     fail_with,
+    failure_records,
     graphql_error,
     list_body,
     node,
@@ -261,3 +264,46 @@ def test_missing_team_fails_without_contacting_linear(
     assert error.message == "Issue tracker target team not configured"
     assert not error.provider_involved
     assert linear.requests == []
+
+
+def test_get_issues_lists_through_the_service(
+    client: TestClient, linear: FakeLinear
+) -> None:
+    # The real startup (ISSUE_PROVIDER=linear), cache and route.
+    first = client.post("/issues", json={"title": "First"}).json()
+    second = client.post("/issues", json={"title": "Second"}).json()
+
+    listed = client.get("/issues", params={"limit": 1})
+    again = client.get("/issues")
+
+    assert listed.status_code == 200
+    assert listed.json() == {"issues": [second]}
+    assert again.json() == {"issues": [second, first]}
+    assert [payload["variables"]["first"] for payload in linear.payloads[2:]] == [
+        1,
+        50,
+    ]
+
+
+def test_get_issues_failure_is_logged_as_a_read(
+    client: TestClient, linear: FakeLinear, caplog: pytest.LogCaptureFixture
+) -> None:
+    linear.handler = respond(200, graphql_error("INPUT_ERROR"))
+
+    with caplog.at_level(logging.WARNING, logger="app.errors"):
+        response = client.get("/issues")
+
+    assert response.status_code == 502
+    assert response.json() == {"error": {"code": "provider_error", "message": REJECTED}}
+    assert failure_records(caplog) == [
+        {
+            "level": "ERROR",
+            "operation": "list_issues",
+            "error": "provider_error",
+            "status": 502,
+            "provider_involved": True,
+            "cause": "graphql_code=INPUT_ERROR",
+            "write_outcome": None,
+        }
+    ]
+    assert_no_provider_details(response.text + caplog.text)
