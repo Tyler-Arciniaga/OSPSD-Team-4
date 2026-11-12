@@ -132,7 +132,7 @@ def _translate_http_error(
 
 
 def _created_card_to_issue(card: Any) -> Issue:
-    """Convert the body of a newly created (or looked-up) card into an Issue."""
+    """Convert a created, looked-up or listed card body into an Issue, checking its ID."""
     if not re.fullmatch(CARD_ID_PATTERN, card["id"]):
         raise ValueError("Unexpected card ID")
     if not isinstance(card["name"], str):
@@ -225,15 +225,54 @@ class TrelloIssueProvider:
         Archived cards are included: an archived card was still created.
         """
         _require_creation_token(creation_token)
+        cards = self._list_cards(fields="id,name,desc", card_filter="all")
+        marker = _token_marker(creation_token)
+        try:
+            matches = [
+                _created_card_to_issue(card)
+                for card in cards
+                if isinstance(card, dict)
+                and isinstance(card.get("desc"), str)
+                and marker in card["desc"].splitlines()
+            ]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise _translate_request_failure(exc) from None
+        if not matches:
+            return None
+        # Trello card IDs begin with their creation time, so the smallest ID
+        # is the oldest card.
+        return min(matches, key=lambda issue: issue.id)
+
+    def list_issues(self, *, limit: int) -> list[Issue]:
+        """List the open cards in the target list, newest first.
+
+        Archived cards are left out. Trello returns the whole list in board
+        order with no limit, so the cards are sorted and cut here.
+        """
+        cards = self._list_cards(fields="id,name", card_filter="open")
+        try:
+            issues = [_created_card_to_issue(card) for card in cards]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise _translate_request_failure(exc) from None
+        # Trello card IDs begin with their creation time, so sorting by ID
+        # puts the newest card first.
+        issues.sort(key=lambda issue: issue.id, reverse=True)
+        return issues[:limit]
+
+    def _list_cards(self, *, fields: str, card_filter: str) -> list[Any]:
+        """Fetch the target list's cards as decoded JSON, unchecked beyond being a list.
+
+        A Trello 404 here means the configured list is wrong, not a missing
+        issue, so it is reported as a provider failure.
+        """
         headers = _trello_headers()
         list_id = _target_list_id()
-        params = urlencode({"fields": "id,name,desc", "filter": "all"})
+        params = urlencode({"fields": fields, "filter": card_filter})
         request = Request(
             f"https://api.trello.com/1/lists/{list_id}/cards?{params}",
             headers=headers,
             method="GET",
         )
-        marker = _token_marker(creation_token)
         try:
             with (
                 provider_span("trello.request"),
@@ -242,22 +281,11 @@ class TrelloIssueProvider:
                 cards = json.load(response)
             if not isinstance(cards, list):
                 raise TypeError("Unexpected card list")
-            matches = [
-                _created_card_to_issue(card)
-                for card in cards
-                if isinstance(card, dict)
-                and isinstance(card.get("desc"), str)
-                and marker in card["desc"].splitlines()
-            ]
         except HTTPError as exc:
             raise _translate_http_error(exc, missing_means_not_found=False) from None
-        except (URLError, OSError, ValueError, KeyError, TypeError) as exc:
+        except (URLError, OSError, ValueError, TypeError) as exc:
             raise _translate_request_failure(exc) from None
-        if not matches:
-            return None
-        # Trello card IDs begin with their creation time, so the smallest ID
-        # is the oldest card.
-        return min(matches, key=lambda issue: issue.id)
+        return cards
 
     def _create_card(self, title: str, desc: str | None = None) -> Issue:
         """Send one card creation request and report whether a failure is certain."""

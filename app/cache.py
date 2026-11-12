@@ -90,6 +90,10 @@ class CachedIssueProvider:
         """Forward creation without reading or changing the cache."""
         return self._provider.create_issue(title)
 
+    def list_issues(self, *, limit: int) -> list[Issue]:
+        """Forward the list uncached, without reading or changing saved issues."""
+        return self._provider.list_issues(limit=limit)
+
     def create_tagged_issue(self, title: str, creation_token: str) -> Issue:
         """Forward tagged creation without reading or changing the cache."""
         return self._idempotent_provider().create_tagged_issue(title, creation_token)
