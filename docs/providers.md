@@ -461,6 +461,10 @@ These tests verify that:
 - Invalid creation bodies are rejected with 422 without calling the
   provider's creation method.
 - A provider's `not_found` error produces the expected 404 response.
+- `GET /issues` passes `limit` (default 50) to the supplied provider, keeps
+  its order, and wraps the result as `{"issues": [...]}`; a `limit` outside
+  1 to 100, or not a whole number, is rejected with 422 without calling the
+  provider; and a provider failure uses the shared error format.
 - A provider's creation failure is returned in the service's error shape.
 
 Every fake provider in these tests implements all four interface methods.
