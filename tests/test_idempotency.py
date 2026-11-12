@@ -130,6 +130,9 @@ class TaggingProvider:
     def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
         raise AssertionError("not used")
 
+    def list_issues(self, *, limit: int) -> list[Issue]:
+        raise AssertionError("This test must not list issues")
+
     def delete_issue(self, issue_id: str) -> None:
         raise AssertionError("not used")
 
@@ -583,6 +586,9 @@ def test_provider_without_idempotency_support_refuses_keys(
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
             raise AssertionError("not used")
 
+        def list_issues(self, *, limit: int) -> list[Issue]:
+            raise AssertionError("This test must not list issues")
+
         def delete_issue(self, issue_id: str) -> None:
             raise AssertionError("not used")
 
@@ -810,6 +816,9 @@ def test_cache_over_a_basic_provider_refuses_keys(
 
         def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
             raise AssertionError("not used")
+
+        def list_issues(self, *, limit: int) -> list[Issue]:
+            raise AssertionError("This test must not list issues")
 
         def delete_issue(self, issue_id: str) -> None:
             raise AssertionError("not used")

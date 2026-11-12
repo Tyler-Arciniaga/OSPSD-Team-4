@@ -45,6 +45,15 @@ This allows application code to retrieve, create, update, and delete issues usin
 - **Errors:** A missing issue raises `not_found` (HTTP 404); missing credentials raise `service_not_configured` (HTTP 503); a provider rejection or network failure raises `access_denied` or `provider_error`, as for the other operations. See [Errors](#errors).
 - **Assumptions:** Repeated deletion reports a missing issue. A provider failure can follow a completed deletion if the response is lost; no automatic retry occurs.
 
+### Operation: `list_issues(*, limit: int) -> list[Issue]`
+
+- **Purpose:** List the issues in the collection `create_issue()` creates issues in: the Trello list `TRELLO_LIST_ID`, or the Linear team `LINEAR_TEAM_ID`.
+- **Input:** `limit` — the most issues to return, already validated as 1 to `MAX_LIST_LIMIT` (100). The contract's default is `DEFAULT_LIST_LIMIT` (50).
+- **Return value:** At most `limit` `Issue` objects, newest first. An empty collection returns an empty list.
+- **External state:** Read-only. Results are never cached, and listing neither fills nor clears the per-issue read cache.
+- **Exclusions:** Archived Trello cards (`filter=open`) and archived or trashed Linear issues are left out.
+- **Errors:** A missing or wrong list or team is a configuration problem and raises `provider_error`, never `not_found`. Missing credentials or target raise `service_not_configured`; other failures map as for the other operations. See [Errors](#errors).
+
 ### Optional extension: `IdempotentIssueProvider`
 
 Idempotent creation ([API contract](api.md#idempotent-creation)) needs two
@@ -589,7 +598,6 @@ workflow.
 
 `tests/test_provider_selection.py` checks the `ISSUE_PROVIDER` choices and
 that shutdown closes the adapter once for each provider.
-
 
 ### Fresh reads for conditional updates
 

@@ -107,6 +107,31 @@ def test_deleted_issue_is_not_found() -> None:
     assert_not_found(delete_again_error)
 
 
+def test_list_returns_newest_first_up_to_the_limit() -> None:
+    provider = InMemoryIssueProvider()
+    first = provider.create_issue("First")
+    second = provider.create_issue("Second")
+    third = provider.create_issue("Third")
+    provider.update_issue(first.id, IssueUpdate(title="First renamed"))
+
+    assert provider.list_issues(limit=100) == [
+        third,
+        second,
+        first.model_copy(update={"title": "First renamed"}),
+    ]
+    assert provider.list_issues(limit=2) == [third, second]
+
+
+def test_list_leaves_out_deleted_issues() -> None:
+    provider = InMemoryIssueProvider()
+    kept = provider.create_issue("Kept")
+    deleted = provider.create_issue("Deleted")
+
+    provider.delete_issue(deleted.id)
+
+    assert provider.list_issues(limit=100) == [kept]
+
+
 def test_unknown_fault_is_refused() -> None:
     with pytest.raises(ValueError, match="unknown fault"):
         InMemoryIssueProvider("explode")

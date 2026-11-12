@@ -73,6 +73,16 @@ def created_body(issue_id: str = ISSUE_ID, title: str = TITLE) -> dict[str, Any]
     }
 
 
+def list_body(*nodes: Any) -> dict[str, Any]:
+    return {"data": {"team": {"issues": {"nodes": list(nodes)}}}}
+
+
+def node(
+    issue_id: str = ISSUE_ID, title: str = TITLE, trashed: bool | None = False
+) -> dict[str, Any]:
+    return {"id": issue_id, "title": title, "trashed": trashed}
+
+
 def respond(status: int, body: Any) -> Handler:
     """Answer every request with `status` and `body` (JSON, or raw if bytes)."""
     if isinstance(body, bytes):
@@ -96,7 +106,7 @@ def simulated_provider(linear: "FakeLinear") -> LinearIssueProvider:
 
 
 class FakeLinear:
-    """A minimal in-memory Linear GraphQL endpoint for get and create.
+    """A minimal in-memory Linear GraphQL endpoint for get, create, delete and list.
 
     Records every request. Set `handler` to answer differently.
     """
@@ -121,6 +131,17 @@ class FakeLinear:
             return httpx.Response(401, json=AUTHENTICATION_BODY)
         payload = json.loads(request.content)
         variables = payload["variables"]
+        if "ListIssues" in payload["query"]:
+            # Newest first, as Linear orders by creation time; trashed issues
+            # are archived, so Linear leaves them out.
+            newest_first = [
+                node(issue_id, title)
+                for issue_id, title in reversed(self.issues.items())
+                if issue_id not in self.trashed
+            ]
+            return httpx.Response(
+                200, json=list_body(*newest_first[: variables["first"]])
+            )
         if "issueCreate" in payload["query"]:
             issue_id = next(self._next_ids)
             self.issues[issue_id] = variables["input"]["title"]

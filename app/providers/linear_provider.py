@@ -91,6 +91,25 @@ mutation DeleteIssue($id: String!) {
 }
 """
 
+# The target team's issues, newest first. Linear orders by `createdAt` by
+# default; the direction (newest first) is not stated in Linear's pagination
+# docs and is checked against the live API. Archived issues (which include
+# trashed ones) are excluded explicitly; `trashed` is still requested so a
+# trashed issue is never listed.
+LIST_ISSUES_QUERY = """
+query ListIssues($teamId: String!, $first: Int!) {
+  team(id: $teamId) {
+    issues(first: $first, orderBy: createdAt, includeArchived: false) {
+      nodes {
+        id
+        title
+        trashed
+      }
+    }
+  }
+}
+"""
+
 # Linear `extensions.code` values this adapter recognises. Any other code is
 # logged only as "graphql_error", so provider text never reaches a log line.
 INPUT_ERROR = "INPUT_ERROR"
@@ -408,6 +427,36 @@ class LinearIssueProvider:
                 raise ValueError("Deletion not reported as successful")
         except (KeyError, TypeError, ValueError) as exc:
             raise _unexpected_response(type(exc).__name__) from None
+
+    def list_issues(self, *, limit: int) -> list[Issue]:
+        """List the configured team's issues, newest first, leaving out trashed ones.
+
+        An `INPUT_ERROR` here means the configured team is wrong, not a
+        missing issue, so it is reported as a provider failure.
+        """
+        status, body = self._send(
+            _credentials(),
+            LIST_ISSUES_QUERY,
+            {"teamId": _target_team_id(), "first": limit},
+        )
+        codes = _error_codes(body)
+        if status != 200 or codes:
+            raise _translate_failure(status, codes)
+        try:
+            nodes = body["data"]["team"]["issues"]["nodes"]
+            if not isinstance(nodes, list):
+                raise TypeError("Unexpected issue list")
+            issues = []
+            for node in nodes:
+                issue = _to_issue(node)
+                trashed = node.get("trashed")
+                if trashed not in (None, True, False):
+                    raise TypeError("Unexpected trashed flag")
+                if not trashed:
+                    issues.append(issue)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise _unexpected_response(type(exc).__name__) from None
+        return issues[:limit]
 
     def _send(
         self, api_key: str, query: str, variables: Mapping[str, Any]

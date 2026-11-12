@@ -25,6 +25,9 @@ class FakeIssueProvider:
     def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
         raise AssertionError("This test should not update issues")
 
+    def list_issues(self, *, limit: int) -> list[Issue]:
+        raise AssertionError("This test must not list issues")
+
     def delete_issue(self, issue_id: str) -> None:
         raise AssertionError("This test should not delete issues")
 
@@ -56,6 +59,33 @@ def test_repeated_read_uses_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     assert second == expected
 
     # Two reads, but only one call to the underlying provider.
+    assert underlying.get_calls == [issue_id]
+
+
+def test_list_is_forwarded_uncached_and_leaves_saved_issues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.cache.monotonic", lambda: 100.0)
+    issue_id = "64f1c0a2b3d4e5f607182930"
+    list_limits: list[int] = []
+
+    class ListingProvider(FakeIssueProvider):
+        def list_issues(self, *, limit: int) -> list[Issue]:
+            list_limits.append(limit)
+            return [Issue(id=issue_id, title="Listed title")]
+
+    underlying = ListingProvider()
+    cached = CachedIssueProvider(underlying)
+    cached.get_issue(issue_id)
+
+    first = cached.list_issues(limit=5)
+    second = cached.list_issues(limit=5)
+
+    assert first == second == [Issue(id=issue_id, title="Listed title")]
+    # Every list reaches the provider.
+    assert list_limits == [5, 5]
+    # The saved copy is neither replaced nor discarded by a list.
+    assert cached.get_issue(issue_id) == Issue(id=issue_id, title="Test issue")
     assert underlying.get_calls == [issue_id]
 
 
@@ -173,6 +203,9 @@ def test_delete_invalidates_cached_issue(
                 raise ServiceError(ErrorCode.NOT_FOUND, "Issue not found")
             return Issue(id=issue_id, title="Test issue")
 
+        def list_issues(self, *, limit: int) -> list[Issue]:
+            raise AssertionError("This test must not list issues")
+
         def delete_issue(self, issue_id: str) -> None:
             self.deleted = True
 
@@ -282,6 +315,9 @@ def test_failed_write_invalidates_cached_issue(
                 ErrorCode.PROVIDER_ERROR,
                 "The issue tracker did not respond in time",
             )
+
+        def list_issues(self, *, limit: int) -> list[Issue]:
+            raise AssertionError("This test must not list issues")
 
         def delete_issue(self, issue_id: str) -> None:
             self.deleted = True
@@ -425,6 +461,9 @@ def test_same_issue_operations_wait_for_fetch(
             assert changes.title is not None
             self.title = changes.title
             return Issue(id=issue_id, title=self.title)
+
+        def list_issues(self, *, limit: int) -> list[Issue]:
+            raise AssertionError("This test must not list issues")
 
         def delete_issue(self, issue_id: str) -> None:
             self.deleted = True

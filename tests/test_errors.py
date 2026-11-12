@@ -42,6 +42,9 @@ class ControlledProvider:
     def update_issue(self, issue_id: str, changes: IssueUpdate) -> Issue:
         return self._run(Issue(id=issue_id, title=changes.title or ""))
 
+    def list_issues(self, *, limit: int) -> list[Issue]:
+        raise AssertionError("This test must not list issues")
+
     def delete_issue(self, issue_id: str) -> None:
         self._run(Issue(id=issue_id, title=""))
 

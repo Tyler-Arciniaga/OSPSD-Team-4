@@ -1,7 +1,8 @@
 # issue-tracker-contract
 
-The shared issue tracker contract: the `Issue`, `IssueCreate` and `IssueUpdate`
-models, the `IssueProvider` interface, and the domain error types (`ErrorCode`,
+The shared issue tracker contract: the `Issue`, `IssueList`, `IssueCreate` and
+`IssueUpdate` models (and the list limits `DEFAULT_LIST_LIMIT` and
+`MAX_LIST_LIMIT`), the `IssueProvider` interface, and the domain error types (`ErrorCode`,
 `ServiceError`, the code-to-status mapping, and the JSON error response
 models).
 

@@ -42,7 +42,7 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 
 - `app/main.py`: FastAPI endpoints, which validate input and call the supplied provider, and the handlers that turn failures into error responses and log lines.
 - `contract/`: The shared contract package, `issue_tracker_contract`. It must not import anything from `app/`, a web framework, or a provider SDK. The service does not install it from this folder: it depends on a tagged release of it (see [Contract versioning](#contract-versioning)).
-  - `contract/src/issue_tracker_contract/models.py`: Public `Issue` response model, `IssueCreate` and `IssueUpdate` request models, and the shared `IssueTitle` rule.
+  - `contract/src/issue_tracker_contract/models.py`: Public `Issue` and `IssueList` response models, `IssueCreate` and `IssueUpdate` request models, the shared `IssueTitle` rule, and the list limits.
   - `contract/src/issue_tracker_contract/interface.py`: Provider-independent `IssueProvider` interface.
   - `contract/src/issue_tracker_contract/errors.py`: Error codes, the `ServiceError` raised by providers and endpoints, the code-to-status mapping, and the error response models.
   - `contract/tests/test_import_boundary.py`: Fails if the contract package imports service, framework, or provider code.
@@ -54,7 +54,7 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
 - `app/providers/`: Provider adapters, one module per provider.
   - `app/providers/common.py`: What every adapter shares: the request timeout and the caller-facing error messages.
   - `app/providers/trello_provider.py`: Trello authentication, requests, and translation of Trello responses and failures.
-  - `app/providers/linear_provider.py`: Linear GraphQL requests and translation of Linear responses and failures (get, create and delete; rename not yet implemented).
+  - `app/providers/linear_provider.py`: Linear GraphQL requests and translation of Linear responses and failures (get, create, update, delete and list).
 - `app/cache.py`: Caches successful reads and invalidates saved issues before updates or deletions.
 - `app/dependencies.py`: Creates one cached provider (Trello, or Linear with `ISSUE_PROVIDER=linear`) and the idempotency key store at application startup and supplies them to the endpoints.
 - `app/idempotency.py`: Durable idempotency key store and the logic that creates each keyed issue at most once.
@@ -65,9 +65,11 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
   - `tests/trello/test_update_issue.py`: `PATCH` endpoint tests with simulated Trello responses and supplied providers.
   - `tests/trello/test_delete_issue.py`: DELETE request, failure, and injected-provider workflow tests.
   - `tests/trello/test_provider.py`: Provider compatibility, translation, and error tests.
+  - `tests/trello/test_list_issues.py`: The adapter's `list_issues`: the request, newest-first order and limit, and failure translation.
 - `tests/linear/`: Tests of the real Linear adapter with simulated GraphQL responses, through the real startup with `ISSUE_PROVIDER=linear`.
   - `tests/linear/test_get_issue.py`, `test_create_issue.py`: Retrieval and creation endpoint tests.
   - `tests/linear/test_delete_issue.py`: Deletion, repeated deletion, cache invalidation, missing issues, unsuccessful responses, and timeout tests.
+  - `tests/linear/test_list_issues.py`: The adapter's `list_issues`: the query, trashed issues left out, the limit, and failure translation.
   - `tests/linear/test_provider.py`: Protocol compatibility, uncached reads, unimplemented operations, and `close()`.
   - `tests/linear/fake_linear.py`: The simulated Linear API and expected values shared by these tests.
 - `tests/test_provider_selection.py`: Startup builds the adapter named by `ISSUE_PROVIDER` and closes it at shutdown.
