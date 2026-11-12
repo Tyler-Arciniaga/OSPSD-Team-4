@@ -6,9 +6,9 @@ pull request. It must keep satisfying every test in
 grows (for example rename or delete checks), extend this provider in the same
 change.
 
-A fault can be injected by name to show that the conformance suite, and the
-smoke check built on it, catch a broken release. Faults exist for testing the
-pipeline only.
+A fault can be injected by name to show that conformance and smoke checks
+catch a broken release, or to exercise the GET availability alert. Faults
+exist only for disposable pipeline and observability exercises.
 """
 
 import secrets
@@ -28,7 +28,8 @@ from issue_tracker_contract.models import Issue, IssueUpdate
 #                 (a contract break the conformance suite must catch)
 #   delete_fails  delete always fails with provider_error (leaves issues
 #                 behind, which the suite reports as CleanupWarning)
-FAULTS = frozenset({"wrong_title", "delete_fails"})
+#   get_fails     reads fail with provider_error, for the Level 4 alert exercise
+FAULTS = frozenset({"wrong_title", "delete_fails", "get_fails"})
 
 WRONG_TITLE_SUFFIX = " (altered)"
 
@@ -59,6 +60,13 @@ class InMemoryIssueProvider:
         self._lock = Lock()
 
     def get_issue(self, issue_id: str, *, fresh: bool = False) -> Issue:
+        if self._fault == "get_fails":
+            raise ServiceError(
+                ErrorCode.PROVIDER_ERROR,
+                "The issue tracker is currently unavailable",
+                provider_involved=True,
+                cause="injected_fault",
+            )
         # Nothing is cached here, so every read is already fresh.
         with self._lock:
             title = self._issues.get(issue_id)

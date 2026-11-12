@@ -156,6 +156,22 @@ def test_delete_fails_fault_keeps_the_issue() -> None:
     assert provider.get_issue(created.id) == created
 
 
+def test_get_failure_exercise_uses_the_real_error_and_telemetry_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for dependency, override in dependency_overrides("get_fails").items():
+        monkeypatch.setitem(app.dependency_overrides, dependency, override)
+    with TestClient(app) as client:
+        created = client.post("/issues", json={"title": "Alert exercise"})
+        location = created.headers["Location"]
+        response = client.get(location)
+        assert response.status_code == 502
+        assert response.json()["error"]["code"] == "provider_error"
+        assert re.fullmatch(r"[0-9a-f]{32}", response.headers["X-Trace-ID"])
+        # Cleanup remains possible while reads fail.
+        assert client.delete(location).status_code == 204
+
+
 @pytest.fixture
 def controlled_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     for dependency, override in dependency_overrides().items():

@@ -705,6 +705,14 @@ Infrastructure changes are applied by hand with approval. See
 running commit, rollback, repairing provider data, the bootstrap, the faulty
 release demonstration, teardown, and the teammate walkthrough.
 
+## Reliability
+
+HW2 Level 4's proposed SLIs/SLOs, error budgets, Grafana alert setup and
+verification status are in [Reliability objectives](docs/RELIABILITY.md).
+Use the [GET availability runbook](docs/RUNBOOK.md) for diagnosis and the
+disposable firing/recovery exercise. The reporting tool is read-only:
+`uv run --locked python -m scripts.reliability queries` prints its PromQL.
+
 ## Contributing
 
 See [AGENTS.md](AGENTS.md) for the contribution and release workflow.

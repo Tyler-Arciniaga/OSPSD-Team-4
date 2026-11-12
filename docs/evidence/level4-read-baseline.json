@@ -1,0 +1,21 @@
+{
+  "kind": "client_observed_warm_read_baseline",
+  "service_url": "https://ospsd-team4-issue-tracker.onrender.com",
+  "release": "c813c5577d6ec3ad19b4ed65e659b6f7c8e13656",
+  "started_at": "2026-11-12T18:41:33.339252+00:00",
+  "finished_at": "2026-11-12T18:42:06.118283+00:00",
+  "operation": "get_issue",
+  "method": "One temporary issue, 30 sequential GETs one second apart, deleted afterwards. Timing surrounds httpx.Client.get, including network and response download. Readiness and creation precede the measured GETs.",
+  "http_200_count": 30,
+  "read_count": 30,
+  "cleanup_status": 204,
+  "durations_seconds": [
+    0.199776, 0.039410, 0.056534, 0.057945, 0.059180,
+    0.058492, 0.056065, 0.055289, 0.049590, 0.080678,
+    0.053016, 0.044966, 0.047273, 0.050633, 0.051832,
+    0.047876, 0.041091, 0.038193, 0.045144, 0.050248,
+    0.042360, 0.044743, 0.041467, 0.058322, 0.045549,
+    0.036863, 0.048986, 0.040435, 0.060205, 0.152197
+  ],
+  "limitation": "Client-observed sample, not a Grafana/server SLI report or a seven-day reliability measurement. Includes cached reads; does not cover cold starts, load, provider failures or 200 responses with incorrect contents. No issue IDs, titles or credentials retained."
+}

@@ -385,6 +385,17 @@ See [Health checks](api.md#health-checks).
 
 ## 6\. Migration and Coordination Plan
 
+**Level 4 reliability proposal.** We use `get_issue` as the representative
+operation, measured by the existing request counter and latency histogram.
+The proposed objectives are 99% availability and 95% successful reads within
+one second over seven days, including provider failures. Definitions, initial
+measurement, exact queries, budget policy, alert setup and outstanding live
+verification are in [Reliability objectives](RELIABILITY.md); response steps
+are in the [GET availability runbook](RUNBOOK.md). The reporting script reads
+Grafana and generates an alert request for review; it never applies changes.
+Vanchi owns this work; human review and real firing/resolved notifications
+remain required before treating Level 4 as complete.
+
 Labels: **HW1** means it exists in the HW1 repo today. **Proposal** means it is new in this design. Target dates are left as TBD until the team sets checkpoints.
 
 ### 6.1 Contract revision we adopt
