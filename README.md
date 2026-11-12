@@ -707,11 +707,8 @@ release demonstration, teardown, and the teammate walkthrough.
 
 ## Reliability
 
-HW2 Level 4's proposed SLIs/SLOs, error budgets, Grafana alert setup and
-verification status are in [Reliability objectives](docs/RELIABILITY.md).
-Use the [GET availability runbook](docs/RUNBOOK.md) for diagnosis and the
-disposable firing/recovery exercise. The reporting tool is read-only:
-`uv run --locked python -m scripts.reliability queries` prints its PromQL.
+See [Reliability](docs/RELIABILITY.md) for the proposed SLIs/SLOs, copyable
+Grafana queries, error-budget policy, alert setup, runbook and verification status.
 
 ## Contributing
 

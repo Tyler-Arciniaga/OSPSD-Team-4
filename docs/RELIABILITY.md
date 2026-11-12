@@ -1,224 +1,206 @@
-# Reliability objectives (HW2 Level 4)
+# Reliability (HW2 Level 4)
 
-Status: proposed targets; implementation and local checks are ready for review.
-Live Grafana reporting, notification delivery, and resolution still require the
-account owner's verification. Student owner: Vanchi; reviewer: not yet assigned.
-Account owner: Tyler. These targets are a team operating objective, not an
-external SLA. They do not change the shared API.
+Status: proposed targets; live verification pending. Student owner: Vanchi.
+Grafana account owner: Tyler. Teammate reviewer: unassigned.
 
-## What we measure
+## Objectives and initial measurement
 
-The representative operation is `get_issue`: the consumer needs to read an
-existing issue before deciding what to change. We measure completed requests
-at the service's request middleware, using the Level 3 metrics. Both providers
-use the same definitions. Cache hits count because the consumer experiences
-them as reads; the existing 30-second freshness limit still applies.
+`get_issue` represents the consumer reading an existing issue before changing
+it. Measure completed requests at the service middleware, including cache hits.
+Exclude `invalid_input` and `not_found`; include provider outages, access denials,
+missing configuration and internal errors in both denominators.
 
-| Indicator | Eligible events | Good events | Proposed SLO |
-| --- | --- | --- | --- |
-| Availability | Completed `get_issue` requests, excluding `invalid_input` and `not_found` | Eligible requests with `outcome="success"` | At least 99% over a rolling 7 days |
-| Latency | The same eligible completed reads | Successful reads whose service duration is at most 1 second | At least 95% over a rolling 7 days |
+| SLI | Good events / eligible events | Proposed SLO |
+| --- | --- | --- |
+| Availability | Successful reads / eligible reads | 99% over rolling 7 days |
+| Latency | Successful reads taking at most 1 second / eligible reads | 95% over rolling 7 days |
 
-Provider outages, access denials, missing service configuration and internal
-errors count against **both** objectives. A fast failure is not a good latency
-event. Unknown/malformed IDs and genuinely missing issues are normal caller
-outcomes and are excluded; this also means a mistaken `404` cannot be detected
-by these SLIs alone. A wrong body with HTTP 200 is another blind spot: release
-conformance tests check contents separately. We do not change eligibility to
-improve a result after an incident.
+On November 12, 30 deployed reads returned 200 within one second: maximum
+199.776 ms, nearest-rank P95 152.197 ms. [Raw timings](evidence/level4-read-baseline.json)
+record the interval, release, procedure and successful deletion of the fixture.
+Both client-observed ratios were 30/30 (100%). This small warm-path sample,
+including cached reads, is not a seven-day or server-side SLI measurement.
 
-The histogram already has a one-second boundary, so the latency numerator uses
-that bucket directly, without estimating a percentile. Its selector accepts
-both `le="1"` and the [normalized OpenMetrics value](https://prometheus.io/docs/prometheus/3.14/migration/#le-and-quantile-label-values)
-`le="1.0"`. The denominator uses
-the corresponding histogram count. Availability uses the request counter.
-We aggregate across `release` and process instances: deploying a new commit
-must not reset the accounting window. Production is selected by
-`job="ospsd-team4-render"`; exercise traffic uses a different job.
+An interactive read should usually finish within a second; the baseline leaves
+room for variability. These provisional targets permit occasional cold starts
+and failures: at 1,000 eligible reads, availability permits 10 failures and
+latency permits 50 failed-or-slow reads. Review after seven days of data or a
+change in hosting/workload/consumer needs. Team agreement is still required.
 
-Server measurements exclude DNS/TLS/network failures before the request reaches
-the middleware, requests lost during a process crash, and client download time.
-They cannot prove an idle or unreachable service is healthy. First samples of
-a newly created counter series are a baseline, not an observed increase;
-Prometheus can miss events before that first export. The seven-day result is
-only as complete as the telemetry retained and successfully exported.
+Server measurements cannot see DNS/network failures before the middleware,
+requests lost in a crash, or client download time. A wrong 200 body or mistaken
+404 can escape these SLIs; conformance checks test contents separately. Missing
+telemetry and zero traffic prove nothing about health. `increase` handles
+counter resets but extrapolates (counts can be fractional) and cannot count
+events before the first exported sample. Do not change eligibility after an
+incident to improve the result.
 
-## Why these initial targets
+## Queries and error budgets
 
-On November 12 we measured 30 sequential reads through the deployed service,
-one second apart, on release `c813c5577d6ec3ad19b4ed65e659b6f7c8e13656`.
-All returned 200 within one second; maximum 199.776 ms, nearest-rank P95
-152.197 ms. The [raw timings and procedure](evidence/level4-read-baseline.json)
-record the UTC interval and successful deletion of the temporary issue.
+In the [team Grafana dashboard](https://redowl1208.grafana.net/d/ckp4g9s/ospsd-team-4-level-3-observability),
+use the `grafanacloud-redowl1208-prom` datasource and instant queries below.
+They aggregate across releases so deployments do not reset the window.
+Assign references A–D in order. The latency bucket selector accepts both `1`
+and [normalized `1.0`](https://prometheus.io/docs/prometheus/3.14/migration/#le-and-quantile-label-values).
+Missing good series become zero only when eligible data exists.
 
-This is a small **client-observed warm-path baseline**, including cached reads.
-It is not a seven-day measurement or a Grafana SLI report. An interactive read
-should usually finish within a second; the baseline leaves substantial room
-for normal variability. The provisional 95% latency target allows occasional
-slow reads, including cold starts. Availability at 99% allows 10 failures per
-1,000 eligible reads while making sustained provider failures actionable.
-These are proposed consumer/budget tradeoffs, not statistically established
-reliability claims. Review after a full seven-day observation, or earlier if
-cold starts, workload, hosting or consumer needs change. Keep the original
-incident calculation when changing a future target.
-
-For the recorded 30-read client sample, the availability numerator/denominator
-is 30/30 (100%) and the successful-within-one-second count is also 30/30 (100%).
-These values describe only the recorded interval, not the server-side SLO.
-
-## Report the SLIs and budgets
-
-For each objective:
-
-```text
-SLI = good / eligible
-allowed bad events = eligible * (1 - target)
-observed bad events = eligible - good
-remaining budget = allowed bad events - observed bad events
-remaining budget fraction = remaining budget / allowed bad events
+```promql
+# availability_eligible
+sum(increase(issue_requests_total{
+  job="ospsd-team4-render", operation="get_issue", outcome!~"invalid_input|not_found"
+}[7d]))
 ```
 
-For 1,000 eligible reads, availability permits 10 failures and latency permits
-50 failed-or-slow reads. Fifteen failures spend 15 of the 10 availability
-events, leaving -5 (-50% of the budget). Sixty failed-or-slow reads leave -10
-(-20%) of the latency budget. Fractional allowances are not rounded up to grant
-an extra failure at low volume. Zero eligible requests means **unknown**, not
-100%; missing measurements also remain unknown.
+```promql
+# availability_good
+sum(increase(issue_requests_total{
+  job="ospsd-team4-render", operation="get_issue", outcome="success"
+}[7d])) or (0 * sum(increase(issue_requests_total{
+  job="ospsd-team4-render", operation="get_issue", outcome!~"invalid_input|not_found"
+}[7d])))
+```
 
-Print the exact PromQL, including numerators and denominators:
+```promql
+# latency_eligible
+sum(increase(issue_request_duration_seconds_count{
+  job="ospsd-team4-render", operation="get_issue", outcome!~"invalid_input|not_found"
+}[7d]))
+```
+
+```promql
+# latency_good
+sum(increase(issue_request_duration_seconds_bucket{
+  job="ospsd-team4-render", operation="get_issue", outcome="success", le=~"1|1[.]0+"
+}[7d])) or (0 * sum(increase(issue_request_duration_seconds_count{
+  job="ospsd-team4-render", operation="get_issue", outcome!~"invalid_input|not_found"
+}[7d])))
+```
+
+Add Grafana Math expressions: availability `$B/$A`, latency `$D/$C`, remaining
+availability budget `$B-0.99*$A`, remaining latency budget `$D-0.95*$C`.
+Display ratios as percent (0–1), budgets as event counts, and absent/zero-
+denominator results as No data, never 100%. Preserve negative budgets.
+
+Allowed bad events = eligible × (1 − target); observed bad = eligible − good.
+For 1,000 reads, 15 failures leave -5 availability events; 60 failed-or-slow
+reads leave -10 latency events. Do not round a fractional allowance up.
+
+**Policy:** when either seven-day budget is zero or negative, pause feature
+releases. Ship only reviewed recovery, security or measurement repairs. Owner
+and reviewer investigate the cause and record the mitigation; provider outages
+still spend budget. Resume feature releases after both measured budgets are
+positive and a teammate verifies recovery. Unknown/stale data is not approval
+to resume. This is a human release decision, not an automatic pipeline gate.
+
+## Configure one alert
+
+In Grafana Alerting, create a Grafana-managed rule using this instant query:
+
+```promql
+# alert
+(
+  (sum(increase(issue_requests_total{
+    job="ospsd-team4-render", operation="get_issue", outcome!~"success|invalid_input|not_found"
+  }[5m])) or vector(0))
+  / sum(increase(issue_requests_total{
+    job="ospsd-team4-render", operation="get_issue", outcome!~"invalid_input|not_found"
+  }[5m]))
+) and (sum(increase(issue_requests_total{
+  job="ospsd-team4-render", operation="get_issue", outcome!~"invalid_input|not_found"
+}[5m])) >= 20)
+```
+
+Condition: last value **greater than 0.05**; evaluate every minute; pending
+period **2 minutes**. This alerts on more than 5% failed eligible reads over
+five minutes with at least 20 events, rather than one failure on an idle app.
+Use Keep Last State for No Data and query errors. Below 20 events the query
+returns no series, so stopping traffic cannot falsely resolve an incident.
+If normal traffic or telemetry disappears, this rule cannot detect an outage;
+check freshness during triage. The five-minute alert does not replace the SLOs.
+
+Set labels `service=ospsd-team4-render`, `operation=get_issue`. Set the summary
+to "ospsd-team4-render: more than 5% of eligible GETs failed over five minutes".
+Include the [dashboard](https://redowl1208.grafana.net/d/ckp4g9s/ospsd-team-4-level-3-observability)
+and [runbook](https://github.com/Tyler-Arciniaga/OSPSD-Team-4/blob/main/docs/RELIABILITY.md#respond-to-the-alert)
+links in the description. Route those labels to the team's agreed email or
+Slack contact point, leaving resolved notifications enabled. Suggested grouping:
+service/operation; group wait 30s, group interval 1m, repeat interval 4h.
+Destination and cloud configuration remain pending; a contact-point Test
+message alone does not establish that the rule fires and resolves.
+
+## Respond to the alert
+
+1. Open the dashboard at the alert time. Check the job and release, then an
+   affected log/trace ID. Distinguish provider, credential/configuration and
+   internal failures; check whether telemetry is fresh.
+2. Check production `/healthz` and `/readyz`, then read a known existing test
+   issue and check its body. Readiness 200 or an unknown-ID 404 is insufficient.
+3. If a release caused it, follow the [known-good rollback](DEPLOYMENT.md#roll-back)
+   and its live smoke check. Otherwise have Tyler repair the provider/config.
+   Rollback does not undo provider data or manually changed secrets.
+4. Keep healthy reads flowing until the five-minute error ratio is at most
+   5% with 20+ eligible events. Confirm Normal state **and receipt of the
+   resolved notification**. Record UTC times, release, cause, mitigation,
+   dashboard/trace links and the seven-day budgets; apply the policy above.
+
+## Disposable verification
+
+Use a local controlled service exporting to Grafana with the team's existing
+OTLP settings and `OTEL_SERVICE_NAME=ospsd-team4-level4-test`. Obtain ingestion
+credentials privately from Tyler. Duplicate the alert for this job by replacing
+the job in its query/labels; route to an agreed real destination and tell its
+members before starting. Do not edit production's shared Render secrets.
 
 ```bash
-uv run --locked python -m scripts.reliability queries
+GIT_SHA="$(git rev-parse HEAD)" uv run --locked uvicorn tests.controlled.server:app \
+  --host 127.0.0.1 --port 8001
 ```
 
-Each query uses `sum(increase(...[7d]))`. Increase handles counter resets and
-extrapolates at window boundaries, so reported counts can be fractional.
-An absent success series becomes zero only if an eligible series exists;
-an absent eligible series stays absent. See [Prometheus increase](https://prometheus.io/docs/prometheus/latest/querying/functions/#increase).
-
-In Grafana, open **Connections → Data sources → grafanacloud-redowl1208-prom**
-and copy its UID (the name is not necessarily its UID). An account owner can
-create a least-privilege service account with access to query this datasource.
-Put its token in the shell environment or an ignored local environment file:
+Run this bounded generator in another terminal for each phase:
 
 ```bash
-export GRAFANA_URL=https://redowl1208.grafana.net
-export GRAFANA_PROMETHEUS_UID=<actual-uid>
-read -rs -p 'Grafana query token: ' GRAFANA_TOKEN
-export GRAFANA_TOKEN
-uv run --locked python -m scripts.reliability report
+uv run --locked python - <<'PY'
+import time
+from collections import Counter
+from datetime import UTC, datetime
+import httpx
+
+with httpx.Client(base_url="http://127.0.0.1:8001", timeout=15) as client:
+    created = client.post("/issues", json={"title": "Level 4 disposable test"})
+    created.raise_for_status()
+    location, statuses = created.headers["Location"], Counter()
+    print("Start:", datetime.now(UTC).isoformat(), flush=True)
+    try:
+        for _ in range(360):
+            statuses[client.get(location).status_code] += 1
+            time.sleep(1)
+    finally:
+        client.delete(location).raise_for_status()
+    print("End:", datetime.now(UTC).isoformat(), dict(statuses))
+PY
 ```
 
-The reporter sends GET requests only, with no retries, through Grafana's
-[datasource proxy](https://grafana.com/docs/grafana/latest/developer-resources/api-reference/http-api/api-legacy/data_source/).
-It prints each numerator, denominator, target, current value and remaining
-budget, with the job, window and common evaluation time. Backend response
-bodies and tokens are never printed. Incomplete/warning responses fail the
-report rather than becoming a healthy value.
+1. Healthy phase: confirm successful GET metrics and Normal rule state.
+2. Stop the server; restart with `CONTROLLED_FAULT=get_fails` prefixed to the
+   command. Run the generator again: GETs return `502 provider_error`, but
+   create/delete still work. Save the rule state history and **received firing
+   message**. Allow for two exported samples, ingestion and notification delays.
+3. Restart healthy with the fault unset and run again. Each restart needs a
+   new issue. Allow old failures to leave the five-minute window; save Normal
+   state and the **received resolved message**. Extend healthy traffic if needed.
+4. At one recorded absolute UTC end time, run A–D with `[30m]` and the test job
+   in Grafana Explore. Save both numerators, denominators, ratios and remaining
+   budgets. Record the window, job and release(s). Separately report production's
+   seven-day values. Save absolute dashboard links and sanitized notifications.
+5. Stop the server and remove the exercise alert/policy and any temporary contact
+   point/token. The generator deletes fixtures; stopping the server discards its
+   in-memory data. No real provider data is created by this failure exercise.
 
-For reproducible evidence, choose an absolute evaluation time and record the
-output, e.g. `report --at 2026-11-12T19:00:00Z --window 30m`. This shorter window
-is a recorded test run, not a replacement for the seven-day SLO. Put the
-evaluation time, window, release(s), job, counts and values in the submission.
-Add the generated good/eligible queries and their ratios to the existing
-[team dashboard](https://redowl1208.grafana.net/d/ckp4g9s/ospsd-team-4-level-3-observability).
-Display missing/zero-denominator results as No data. Keep the release visible
-on the Level 3 panels while the SLO panels aggregate across releases.
+**Remaining acceptance:** teammate approval, actual server SLI/budget results,
+cloud alert installation, and received firing/resolved messages. The recorded
+baseline and local tests do not replace these. Level 4 is still incomplete.
+Remove remaining Grafana resources under the November 20 teardown plan.
 
-## Availability alert
-
-The alert is a Grafana-managed rule on a user-visible symptom: **more than 5%
-of eligible GETs fail over five minutes, with at least 20 eligible requests,
-for two continuous minutes**. Evaluate every minute. The short alert window
-detects sustained trouble; it does not replace either seven-day objective.
-At low traffic one failure must not page the team as a 100% outage.
-
-Generate a reviewable API request without contacting Grafana:
-
-```bash
-uv run --locked python -m scripts.reliability alert-rule \
-  --datasource-uid <actual-prometheus-uid> --folder-uid <team-folder-uid>
-```
-
-The generated JSON is the request format for
-`POST /api/v1/provisioning/alert-rules`, not a provisioning-file export.
-Grafana documents these as [different formats](https://grafana.com/docs/grafana/latest/alerting/set-up/provision-alerting-resources/http-api-provisioning/).
-`orgID` defaults to 1; confirm the stack's organization before applying.
-Creating the rule is a separate operator action. Alternatively, enter query A
-from `queries` in the rule editor, use an instant query and a last-value
-condition greater than `0.05`, and use the timings above.
-
-Configure all of these in the team stack:
-
-1. Create the rule in a team folder and set its evaluation group to one minute.
-2. Create an email or Slack contact point for the **agreed real destination**.
-   Leave resolved notifications enabled. Do not store the address/webhook/token
-   in Git. Owner confirmation of the destination is still pending.
-3. Add a notification policy matching `service=ospsd-team4-render` and
-   `operation=get_issue`, routed to that contact point. Suggested grouping:
-   service and operation; group wait 30s, group interval 1m, repeat interval 4h.
-4. Verify the notification includes the service, condition, dashboard and
-   [runbook](RUNBOOK.md). The generated summary/description contain these links.
-5. Preview the real datasource query before enabling notifications. A contact
-   point's Test button checks delivery only; it does not prove the rule fires.
-
-Below 20 eligible events, the query returns no series. No Data and query errors
-use **Keep Last State**: missing telemetry cannot falsely resolve an incident.
-A firing alert needs sufficient **healthy** traffic to resolve. If traffic or
-telemetry disappears while normal, this rule cannot detect an outage. Check
-export freshness/readiness during triage; continuous black-box probing is not
-implemented. Query errors retain the previous state and need investigation in
-Grafana. These limitations matter on this nearly idle service.
-
-## Error-budget policy
-
-When either seven-day budget is zero or negative, pause feature releases for
-the affected service. Ship only reviewed changes needed to restore service,
-repair telemetry/security, or reduce the failure. The student owner and one
-reviewer inspect the dashboard and traces, identify the cause, and record the
-mitigation. A provider failure still spends budget; do not exclude it after
-the fact. Resume normal feature releases only after both measured budgets
-are positive and a teammate verifies the fix. Unknown/stale data is not
-approval to resume; repair measurement first. This is a documented human
-release decision; the pipeline does not automatically enforce it.
-
-## Verification and remaining acceptance evidence
-
-Follow the [runbook's disposable alert exercise](RUNBOOK.md#disposable-alert-exercise).
-It uses a separate job, the actual GET error/metric path, and a real contact
-point. Do not change production's linked Render secrets: the disposable Render
-service shares that environment group. Save firing **and resolved** messages,
-rule state history, absolute dashboard links, and the SLI report for the run.
-
-| Required evidence | Current state |
-| --- | --- |
-| Initial read measurement | Recorded in `evidence/level4-read-baseline.json`; 30/30 client-observed reads |
-| Seven-day server SLI values and remaining budgets | Reporter implemented; Grafana access required to record actual values |
-| Alert installed, real destination configured | JSON generator and setup documented; not yet applied |
-| Firing message received | Not yet verified |
-| Recovery and resolved message received | Not yet verified |
-| Human review of targets, policy and exercise | Pending |
-
-Level 4 is not complete until the live rows above are filled with observed
-results. Do not substitute mock tests, the baseline, or rule existence for
-notification delivery and recovery. Remove the exercise rule, policy and
-temporary contact point after verification; follow the existing November 20
-Grafana-stack teardown plan for the remaining resources.
-
-## Local verification
-
-The regular test suite checks accounting, report authentication/response
-handling, secret sanitization, alert generation, and the controlled GET fault.
-An additional engine check uses Prometheus `promtool` without adding a service
-dependency. Download the official Prometheus release (verified here with
-3.16.0), then run:
-
-```bash
-PROMTOOL=/absolute/path/to/promtool uv run --locked pytest tests/test_reliability.py
-```
-
-It evaluates the actual generated PromQL for absent/idle data, zero successes,
-caller exclusions, slow successes, fast provider errors, both histogram-label
-formats, sparse traffic, release aggregation and counter resets. Without
-`PROMTOOL` that one engine check is explicitly skipped. These local checks do
-not assert that the team's Grafana rule is installed or notifications arrived.
+The documented queries have a real Prometheus engine check:
+`PROMTOOL=/path/to/promtool uv run --locked pytest tests/test_reliability.py`.
+Verified with Prometheus 3.16.0; these checks skip when `PROMTOOL` is unset.
