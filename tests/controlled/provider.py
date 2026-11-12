@@ -96,6 +96,15 @@ class InMemoryIssueProvider:
             self._issues[issue_id] = title
         return Issue(id=issue_id, title=title)
 
+    def list_issues(self, *, limit: int) -> list[Issue]:
+        # Dictionaries keep insertion order (renames do not move an entry),
+        # so reversing it gives newest first.
+        with self._lock:
+            newest_first = list(reversed(self._issues.items()))
+        return [Issue(id=issue_id, title=title) for issue_id, title in newest_first][
+            :limit
+        ]
+
     def ping(self) -> bool:
         return True
 
