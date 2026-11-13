@@ -1,7 +1,7 @@
 # Reliability (HW2 Level 4)
 
 Status: proposed targets; live verification pending. Student owner: Vanchi.
-Grafana account owner: Tyler. Teammate reviewer: unassigned.
+Grafana account owner and requested reviewer: Tyler.
 
 ## Objectives and initial measurement
 
