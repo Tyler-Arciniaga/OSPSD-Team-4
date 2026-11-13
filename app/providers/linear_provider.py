@@ -147,15 +147,6 @@ def _require_issue_id(issue_id: str) -> None:
         raise malformed_issue_id()
 
 
-def _not_available(operation: str) -> ServiceError:
-    """Refuse an operation this adapter does not implement yet, before any request."""
-    return ServiceError(
-        ErrorCode.SERVICE_NOT_CONFIGURED,
-        f"{operation} for Linear issue provider is not available yet",
-        cause="operation_not_implemented",
-    )
-
-
 def _unexpected_response(cause: str) -> ServiceError:
     return provider_error(UNEXPECTED_RESPONSE_MESSAGE, cause)
 

@@ -1,6 +1,6 @@
 # Reliability (HW2 Level 4)
 
-Status: proposed targets; alert installed and live firing/recovery verified on
+Status: targets adopted; alert installed and live firing/recovery verified on
 November 13 ([evidence](evidence/level4-alert-exercise.md)). Student owner: Vanchi.
 Grafana account owner, alert installation and live verification: Tyler.
 
@@ -11,7 +11,7 @@ it. Measure completed requests at the service middleware, including cache hits.
 Exclude `invalid_input` and `not_found`; include provider outages, access denials,
 missing configuration and internal errors in both denominators.
 
-| SLI | Good events / eligible events | Proposed SLO |
+| SLI | Good events / eligible events | SLO |
 | --- | --- | --- |
 | Availability | Successful reads / eligible reads | 99% over rolling 7 days |
 | Latency | Successful reads taking at most 1 second / eligible reads | 95% over rolling 7 days |
@@ -23,10 +23,10 @@ Both client-observed ratios were 30/30 (100%). This small warm-path sample,
 including cached reads, is not a seven-day or server-side SLI measurement.
 
 An interactive read should usually finish within a second; the baseline leaves
-room for variability. These provisional targets permit occasional cold starts
+room for variability. These targets permit occasional cold starts
 and failures: at 1,000 eligible reads, availability permits 10 failures and
 latency permits 50 failed-or-slow reads. Review after seven days of data or a
-change in hosting/workload/consumer needs. Team agreement is still required.
+change in hosting/workload/consumer needs.
 
 Server measurements cannot see DNS/network failures before the middleware,
 requests lost in a crash, or client download time. A wrong 200 body or mistaken
@@ -145,6 +145,16 @@ message alone does not establish that the rule fires and resolves; the
    resolved notification**. Record UTC times, release, cause, mitigation,
    dashboard/trace links and the seven-day budgets; apply the policy above.
 
+## Likely failures
+
+| Failure | Telemetry that shows it | Mitigation | Recovery cannot undo |
+| --- | --- | --- | --- |
+| Trello token expires (30-day token) or a key is revoked | Errors panel: `access_denied` on every operation; log `cause: provider_status=401`; `/readyz` `provider: unreachable` | Create a new token ([Prerequisites](DEPLOYMENT.md#prerequisites-by-hand-once) step 3), put it in the Render environment group, redeploy | Writes callers could not make during the outage; budget already spent |
+| Linear hourly quota (2,500 requests) exhausted | Errors panel: `provider_error` 502 on `linear.request` spans; alert fires | Stop the traffic that is using up the quota (often a test loop); wait for the hourly reset | Rejected writes are not replayed; callers must retry |
+| Bad release (for example the URL-encoding fault in [Faulty release](DEPLOYMENT.md#faulty-release-and-rollback)) | Smoke check fails; release recorded `failure`; errors by `release` label | [Roll back](DEPLOYMENT.md#roll-back) to the known-good digest, then fix `main` | Provider writes made by the faulty release ([repair](DEPLOYMENT.md#repair-provider-data-after-a-faulty-release)) |
+| Free-plan restart or spin-down | Latency panel: slow first request after idle; `/readyz` reports the same commit after the restart | None needed for reads; clients retry keyed creates carefully | Idempotency keys are lost, so a retried keyed create can make a duplicate |
+| Grafana export stops (expired header, stack removed) | Panels show No data while `/healthz` is 200; alert stays in its last state | Check `OTEL_EXPORTER_OTLP_HEADERS` in the environment group; redeploy | Telemetry from the gap is lost (no durable spool) |
+
 ## Disposable verification
 
 Use a local controlled service exporting to Grafana with the team's existing
@@ -204,9 +214,7 @@ Google Chat space. Server-side SLIs and budgets were recorded for the test job
 and for production's seven days. See the
 [exercise evidence](evidence/level4-alert-exercise.md).
 
-**Remaining acceptance:** team agreement on the proposed targets and teammate
-review of this evidence. Remove remaining Grafana resources under the
-November 20 teardown plan.
+Remove remaining Grafana resources under the November 20 teardown plan.
 
 The documented queries have a real Prometheus engine check:
 `PROMTOOL=/path/to/promtool uv run --locked pytest tests/test_reliability.py`.

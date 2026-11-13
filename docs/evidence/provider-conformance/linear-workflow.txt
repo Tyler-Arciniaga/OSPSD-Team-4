@@ -1,0 +1,12 @@
+create                 201 {"id":"<id>","title":"Consumer workflow"}
+get                    200 {"id":"<id>","title":"Consumer workflow"}
+rename                 200 {"id":"<id>","title":"Consumer workflow renamed"}
+stale rename           412 {"error":{"code":"precondition_failed","message":"The issue has changed since it was read"}}
+get after rename       200 {"id":"<id>","title":"Consumer workflow renamed"}
+list                   200 listed=true
+invalid create         422 {"error":{"code":"invalid_input","message":"Request body is invalid","details":[{"field":"title","message":"String should have at least 1 character"}]}}
+get unknown            404 {"error":{"code":"not_found","message":"Issue not found"}}
+delete                 204 
+get after delete       404 {"error":{"code":"not_found","message":"Issue not found"}}
+delete again           404 {"error":{"code":"not_found","message":"Issue not found"}}
+list after delete      200 listed=false

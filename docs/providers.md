@@ -564,16 +564,14 @@ assumptions the simulated tests cannot. It is skipped unless
 ### Live Trello verification
 
 Offline tests do not establish that real credentials and Trello
-access work. Follow [Trello Verification](../README.md#trello-verification)
-to verify the normally configured service against a real test card.
+access work. Follow [Provider Verification](../README.md#provider-verification)
+to verify the configured service against a real test account.
 
 ## Current Scope
 
 The interface contains retrieval, creation, partial update (only `title` can
-currently be updated), deletion, and bounded listing. Listing is used internally
-by the service; there is no public list endpoint.
-Trello remains the provider during normal operation, while tests
-can supply controlled implementations without changing endpoint code.
+currently be updated), deletion, and bounded listing. Trello is the deployed
+provider, while tests can supply controlled implementations without changing endpoint code.
 
 `ISSUE_PROVIDER=linear` selects the Linear adapter at startup (unset or
 `trello` selects Trello; any other value stops startup). The Linear adapter
@@ -615,7 +613,7 @@ Live verification with a disposable issue confirmed POST 201, GET 200,
 DELETE 204, immediate GET 404 and repeated DELETE 404. The automated cache
 invalidation test separately checks a GET performed before deletion so a
 previously cached issue cannot be returned afterward. Follow
-[Linear Verification](../README.md#linear-verification) to repeat the live
+[Provider Verification](../README.md#provider-verification) to repeat the live
 workflow.
 
 `tests/test_provider_selection.py` checks the `ISSUE_PROVIDER` choices and

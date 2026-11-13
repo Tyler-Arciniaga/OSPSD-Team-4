@@ -43,6 +43,16 @@ see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests, and the shared conformance suite against the controlled implementation (the real service backed by an in-memory provider). It also builds the container image. One aggregate `checks` status passes only when all of these pass; branch protection requires it before merging to `main` (see [Merge gate](docs/DEPLOYMENT.md#merge-gate)). Every pull request gets Terraform formatting, validation and tests, and pull requests that change `infra/` also get a `terraform plan` comment. Every merge to `main` is released automatically by the release workflow; infrastructure changes are applied by hand, with approval.
 
+## Operating the Service
+
+| Question | Answer |
+| --- | --- |
+| What is running? | One Render web service, `ospsd-team4-issue-tracker` at <https://ospsd-team4-issue-tracker.onrender.com>, running our container image (pinned by digest) against Trello. See [Deployment overview](docs/DEPLOYMENT.md#overview). |
+| Which version? | `curl -sS https://ospsd-team4-issue-tracker.onrender.com/readyz` and read `commit`, or the newest **success** under **Environments → render-production**. See [Find the commit](docs/DEPLOYMENT.md#find-the-commit-behind-the-running-service). |
+| Is it healthy? | `/healthz` (liveness) and `/readyz` (readiness, provider reachability), and the [team dashboard](https://redowl1208.grafana.net/d/ckp4g9s/ospsd-team-4-level-3-observability). See [Verify](docs/DEPLOYMENT.md#verify). |
+| Where are its logs? | Grafana Explore, logs source, `{service_name="ospsd-team4-render"}`; from a response's `X-Trace-ID` to its trace and logs. See [Find a request across signals](docs/OBSERVABILITY.md#find-a-request-across-signals). |
+| How do I roll it back? | **Actions → Release → Run workflow** with the known-good commit and digest. See [Roll back](docs/DEPLOYMENT.md#roll-back). |
+
 ## Project Structure
 
 - `app/main.py`: FastAPI endpoints, which validate input and call the supplied provider, and the handlers that turn failures into error responses and log lines.
@@ -279,13 +289,10 @@ Expected response body:
 Replace the example ID with the full ID of your test card. The returned
 title is the card's name from the latest fetch, which may be cached for
 30 seconds. Malformed IDs return `404 Not Found`; missing cards are detected
-when a request reaches Trello. See [Caching](#caching).
+when a request reaches the provider. See [Caching](#caching).
 
-If `TRELLO_API_KEY` or `TRELLO_TOKEN` is not set, requests that need the
-Trello provider return `503 Service Unavailable` with code
-`service_not_configured`, unless the ID is rejected first. Cache hits do
-not recheck credentials. Complete [Configuration](#configuration) and
-restart the server. Errors have the form
+The service does not start unless every variable its provider needs is set
+(see [Configuration](#configuration)). Errors have the form
 `{"error": {"code": "...", "message": "..."}}`; see
 [the error model](docs/api.md#error-model) for every code, its status, and
 whether to retry.
@@ -350,16 +357,16 @@ Reading a cached issue does not extend that lifetime. Each application
 process keeps up to 100 issues, evicting the least recently used entry
 when the cache is full. Errors are never cached.
 
-PATCH and DELETE remove the affected cached entry before contacting Trello,
-even if the operation later fails. The next GET fetches the issue again.
-POST forwards creation to Trello without filling the cache.
+PATCH and DELETE remove the affected cached entry before contacting the
+provider, even if the operation later fails. The next GET fetches the issue
+again. POST forwards creation to the provider without filling the cache.
 
-Changes made directly in Trello, including deletion or permission changes,
+Changes made directly in Trello or Linear, including deletion or permission changes,
 may not be noticed until the cached entry expires. Separate server workers
 have independent caches; an update in one worker does not clear another
 worker's cache. Restarting the server clears its cache. Restart after
 changing credentials or configuration, because cache hits do not recheck
-Trello access.
+provider access.
 
 See [Cache behavior](docs/providers.md#cache-behavior) for implementation
 and concurrency details.
@@ -423,7 +430,7 @@ Cache tests cover repeated reads, expiration, least-recently-used eviction,
 returned-copy isolation, invalidation before successful or failed writes,
 uncached failures, and reuse and reset across application lifespans.
 
-Linear tests in `tests/linear/` run retrieval, creation and deletion through the real
+Linear tests in `tests/linear/` run retrieval, creation, update, deletion and listing through the real
 startup with `ISSUE_PROVIDER=linear` and simulated GraphQL responses,
 including Linear's HTTP 200 responses that carry errors, trashed issues,
 and malformed or short IDs.
@@ -450,8 +457,8 @@ CONFORMANCE_BASE_URL=http://127.0.0.1:8000 uv run --locked pytest contract/tests
 ```
 
 Setting `CONTROLLED_FAULT=wrong_title` starts a deliberately broken service
-that the suite must fail against. When the suite grows (rename, delete),
-extend `tests/controlled/provider.py` in the same change so CI keeps passing.
+that the suite must fail against. When the suite grows, extend
+`tests/controlled/provider.py` in the same change so CI keeps passing.
 
 Against a real provider it creates real issues. Start the service for one
 provider, then run:
@@ -502,217 +509,85 @@ them needs no new tag. The import-boundary test reads `contract/src/` from
 disk, so it checks the next release before it is tagged; the conformance
 suite tests a running service over HTTP.
 
-## Trello Verification
+## Provider Verification
 
-Use the documented single-process startup command for this workflow so
-GET, PATCH, and DELETE share the same cache.
+This consumer workflow runs unchanged against either provider: only the
+startup differs. It uses the public API alone and creates and deletes its
+own issue, so it needs no prepared card or issue. Both providers must print
+the same output.
 
-1. On the dedicated test board, create a card named `HW1 Level 2 test`.
-   Open the card in a browser and append `.json` to its URL. Find the
-   top-level `id` in that response: use this full 24-character ID, rather
-   than the short link from the card URL.
-2. Configure credentials as above and start the service. In another
-   terminal, set `TRELLO_TEST_CARD_ID` to that full ID and run:
+1. Configure the provider as in [Configuration](#configuration), using a
+   test account, and start one process for it:
 
    ```bash
-   curl -i "http://127.0.0.1:8000/issues/$TRELLO_TEST_CARD_ID"
+   ISSUE_PROVIDER=trello uv run --locked uvicorn app.main:app --env-file .env   # or ISSUE_PROVIDER=linear
    ```
 
-   Expect HTTP 200 and exactly `{"id":"<your full card ID>","title":"HW1 Level 2 test"}`.
-   Compare both values to the real card.
-3. Rename the card to `HW1 Level 2 renamed` in Trello. An immediate GET
-   may still return the cached title. Wait at least 30 seconds after the
-   rename, then repeat the request. Expect HTTP 200 with the new title and
-   the same ID. Restarting the server also clears the cache.
-4. Run `curl -i http://127.0.0.1:8000/issues/does-not-exist`.
-   Expect HTTP 404 and
-   `{"error":{"code":"not_found","message":"Issue not found"}}`.
-5. With `TRELLO_LIST_ID` set to the test card's `idList`, create an issue:
+2. In another terminal (needs `curl` and `jq`), run:
 
    ```bash
-   curl -i -X POST http://127.0.0.1:8000/issues \
-     -H "Content-Type: application/json" \
-     -d '{"title": "HW1 POST test"}'
+   URL=http://127.0.0.1:8000; T=$(mktemp -d)
+   req() { curl -sS -o "$T/body" -D "$T/headers" -w '%{http_code}' -X "$1" "$URL$2" \
+             -H 'Content-Type: application/json' ${3:+-d "$3"} ${4:+-H "$4"}; }
+   show() { printf '%-22s %s %s\n' "$1" "$2" "$(jq -c 'if has("id") then .id = "<id>" end' "$T/body" 2>/dev/null)"; }
+   listed() { printf '%-22s %s listed=%s\n' "$1" "$2" "$(jq --arg id "$ID" 'any(.issues[]; .id == $id)' "$T/body")"; }
+
+   s=$(req POST /issues '{"title": "Consumer workflow"}'); show "create" "$s"
+   ID=$(jq -r .id "$T/body")
+   s=$(req GET "/issues/$ID"); show "get" "$s"
+   ETAG=$(awk 'tolower($1) == "etag:" {print $2}' "$T/headers" | tr -d '\r')
+   s=$(req PATCH "/issues/$ID" '{"title": "Consumer workflow renamed"}' "If-Match: $ETAG"); show "rename" "$s"
+   s=$(req PATCH "/issues/$ID" '{"title": "Stale rename"}' "If-Match: $ETAG"); show "stale rename" "$s"
+   s=$(req GET "/issues/$ID"); show "get after rename" "$s"
+   s=$(req GET "/issues?limit=10"); listed "list" "$s"
+   s=$(req POST /issues '{"title": ""}'); show "invalid create" "$s"
+   s=$(req GET /issues/does-not-exist); show "get unknown" "$s"
+   s=$(req DELETE "/issues/$ID"); show "delete" "$s"
+   s=$(req GET "/issues/$ID"); show "get after delete" "$s"
+   s=$(req DELETE "/issues/$ID"); show "delete again" "$s"
+   s=$(req GET "/issues?limit=10"); listed "list after delete" "$s"
    ```
 
-   Expect HTTP 201, a `Location: /issues/<new ID>` header, and
-   `{"id":"<new ID>","title":"HW1 POST test"}`. Confirm a card with that
-   name appears in the configured list in Trello, then run
-   `curl -i "http://127.0.0.1:8000/issues/<new ID>"` and expect HTTP 200
-   with the same body.
-6. Repeat the request with `-d '{"title": ""}'`. Expect HTTP 422 and
-   confirm no new card appears in Trello.
-7. Rename the step 2 test card through the service:
+   Expected output, identical for Trello and Linear:
+
+   ```text
+   create                 201 {"id":"<id>","title":"Consumer workflow"}
+   get                    200 {"id":"<id>","title":"Consumer workflow"}
+   rename                 200 {"id":"<id>","title":"Consumer workflow renamed"}
+   stale rename           412 {"error":{"code":"precondition_failed","message":"The issue has changed since it was read"}}
+   get after rename       200 {"id":"<id>","title":"Consumer workflow renamed"}
+   list                   200 listed=true
+   invalid create         422 {"error":{"code":"invalid_input","message":"Request body is invalid","details":[{"field":"title","message":"String should have at least 1 character"}]}}
+   get unknown            404 {"error":{"code":"not_found","message":"Issue not found"}}
+   delete                 204
+   get after delete       404 {"error":{"code":"not_found","message":"Issue not found"}}
+   delete again           404 {"error":{"code":"not_found","message":"Issue not found"}}
+   list after delete      200 listed=false
+   ```
+
+   If a step fails part-way, delete the `Consumer workflow` issue by hand.
+
+3. Check that a real provider failure is translated. Restart the service
+   with an invalid credential, `TRELLO_TOKEN=invalid-token` or
+   `LINEAR_API_KEY=invalid-key` prefixed to the step 1 command, then request
+   an ID in the provider's format:
 
    ```bash
-   curl -i -X PATCH "http://127.0.0.1:8000/issues/$TRELLO_TEST_CARD_ID" \
-     -H "Content-Type: application/json" \
-     -d '{"title": "HW1 PATCH test"}'
+   curl -sS http://127.0.0.1:8000/issues/000000000000000000000000              # Trello
+   curl -sS http://127.0.0.1:8000/issues/00000000-0000-4000-8000-000000000000  # Linear
    ```
 
-   Expect HTTP 200 with the same ID and the new title. Confirm in Trello
-   that the card's name changed, then repeat the step 2 `GET` and expect
-   the new title.
+   Both return `403`
+   `{"error":{"code":"access_denied","message":"The issue tracker denied access to this issue"}}`,
+   and the server terminal shows one log line with `"cause": "provider_status=401"`
+   and no key, token, URL or stack trace.
 
-   Check that a stale overwrite is rejected. Copy the `ETag` header from
-   the step 2 `GET` (repeat it now), then send two updates with it:
+4. Stop the server. Revoke test credentials you no longer need (Trello:
+   Settings > Applications; Linear: Settings > Security & access) and clear
+   them from `.env`.
 
-   ```bash
-   curl -i -X PATCH "http://127.0.0.1:8000/issues/$TRELLO_TEST_CARD_ID" \
-     -H "Content-Type: application/json" -H 'If-Match: "<etag>"' \
-     -d '{"title": "HW1 client A"}'
-   curl -i -X PATCH "http://127.0.0.1:8000/issues/$TRELLO_TEST_CARD_ID" \
-     -H "Content-Type: application/json" -H 'If-Match: "<etag>"' \
-     -d '{"title": "HW1 client B"}'
-   ```
-
-   Expect HTTP 200 for the first and HTTP 412 with
-   `{"error":{"code":"precondition_failed","message":"The issue has changed since it was read"}}`
-   for the second. Confirm in Trello that the card is named `HW1 client A`.
-8. Delete the disposable test card through the service:
-
-   ```bash
-   curl -i -X DELETE "http://127.0.0.1:8000/issues/$TRELLO_TEST_CARD_ID"
-   ```
-
-   Expect HTTP 204 with an empty body. Confirm the card is gone in Trello.
-   Repeat GET and DELETE for the same ID; both should return HTTP 404 and
-   `{"error":{"code":"not_found","message":"Issue not found"}}`.
-9. Check that a real provider failure is translated. Stop the server and
-   restart it with an invalid token, keeping the key from `.env`:
-
-   ```bash
-   TRELLO_TOKEN=invalid-token uv run --locked uvicorn app.main:app --env-file .env
-   ```
-
-   Request the issue created in step 5, which still exists:
-   `curl -i "http://127.0.0.1:8000/issues/<new ID>"`. Expect HTTP 403 and
-   `{"error":{"code":"access_denied","message":"The issue tracker denied access to this issue"}}`.
-   The server terminal should show one log line like
-   `{"level": "WARNING", "operation": "get_issue", "error": "access_denied", "status": 403, "provider_involved": true, "cause": "provider_status=401", "write_outcome": null}`,
-   with no key, token, URL, or stack trace.
-10. Delete any remaining disposable cards (including the card created in
-   step 5) and any board created only for this check.
-   Revoke the token from the test account's Settings > Applications page
-   when finished, stop the server, clear credentials from `.env`, and run
-   `unset TRELLO_API_KEY TRELLO_TOKEN TRELLO_LIST_ID` if you also exported them.
-
-A GET cache hit makes no provider request. A cache miss makes one [Get a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-get)
-request for `id,name`. Each POST makes one
-[Create a new Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-post)
-request with `idList` and `name`. Each PATCH makes one
-[Update a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-put)
-request (a conditional PATCH adds one Get a Card request first). Each DELETE makes one
-[Delete a Card](https://developer.atlassian.com/cloud/trello/rest/api-group-cards/#api-cards-id-delete)
-request and ignores the successful response body. All four use a 10-second
-socket timeout with no automatic retries. Invalid requests or missing
-configuration can fail before any provider request. See [the API contract](docs/api.md)
-for errors and supported IDs.
-
-## Linear Verification
-
-The Linear adapter implements GET, POST, PATCH and DELETE. Use the documented single-process startup command
-for this workflow so all requests share the same cache.
-
-1. In the test team on the Linear platform, create an issue named `HW1 Linear GET test`. Linear
-   shows its short identifier (for example `TYL-5`); however the service accepts
-   only the full ID. With `LINEAR_API_KEY` exported as in
-   [Linear Configuration](#linear-configuration), look it up, replacing `short-id` with your
-   identifier:
-
-   ```bash
-   curl -s https://api.linear.app/graphql \
-     -H "Content-Type: application/json" -H "Authorization: $LINEAR_API_KEY" \
-     -d '{"query": "{ issue(id: \"short-id\") { id title } }"}'
-   ```
-
-   Use the returned `id` (a UUID), rather than the short identifier.
-2. Configure credentials as above and start the service. In another
-   terminal, set `LINEAR_TEST_ISSUE_ID` to that full ID and run:
-
-   ```bash
-   curl -i "http://127.0.0.1:8000/issues/$LINEAR_TEST_ISSUE_ID"
-   ```
-
-   Expect HTTP 200 and exactly `{"id":"<your full issue ID>","title":"HW1 Linear GET test"}`.
-3. TODO (once updateIssue operation is implemented)
-   Rename the issue to `HW1 Linear renamed` in Linear. An immediate GET
-   may still return the cached title. Wait at least 30 seconds after the
-   rename, then repeat the request. Expect HTTP 200 with the new title and
-   the same ID. Restarting the server also clears the cache.
-4. Run `curl -i http://127.0.0.1:8000/issues/does-not-exist`, then repeat
-   it with your issue's short identifier in place of `does-not-exist`.
-   Expect HTTP 404 and
-   `{"error":{"code":"not_found","message":"Issue not found"}}` for both.
-   The log lines should show `"cause": "malformed_issue_id"` and
-   `"provider_involved": false`: neither request reaches Linear.
-5. Create an issue:
-
-   ```bash
-   curl -i -X POST http://127.0.0.1:8000/issues \
-     -H "Content-Type: application/json" \
-     -d '{"title": "HW1 Linear POST test"}'
-   ```
-
-   Expect HTTP 201, a `Location: /issues/<new ID>` header, and
-   `{"id":"<new ID>","title":"HW1 Linear POST test"}`. Confirm an issue with
-   that title appears in the configured team in Linear, then run
-   `curl -i "http://127.0.0.1:8000/issues/<new ID>"` and expect HTTP 200
-   with the same body.
-6. Repeat the request with `-d '{"title": ""}'`. Expect HTTP 422 and
-   confirm no new issue appears in Linear.
-7. Delete the issue created in step 5 through the service. Replace
-   `<new ID>` with its full UUID:
-
-   ```bash
-   curl -i -X DELETE "http://127.0.0.1:8000/issues/<new ID>"
-   curl -i "http://127.0.0.1:8000/issues/<new ID>"
-   curl -i -X DELETE "http://127.0.0.1:8000/issues/<new ID>"
-   ```
-
-   Expect HTTP 204 with an empty body, followed by HTTP 404 for both
-   GET and repeated DELETE. Both 404 responses should contain:
-   `{"error":{"code":"not_found","message":"Issue not found"}}`.
-
-   DELETE clears the affected local cache entry before attempting deletion.
-   The Linear adapter performs a fresh lookup and rejects missing or
-   already-trashed issues before sending the delete mutation.
-8. Rename the step 2 test issue through the service:
-
-   ```bash
-   curl -i -X PATCH "http://127.0.0.1:8000/issues/$LINEAR_TEST_ISSUE_ID" \
-     -H "Content-Type: application/json" \
-     -d '{"title": "HW1 Linear PATCH test"}'
-   ```
-
-   Expect HTTP 503 and
-   `{"error":{"code":"service_not_configured","message":"Renaming issues for Linear issue provider is not available yet"}}`.
-   Confirm in Linear that the title did not change.
-9. Repeat the valid POST request from step 5 with
-    `-H "Idempotency-Key: 3f2b1c9e-8d4a-4f6b-9c1e-2a7d5e8f0b13"`. Expect
-    HTTP 503 and
-    `{"error":{"code":"service_not_configured","message":"Idempotent creation is not available"}}`,
-    and confirm no new issue appears in Linear.
-10. Check that a real provider failure is translated. Stop the server and
-    restart it with an invalid key, keeping the rest of `.env`:
-
-    ```bash
-    LINEAR_API_KEY=invalid-key uv run --locked uvicorn app.main:app --env-file .env
-    ```
-
-    Request the step 2 issue, which still exists:
-    `curl -i "http://127.0.0.1:8000/issues/$LINEAR_TEST_ISSUE_ID"`. Expect
-    HTTP 403 and
-    `{"error":{"code":"access_denied","message":"The issue tracker denied access to this issue"}}`.
-    The server terminal should show one log line like
-    `{"level": "WARNING", "operation": "get_issue", "error": "access_denied", "status": 403, "provider_involved": true, "cause": "provider_status=401", "write_outcome": null}`,
-    with no key, URL, or stack trace.
-11. Delete any remaining test issues (including the step 2 issue) and any
-    team created only for this check. Revoke the API key from
-    **Settings > Account > Security & access** when finished, stop the
-    server, clear the Linear values from `.env` (or set
-    `ISSUE_PROVIDER=trello`), and run
-    `unset LINEAR_API_KEY LINEAR_TEST_ISSUE_ID` if you also exported them.
+Recorded runs of this workflow and the conformance suite against both
+providers: [docs/evidence/provider-conformance.md](docs/evidence/provider-conformance.md).
 
 ## Deployment
 
@@ -743,7 +618,7 @@ Grafana authentication headers.
 
 ## Reliability
 
-See [Reliability](docs/RELIABILITY.md) for the proposed SLIs/SLOs, copyable
+See [Reliability](docs/RELIABILITY.md) for the SLIs/SLOs, copyable
 Grafana queries, error-budget policy, alert setup, runbook and verification status.
 
 ## Contributing

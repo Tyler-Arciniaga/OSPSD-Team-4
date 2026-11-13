@@ -23,7 +23,7 @@ See [README.md](README.md#project-structure) for the project structure and code 
 
 - Follow the README’s [Installation](README.md#installation), [Configuration](README.md#configuration), and [Running the Service](README.md#running-the-service) instructions.
 - Before merging, run linting, formatting checks, type checking, and automated tests as documented in [Code Checks and Tests](README.md#code-checks-and-tests). All checks must pass locally and in GitHub Actions.
-- Follow [Trello Verification](README.md#trello-verification) to verify the integration against a Trello test account.
+- Follow [Provider Verification](README.md#provider-verification) to verify the integration against a Trello and a Linear test account.
 - Keep credentials out of the repository.
 
 ## Design and code changes
