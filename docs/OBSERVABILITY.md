@@ -37,9 +37,9 @@ logs also carry `release`. A local checkout without a build SHA may report
 
 ## Signals and interpretation
 
-`app/tracing.py` names request spans after the endpoint: `get_issue`,
-`create_issue`, `update_issue`, or `delete_issue`. Health endpoints use `healthz`
-and `readyz`; other requests use `routing`. It adds `X-Trace-ID` to responses
+`app/tracing.py` names request spans after the endpoint: `list_issues`,
+`get_issue`, `create_issue`, `update_issue`, or `delete_issue`. Health endpoints
+use `healthz` and `readyz`; other requests use `routing`. It adds `X-Trace-ID` to responses
 passing through the middleware. See the [API correlation details](api.md#request-correlation-and-outcome-logs)
 for the unhandled-error limitation.
 
