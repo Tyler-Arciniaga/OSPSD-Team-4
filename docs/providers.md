@@ -570,10 +570,8 @@ to verify the configured service against a real test account.
 ## Current Scope
 
 The interface contains retrieval, creation, partial update (only `title` can
-currently be updated), deletion, and bounded listing. Listing is used internally
-by the service; there is no public list endpoint.
-Trello remains the provider during normal operation, while tests
-can supply controlled implementations without changing endpoint code.
+currently be updated), deletion, and bounded listing. Trello is the deployed
+provider, while tests can supply controlled implementations without changing endpoint code.
 
 `ISSUE_PROVIDER=linear` selects the Linear adapter at startup (unset or
 `trello` selects Trello; any other value stops startup). The Linear adapter

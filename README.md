@@ -43,6 +43,16 @@ see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 GitHub Actions is configured to run linting, formatting checks, type checking, and automated tests on pushes and pull requests, and the shared conformance suite against the controlled implementation (the real service backed by an in-memory provider). It also builds the container image. One aggregate `checks` status passes only when all of these pass; branch protection requires it before merging to `main` (see [Merge gate](docs/DEPLOYMENT.md#merge-gate)). Every pull request gets Terraform formatting, validation and tests, and pull requests that change `infra/` also get a `terraform plan` comment. Every merge to `main` is released automatically by the release workflow; infrastructure changes are applied by hand, with approval.
 
+## Operating the Service
+
+| Question | Answer |
+| --- | --- |
+| What is running? | One Render web service, `ospsd-team4-issue-tracker` at <https://ospsd-team4-issue-tracker.onrender.com>, running our container image (pinned by digest) against Trello. See [Deployment overview](docs/DEPLOYMENT.md#overview). |
+| Which version? | `curl -sS https://ospsd-team4-issue-tracker.onrender.com/readyz` and read `commit`, or the newest **success** under **Environments → render-production**. See [Find the commit](docs/DEPLOYMENT.md#find-the-commit-behind-the-running-service). |
+| Is it healthy? | `/healthz` (liveness) and `/readyz` (readiness, provider reachability), and the [team dashboard](https://redowl1208.grafana.net/d/ckp4g9s/ospsd-team-4-level-3-observability). See [Verify](docs/DEPLOYMENT.md#verify). |
+| Where are its logs? | Grafana Explore, logs source, `{service_name="ospsd-team4-render"}`; from a response's `X-Trace-ID` to its trace and logs. See [Find a request across signals](docs/OBSERVABILITY.md#find-a-request-across-signals). |
+| How do I roll it back? | **Actions → Release → Run workflow** with the known-good commit and digest. See [Roll back](docs/DEPLOYMENT.md#roll-back). |
+
 ## Project Structure
 
 - `app/main.py`: FastAPI endpoints, which validate input and call the supplied provider, and the handlers that turn failures into error responses and log lines.
@@ -279,13 +289,10 @@ Expected response body:
 Replace the example ID with the full ID of your test card. The returned
 title is the card's name from the latest fetch, which may be cached for
 30 seconds. Malformed IDs return `404 Not Found`; missing cards are detected
-when a request reaches Trello. See [Caching](#caching).
+when a request reaches the provider. See [Caching](#caching).
 
-If `TRELLO_API_KEY` or `TRELLO_TOKEN` is not set, requests that need the
-Trello provider return `503 Service Unavailable` with code
-`service_not_configured`, unless the ID is rejected first. Cache hits do
-not recheck credentials. Complete [Configuration](#configuration) and
-restart the server. Errors have the form
+The service does not start unless every variable its provider needs is set
+(see [Configuration](#configuration)). Errors have the form
 `{"error": {"code": "...", "message": "..."}}`; see
 [the error model](docs/api.md#error-model) for every code, its status, and
 whether to retry.
@@ -350,16 +357,16 @@ Reading a cached issue does not extend that lifetime. Each application
 process keeps up to 100 issues, evicting the least recently used entry
 when the cache is full. Errors are never cached.
 
-PATCH and DELETE remove the affected cached entry before contacting Trello,
-even if the operation later fails. The next GET fetches the issue again.
-POST forwards creation to Trello without filling the cache.
+PATCH and DELETE remove the affected cached entry before contacting the
+provider, even if the operation later fails. The next GET fetches the issue
+again. POST forwards creation to the provider without filling the cache.
 
-Changes made directly in Trello, including deletion or permission changes,
+Changes made directly in Trello or Linear, including deletion or permission changes,
 may not be noticed until the cached entry expires. Separate server workers
 have independent caches; an update in one worker does not clear another
 worker's cache. Restarting the server clears its cache. Restart after
 changing credentials or configuration, because cache hits do not recheck
-Trello access.
+provider access.
 
 See [Cache behavior](docs/providers.md#cache-behavior) for implementation
 and concurrency details.
@@ -423,7 +430,7 @@ Cache tests cover repeated reads, expiration, least-recently-used eviction,
 returned-copy isolation, invalidation before successful or failed writes,
 uncached failures, and reuse and reset across application lifespans.
 
-Linear tests in `tests/linear/` run retrieval, creation and deletion through the real
+Linear tests in `tests/linear/` run retrieval, creation, update, deletion and listing through the real
 startup with `ISSUE_PROVIDER=linear` and simulated GraphQL responses,
 including Linear's HTTP 200 responses that carry errors, trashed issues,
 and malformed or short IDs.
@@ -450,8 +457,8 @@ CONFORMANCE_BASE_URL=http://127.0.0.1:8000 uv run --locked pytest contract/tests
 ```
 
 Setting `CONTROLLED_FAULT=wrong_title` starts a deliberately broken service
-that the suite must fail against. When the suite grows (rename, delete),
-extend `tests/controlled/provider.py` in the same change so CI keeps passing.
+that the suite must fail against. When the suite grows, extend
+`tests/controlled/provider.py` in the same change so CI keeps passing.
 
 Against a real provider it creates real issues. Start the service for one
 provider, then run:
@@ -611,7 +618,7 @@ Grafana authentication headers.
 
 ## Reliability
 
-See [Reliability](docs/RELIABILITY.md) for the proposed SLIs/SLOs, copyable
+See [Reliability](docs/RELIABILITY.md) for the SLIs/SLOs, copyable
 Grafana queries, error-budget policy, alert setup, runbook and verification status.
 
 ## Contributing
