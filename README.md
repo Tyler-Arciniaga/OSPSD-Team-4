@@ -741,6 +741,11 @@ Remote export is opt-in: `OTEL_ENABLED=false` selects console export, rather tha
 turning instrumentation off. See `.env.example` for the settings. Never commit
 Grafana authentication headers.
 
+## Reliability
+
+See [Reliability](docs/RELIABILITY.md) for the proposed SLIs/SLOs, copyable
+Grafana queries, error-budget policy, alert setup, runbook and verification status.
+
 ## Contributing
 
 See [AGENTS.md](AGENTS.md) for the contribution and release workflow.

@@ -399,6 +399,12 @@ See [Health checks](api.md#health-checks).
 
 ## 6\. Migration and Coordination Plan
 
+**Level 4 proposal:** `get_issue` targets 99% availability and 95% successful
+reads within one second over seven days, including provider failures. See
+[Reliability](RELIABILITY.md) for the measured baseline, Grafana queries,
+budget policy, alert setup and runbook. Vanchi owns this work; teammate
+review and live firing/recovery evidence remain pending.
+
 Labels: **HW1** means it exists in the HW1 repo today. **Proposal** means it is new in this design. Target dates are left as TBD until the team sets checkpoints.
 
 ### 6.1 Contract revision we adopt
