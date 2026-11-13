@@ -402,8 +402,9 @@ See [Health checks](api.md#health-checks).
 **Level 4 proposal:** `get_issue` targets 99% availability and 95% successful
 reads within one second over seven days, including provider failures. See
 [Reliability](RELIABILITY.md) for the measured baseline, Grafana queries,
-budget policy, alert setup and runbook. Vanchi owns this work; teammate
-review and live firing/recovery evidence remain pending.
+budget policy, alert setup and runbook. Vanchi owns this work. The alert
+is installed and live firing/recovery was verified on November 13; team
+agreement on the targets and teammate review remain pending.
 
 Labels: **HW1** means it exists in the HW1 repo today. **Proposal** means it is new in this design. Target dates are left as TBD until the team sets checkpoints.
 

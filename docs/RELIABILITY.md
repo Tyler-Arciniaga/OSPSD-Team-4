@@ -1,7 +1,8 @@
 # Reliability (HW2 Level 4)
 
-Status: proposed targets; live verification pending. Student owner: Vanchi.
-Grafana account owner and requested reviewer: Tyler.
+Status: proposed targets; alert installed and live firing/recovery verified on
+November 13 ([evidence](evidence/level4-alert-exercise.md)). Student owner: Vanchi.
+Grafana account owner, alert installation and live verification: Tyler.
 
 ## Objectives and initial measurement
 
@@ -122,11 +123,12 @@ Set labels `service=ospsd-team4-render`, `operation=get_issue`. Set the summary
 to "ospsd-team4-render: more than 5% of eligible GETs failed over five minutes".
 Include the [dashboard](https://redowl1208.grafana.net/d/ckp4g9s/ospsd-team-4-level-3-observability)
 and [runbook](https://github.com/Tyler-Arciniaga/OSPSD-Team-4/blob/main/docs/RELIABILITY.md#respond-to-the-alert)
-links in the description. Route those labels to the team's agreed email or
-Slack contact point, leaving resolved notifications enabled. Suggested grouping:
+links in the description. Route those labels to the team's Google Chat space
+contact point, leaving resolved notifications enabled. Suggested grouping:
 service/operation; group wait 30s, group interval 1m, repeat interval 4h.
-Destination and cloud configuration remain pending; a contact-point Test
-message alone does not establish that the rule fires and resolves.
+The production rule and contact point are installed. A contact-point Test
+message alone does not establish that the rule fires and resolves; the
+[November 13 exercise](evidence/level4-alert-exercise.md) does.
 
 ## Respond to the alert
 
@@ -196,10 +198,15 @@ PY
    point/token. The generator deletes fixtures; stopping the server discards its
    in-memory data. No real provider data is created by this failure exercise.
 
-**Remaining acceptance:** teammate approval, actual server SLI/budget results,
-cloud alert installation, and received firing/resolved messages. The recorded
-baseline and local tests do not replace these. Level 4 is still incomplete.
-Remove remaining Grafana resources under the November 20 teardown plan.
+**Results (November 13):** the production alert is installed, and the
+disposable exercise fired and resolved with both messages received in the team
+Google Chat space. Server-side SLIs and budgets were recorded for the test job
+and for production's seven days. See the
+[exercise evidence](evidence/level4-alert-exercise.md).
+
+**Remaining acceptance:** team agreement on the proposed targets and teammate
+review of this evidence. Remove remaining Grafana resources under the
+November 20 teardown plan.
 
 The documented queries have a real Prometheus engine check:
 `PROMTOOL=/path/to/promtool uv run --locked pytest tests/test_reliability.py`.
