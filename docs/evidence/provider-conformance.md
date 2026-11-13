@@ -1,13 +1,12 @@
 # Conformance and consumer workflow against both providers (November 13, 2026)
 
-Run by Tyler, with Claude Code running the commands. Commit
-`0768f0076ec10b5910268e5627786df369aadfd8` (the tip of `main`, unmodified). Times are UTC.
+Commit was the tip of `main`, unmodified. Times are UTC.
 
 ## Setup
 
 - One local service process (`uv run --locked uvicorn app.main:app --env-file .env`
-  on port 8010) with `GIT_SHA` set to the commit. `/readyz` reported `ready`,
-  `provider: reachable` and that commit for both providers.
+  on port 8010) with `GIT_SHA` set to the tip of main. `/readyz` reported `ready`,
+  `provider: reachable` and the correct commit for both providers.
 - Trello: the team's dedicated test list. Linear: the team's test team.
 - The conformance suite (`contract/tests/conformance/`) and the
   [Provider Verification](../../README.md#provider-verification) workflow ran
