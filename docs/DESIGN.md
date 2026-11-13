@@ -15,7 +15,7 @@
 - [Decision Memo](https://docs.google.com/document/d/1Le2SpjEt_jmymtxRapjZk4H8QeueM_De) (see ”The Interface and Contract Guarantees” for contract revisions)  
 - Relevant Implementation Work:  
   - [HW1 Final Release](https://github.com/Tyler-Arciniaga/OSPSD-Team-4/releases/tag/milestone-3)
-  - [HW2 Release](https://github.com/Tyler-Arciniaga/OSPSD-Team-4/releases) (the release tag names the submitted commit)
+  - [HW2 Final Release](https://github.com/Tyler-Arciniaga/OSPSD-Team-4/releases/tag/hw2-final)
   - [Shared contract `issue-tracker-contract-v1.1.0`](https://github.com/Tyler-Arciniaga/OSPSD-Team-4/tree/issue-tracker-contract-v1.1.0/contract)
 
 This document describes the service as shipped. Sections 1 to 8 were
