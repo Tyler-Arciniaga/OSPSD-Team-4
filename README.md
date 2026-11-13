@@ -527,8 +527,10 @@ the same output.
 
    ```bash
    URL=http://127.0.0.1:8000; T=$(mktemp -d)
-   req() { curl -sS -o "$T/body" -D "$T/headers" -w '%{http_code}' -X "$1" "$URL$2" \
-             -H 'Content-Type: application/json' ${3:+-d "$3"} ${4:+-H "$4"}; }
+   req() {  # works in bash and zsh
+     local args=(-sS -o "$T/body" -D "$T/headers" -w '%{http_code}' -X "$1" "$URL$2" -H 'Content-Type: application/json')
+     [ -n "${3:-}" ] && args+=(-d "$3"); [ -n "${4:-}" ] && args+=(-H "$4")
+     curl "${args[@]}"; }
    show() { printf '%-22s %s %s\n' "$1" "$2" "$(jq -c 'if has("id") then .id = "<id>" end' "$T/body" 2>/dev/null)"; }
    listed() { printf '%-22s %s listed=%s\n' "$1" "$2" "$(jq --arg id "$ID" 'any(.issues[]; .id == $id)' "$T/body")"; }
 
