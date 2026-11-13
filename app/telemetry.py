@@ -48,6 +48,7 @@ OPERATIONS = frozenset(
         "create_issue",
         "update_issue",
         "delete_issue",
+        "list_issues",
         "healthz",
         "readyz",
         "routing",
