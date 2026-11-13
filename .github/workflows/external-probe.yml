@@ -1,0 +1,32 @@
+name: External synthetic probe
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '7 */6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    # Explicit opt-in avoids failing schedules before the fixture is configured.
+    if: ${{ vars.EXTERNAL_PROBE_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read the dedicated test issue
+        env:
+          PROBE_BASE_URL: ${{ vars.PROBE_BASE_URL }}
+          PROBE_ISSUE_ID: ${{ vars.PROBE_ISSUE_ID }}
+          PROBE_EXPECTED_TITLE: ${{ vars.PROBE_EXPECTED_TITLE }}
+        run: python3 -m scripts.external_probe check
+      - name: Preserve success and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: external-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: probe-results/sample.json
+          if-no-files-found: error
+          retention-days: 30
