@@ -564,8 +564,8 @@ assumptions the simulated tests cannot. It is skipped unless
 ### Live Trello verification
 
 Offline tests do not establish that real credentials and Trello
-access work. Follow [Trello Verification](../README.md#trello-verification)
-to verify the normally configured service against a real test card.
+access work. Follow [Provider Verification](../README.md#provider-verification)
+to verify the configured service against a real test account.
 
 ## Current Scope
 
@@ -615,7 +615,7 @@ Live verification with a disposable issue confirmed POST 201, GET 200,
 DELETE 204, immediate GET 404 and repeated DELETE 404. The automated cache
 invalidation test separately checks a GET performed before deletion so a
 previously cached issue cannot be returned afterward. Follow
-[Linear Verification](../README.md#linear-verification) to repeat the live
+[Provider Verification](../README.md#provider-verification) to repeat the live
 workflow.
 
 `tests/test_provider_selection.py` checks the `ISSUE_PROVIDER` choices and

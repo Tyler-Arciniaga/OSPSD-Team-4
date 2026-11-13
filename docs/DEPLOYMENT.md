@@ -282,12 +282,11 @@ scripts/smoke_check.sh "$URL" "$(curl -sS "$URL/readyz" | jq -r .commit)"
 `scripts/conformance_remote.sh "$URL"` runs the same suite without checking
 the commit.
 
-- **Linear:** rerun the suite against a Linear deployment once Linear rename
-  and delete are merged. To switch, set `issue_provider = "linear"` (see
+- **Linear:** the release smoke check uses Trello only. The suite is run
+  against Linear by hand ([recorded run](evidence/provider-conformance.md)).
+  To deploy Linear instead, set `issue_provider = "linear"` (see
   `infra/variables.tf`) and put `LINEAR_API_KEY` and `LINEAR_TEAM_ID` in the
   environment group.
-- **Until then**, every issue created against Linear is reported as a
-  `CleanupWarning`.
 
 ## Roll back
 
