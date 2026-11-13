@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from threading import Lock
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Header, Request, Response
+from fastapi import Depends, FastAPI, Header, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from opentelemetry.trace import get_current_span
@@ -43,7 +43,14 @@ from issue_tracker_contract.errors import (
     ServiceError,
 )
 from issue_tracker_contract.interface import IssueProvider
-from issue_tracker_contract.models import Issue, IssueCreate, IssueUpdate
+from issue_tracker_contract.models import (
+    DEFAULT_LIST_LIMIT,
+    MAX_LIST_LIMIT,
+    Issue,
+    IssueCreate,
+    IssueList,
+    IssueUpdate,
+)
 
 app = FastAPI(
     title="Issue Tracking Service",
@@ -226,6 +233,29 @@ def readyz(
         commit=deployed_commit(),
     )
     return JSONResponse(status_code=200 if ready else 503, content=body.model_dump())
+
+
+@app.get(
+    "/issues",
+    response_model=IssueList,
+    responses=_error_responses(403, 422, 502, 503),
+)
+def list_issues(
+    provider: Annotated[IssueProvider, Depends(get_issue_provider)],
+    limit: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=MAX_LIST_LIMIT,
+            description=(
+                f"The most issues to return, 1 to {MAX_LIST_LIMIT} "
+                f"(default {DEFAULT_LIST_LIMIT})."
+            ),
+        ),
+    ] = DEFAULT_LIST_LIMIT,
+) -> IssueList:
+    """List issues newest first, at most `limit` of them, never from the cache."""
+    return IssueList(issues=provider.list_issues(limit=limit))
 
 
 @app.get(

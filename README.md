@@ -2,7 +2,7 @@
 
 This is Team 4's repository for CS 3943 OSPSD.
 
-We are building a FastAPI backend service for the Issue Tracker vertical, using Trello as our provider.
+We are building a FastAPI backend service for the Issue Tracker vertical, using Trello or Linear as the provider selected at startup.
 
 ## Team Members
 
@@ -16,8 +16,11 @@ We are building a FastAPI backend service for the Issue Tracker vertical, using 
 
 ## Project Status
 
-The service implements `GET /issues/{issue_id}`, `POST /issues`,
-`PATCH /issues/{issue_id}`, and `DELETE /issues/{issue_id}` against Trello.
+The service implements `GET /issues/{issue_id}`, `GET /issues`, `POST /issues`,
+`PATCH /issues/{issue_id}`, and `DELETE /issues/{issue_id}` against Trello or Linear.
+`GET /issues` lists the newest issues (at most `limit`, default 50, up to
+100), uncached (see [List issues](docs/api.md#list-issues)).
+The following card mapping describes Trello; Linear maps issues to the same public fields.
 GET, POST, and PATCH translate a card's `id` and `name` into the public `id`
 and `title` fields; PATCH updates an issue's `title`; DELETE permanently
 removes the card. GET and PATCH return an `ETag`; PATCH with `If-Match`
@@ -26,7 +29,9 @@ rejects stale overwrites with `412` (see
 accepts an optional `Idempotency-Key` header, so retries and overlapping
 requests create at most one issue (see
 [Idempotent creation](docs/api.md#idempotent-creation)). Every failure returns one documented, provider-independent
-error format and writes one sanitized log line. Automated tests run without
+error format and writes a structured failure diagnostic. OpenTelemetry also records
+one outcome log, request metrics, and a trace for each completed HTTP request.
+Automated tests run without
 credentials or network access.
 
 The service checks its required configuration at startup and refuses to
@@ -46,10 +51,13 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
   - `contract/src/issue_tracker_contract/interface.py`: Provider-independent `IssueProvider` interface.
   - `contract/src/issue_tracker_contract/errors.py`: Error codes, the `ServiceError` raised by providers and endpoints, the code-to-status mapping, and the error response models.
   - `contract/tests/test_import_boundary.py`: Fails if the contract package imports service, framework, or provider code.
-  - `contract/tests/conformance/`: Shared HTTP conformance suite for get and create, run unchanged against a live service configured for each provider. Skipped unless `CONFORMANCE_BASE_URL` is set.
-- `app/config.py`: Startup configuration check: the variables each provider requires and the idempotency store directory.
+  - `contract/tests/conformance/`: Shared HTTP conformance suite for get, create, update, delete, and list, run unchanged against a live service configured for each provider. Skipped unless `CONFORMANCE_BASE_URL` is set.
+  - `app/config.py`: Startup configuration check: the variables each provider requires and the idempotency store directory.
 - `app/health.py`: Liveness and readiness responses, the cached provider reachability check, and the deployed commit.
-- `app/errors.py`: Failure logging.
+- `app/errors.py`: Failure diagnostics through Python logging.
+- `app/telemetry.py`: OpenTelemetry providers, bounded batch export, request metrics, memory ratio, and structured outcome logs.
+- `app/tracing.py`: Request spans, operation/outcome attributes, and the `X-Trace-ID` response header.
+- `docs/OBSERVABILITY.md`: Grafana setup, dashboard queries, telemetry behavior, and verification evidence.
 - `app/interface.py`: Service-side provider protocols: `ClosableIssueProvider` (every adapter startup builds can be probed with `ping()` and closed) and the optional `IdempotentIssueProvider` capability used for idempotent creation.
 - `app/providers/`: Provider adapters, one module per provider.
   - `app/providers/common.py`: What every adapter shares: the request timeout and the caller-facing error messages.
@@ -65,17 +73,18 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
   - `tests/trello/test_update_issue.py`: `PATCH` endpoint tests with simulated Trello responses and supplied providers.
   - `tests/trello/test_delete_issue.py`: DELETE request, failure, and injected-provider workflow tests.
   - `tests/trello/test_provider.py`: Provider compatibility, translation, and error tests.
-  - `tests/trello/test_list_issues.py`: The adapter's `list_issues`: the request, newest-first order and limit, and failure translation.
+  - `tests/trello/test_list_issues.py`: `list_issues` and `GET /issues`: the request, newest-first order and limit, uncached reads, failure translation and logging.
 - `tests/linear/`: Tests of the real Linear adapter with simulated GraphQL responses, through the real startup with `ISSUE_PROVIDER=linear`.
   - `tests/linear/test_get_issue.py`, `test_create_issue.py`: Retrieval and creation endpoint tests.
+  - `tests/linear/test_update_issue.py`: PATCH mutation, validation, missing/trashed issues, and failure/write-outcome translation.
   - `tests/linear/test_delete_issue.py`: Deletion, repeated deletion, cache invalidation, missing issues, unsuccessful responses, and timeout tests.
-  - `tests/linear/test_list_issues.py`: The adapter's `list_issues`: the query, trashed issues left out, the limit, and failure translation.
-  - `tests/linear/test_provider.py`: Protocol compatibility, uncached reads, unimplemented operations, and `close()`.
+  - `tests/linear/test_list_issues.py`: `list_issues` and `GET /issues`: the query, trashed issues left out, the limit, failure translation and logging.
+  - `tests/linear/test_provider.py`: Protocol compatibility, uncached reads, readiness probes, and `close()`.
   - `tests/linear/fake_linear.py`: The simulated Linear API and expected values shared by these tests.
 - `tests/test_provider_selection.py`: Startup builds the adapter named by `ISSUE_PROVIDER` and closes it at shutdown.
 - `tests/test_config.py`: Startup configuration checks, including that a server started with a variable missing exits without printing values.
 - `tests/test_health.py`: `/healthz`, `/readyz`, the provider check's caching, and the reported commit.
-- `tests/test_injected_provider.py`: Endpoint tests using supplied fake providers.
+- `tests/test_injected_provider.py`: Endpoint tests using supplied fake providers, including the list envelope and `limit` validation.
 - `tests/controlled/`: The controlled implementation CI runs the conformance suite against: `provider.py` (an in-memory provider that follows the contract, with optional injected faults) and `server.py` (the real app with that provider injected, started with uvicorn).
 - `tests/release/`: Tests of `scripts/release.py` against simulated Render, GitHub and service APIs.
 - `tests/test_smoke_check.py`: Runs `scripts/smoke_check.sh` against the controlled service, working and with injected faults.
@@ -245,7 +254,8 @@ image pinned by digest, it checks that image instead. See
 Retrieve an issue using `GET /issues/{issue_id}`, where `issue_id` is
 the required issue identifier. Create an issue using `POST /issues`
 with a JSON body containing a `title`. Permanently delete an issue using
-`DELETE /issues/{issue_id}`. Check the service with `GET /healthz`
+`DELETE /issues/{issue_id}`. List the newest issues using
+`GET /issues`, optionally with `?limit=` (1 to 100, default 50). Check the service with `GET /healthz`
 (liveness) and `GET /readyz` (readiness; see
 [Health checks](docs/api.md#health-checks)).
 
@@ -279,6 +289,17 @@ restart the server. Errors have the form
 `{"error": {"code": "...", "message": "..."}}`; see
 [the error model](docs/api.md#error-model) for every code, its status, and
 whether to retry.
+
+To list the two newest issues:
+
+```bash
+curl -i 'http://127.0.0.1:8000/issues?limit=2'
+```
+
+Expected status: `200 OK`, with a body of the form
+`{"issues": [{"id": "...", "title": "..."}, ...]}`, newest first. Lists are
+never cached. A `limit` outside 1 to 100 returns `422`. See
+[List issues](docs/api.md#list-issues).
 
 To create an issue:
 
@@ -386,10 +407,12 @@ Run all automated tests:
 uv run --locked pytest
 ```
 
-Tests cover all four endpoints, request body validation (including the
+Tests cover all five endpoints, request body validation (including the
 shared title rule for POST and PATCH), Trello request construction and
 response translation, missing credentials or target issue list, and provider
-failures. They also verify that the endpoints can use a supplied fake
+failures. List tests cover newest-first order, the `limit` rule and its
+`422`, uncached reads, and that a missing list or team is a `502`, not a `404`.
+They also verify that the endpoints can use a supplied fake
 provider, malformed Trello IDs cause no network request, invalid bodies are
 rejected before calling provider methods, and deleted issues cannot be read
 or deleted again. Error tests check the full error
@@ -454,7 +477,7 @@ it with the commit it points to:
 
 ```toml
 # pyproject.toml
-issue-tracker-contract = { git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git", tag = "issue-tracker-contract-v1.0.0", subdirectory = "contract" }
+issue-tracker-contract = { git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git", tag = "issue-tracker-contract-v1.1.0", subdirectory = "contract" }
 ```
 
 Only `contract/src/` and `contract/pyproject.toml` are part of the
@@ -588,8 +611,7 @@ for errors and supported IDs.
 
 ## Linear Verification
 
-The Linear adapter currently implements GET, POST and DELETE. PATCH is
-not yet implemented. Use the documented single-process startup command
+The Linear adapter implements GET, POST, PATCH and DELETE. Use the documented single-process startup command
 for this workflow so all requests share the same cache.
 
 1. In the test team on the Linear platform, create an issue named `HW1 Linear GET test`. Linear
@@ -704,6 +726,20 @@ Infrastructure changes are applied by hand with approval. See
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the pipeline, finding the
 running commit, rollback, repairing provider data, the bootstrap, the faulty
 release demonstration, teardown, and the teammate walkthrough.
+
+## Observability
+
+The deployed service exports OpenTelemetry metrics, outcome logs, and traces to
+Grafana Cloud under `ospsd-team4-render`. Local exports should use
+`ospsd-team4-local` so they can be filtered separately.
+
+- [Team dashboard](https://redowl1208.grafana.net/d/ckp4g9s/ospsd-team-4-level-3-observability) (Grafana access required).
+- [Observability guide](docs/OBSERVABILITY.md): configuration, all five panel queries,
+  trace/log correlation, export limits, and recorded verification results.
+
+Remote export is opt-in: `OTEL_ENABLED=false` selects console export, rather than
+turning instrumentation off. See `.env.example` for the settings. Never commit
+Grafana authentication headers.
 
 ## Reliability
 

@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11.5"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -488,8 +488,8 @@ wheels = [
 
 [[package]]
 name = "issue-tracker-contract"
-version = "1.0.0"
-source = { git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git?subdirectory=contract&tag=issue-tracker-contract-v1.0.0#e2528b1a8b55ea7c74df8d222b9e6555b9d87925" }
+version = "1.1.0"
+source = { git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git?subdirectory=contract&tag=issue-tracker-contract-v1.1.0#18fb7ae6f9c9cf5dbfed7208114d036a582ba54c" }
 dependencies = [
     { name = "pydantic" },
 ]
@@ -974,7 +974,7 @@ dev = [
 requires-dist = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.142.2" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "issue-tracker-contract", git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git?subdirectory=contract&tag=issue-tracker-contract-v1.0.0" },
+    { name = "issue-tracker-contract", git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git?subdirectory=contract&tag=issue-tracker-contract-v1.1.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.39,<2" },
     { name = "opentelemetry-sdk", specifier = ">=1.39,<2" },
 ]
