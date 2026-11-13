@@ -527,7 +527,7 @@ the same output.
 
    ```bash
    URL=http://127.0.0.1:8000; T=$(mktemp -d)
-   req() {  # works in bash and zsh
+   req() {
      local args=(-sS -o "$T/body" -D "$T/headers" -w '%{http_code}' -X "$1" "$URL$2" -H 'Content-Type: application/json')
      [ -n "${3:-}" ] && args+=(-d "$3"); [ -n "${4:-}" ] && args+=(-H "$4")
      curl "${args[@]}"; }
