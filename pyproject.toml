@@ -16,7 +16,8 @@ dependencies = [
 issue-tracker-contract = { git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git", tag = "issue-tracker-contract-v1.1.0", subdirectory = "contract" }
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
+# team-4-trello-impl/src lets the Trello package's own tests import it.
+pythonpath = [".", "team-4-trello-impl/src"]
 
 [dependency-groups]
 dev = [
@@ -26,8 +27,9 @@ dev = [
 ]
 
 [tool.ruff]
-# Treat both the service and the contract package as first-party code.
-src = [".", "contract/src"]
+# Treat the service, the contract package and the Trello package as
+# first-party code.
+src = [".", "contract/src", "team-4-trello-impl/src"]
 
 [tool.ruff.lint]
 # Use Ruff's default rules as a baseline for common coding mistakes.

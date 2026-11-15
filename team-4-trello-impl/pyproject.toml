@@ -1,0 +1,15 @@
+[project]
+name = "team-4-issue-tracker-trello"
+version = "1.0.0"
+description = "Team 4's Trello implementation of the shared issue tracker contract."
+readme = "README.md"
+requires-python = ">=3.11.5"
+dependencies = [
+    # A direct reference, so pip and uv resolve the tagged contract for any
+    # installer. [tool.uv.sources] is not passed on to dependents.
+    "issue-tracker-contract @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@issue-tracker-contract-v1.1.0#subdirectory=contract",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13"]
+build-backend = "uv_build"
