@@ -63,6 +63,10 @@ GitHub Actions is configured to run linting, formatting checks, type checking, a
   - `contract/tests/test_import_boundary.py`: Fails if the contract package imports service, framework, or provider code.
   - `contract/tests/conformance/`: Shared HTTP conformance suite for get, create, update, delete, and list, run unchanged against a live service configured for each provider. Skipped unless `CONFORMANCE_BASE_URL` is set.
   - `app/config.py`: Startup configuration check: the variables each provider requires and the idempotency store directory.
+- `team-4-trello-impl/`: The installable Trello implementation package, `team_4_issue_tracker_trello`, for other teams' services (see [Trello implementation package](#trello-implementation-package)). It must not import `app/`, a web framework, or a telemetry library.
+  - `team-4-trello-impl/src/team_4_issue_tracker_trello/provider.py`: `TrelloIssueProvider`, copied unchanged from `app/providers/trello_provider.py` apart from its imports.
+  - `team-4-trello-impl/src/team_4_issue_tracker_trello/_common.py`, `_tracing.py`: The shared error helpers (a copy of `app/providers/common.py`) and the optional `set_span_factory()` tracing hook.
+  - `team-4-trello-impl/tests/`: Provider tests with simulated Trello responses, and `test_package_boundary.py`, which fails if the package imports service, framework, or telemetry code.
 - `app/health.py`: Liveness and readiness responses, the cached provider reachability check, and the deployed commit.
 - `app/errors.py`: Failure diagnostics through Python logging.
 - `app/telemetry.py`: OpenTelemetry providers, bounded batch export, request metrics, memory ratio, and structured outcome logs.
@@ -403,7 +407,7 @@ uv run --locked ruff format --check .
 Check for inconsistencies between type annotations and how values are used:
 
 ```bash
-uv run --locked mypy app tests scripts contract/src contract/tests
+uv run --locked mypy app tests scripts contract/src contract/tests team-4-trello-impl/src team-4-trello-impl/tests
 ```
 
 ### Automated Tests
@@ -508,6 +512,30 @@ Tests in `contract/tests/` run from the working tree, so changing only
 them needs no new tag. The import-boundary test reads `contract/src/` from
 disk, so it checks the next release before it is tagged; the conformance
 suite tests a running service over HTTP.
+
+### Trello implementation package
+
+Other teams use our Trello provider through the package in
+[`team-4-trello-impl/`](team-4-trello-impl/README.md), not through this
+service. It contains only `TrelloIssueProvider`, depends only on the tagged
+contract, and is released under its own tags:
+
+```bash
+pip install "team-4-issue-tracker-trello @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@team-4-issue-tracker-trello-v1.0.0#subdirectory=team-4-trello-impl"
+```
+
+Its README covers uv installation, configuration and errors; its
+[CHANGELOG](team-4-trello-impl/CHANGELOG.md) records each release. The
+service still runs its own copy in `app/providers/trello_provider.py`, so a
+provider change must be made in both until the service switches to the
+package. Releasing a package change works like a contract change: bump
+`version` in `team-4-trello-impl/pyproject.toml`, add a CHANGELOG entry,
+merge, then tag the merge commit (never moving a tag):
+
+```bash
+git tag -a team-4-issue-tracker-trello-vX.Y.Z <commit> -m "team-4-issue-tracker-trello X.Y.Z"
+git push origin team-4-issue-tracker-trello-vX.Y.Z
+```
 
 ## Provider Verification
 
