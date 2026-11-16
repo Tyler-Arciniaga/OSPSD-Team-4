@@ -96,15 +96,24 @@ def _zone(timezone: str) -> ZoneInfo:
         raise PlanInputError("timezone", "must be an IANA time zone name") from None
 
 
+def parse_interval(start: str, end: str, field: str) -> tuple[datetime, datetime]:
+    """Parse an RFC 3339 interval as UTC instants; `field` names it in errors.
+
+    Also used for the blocks of a replayed plan, which are checked by the
+    same rule before any provider call.
+    """
+    start_at = _parse_timestamp(start, f"{field}.start")
+    end_at = _parse_timestamp(end, f"{field}.end")
+    if start_at >= end_at:
+        raise PlanInputError(field, "start must be before end")
+    return start_at, end_at
+
+
 def _busy_intervals(busy: Sequence[BusyInterval]) -> list[_Interval]:
-    intervals = []
-    for index, interval in enumerate(busy):
-        start = _parse_timestamp(interval.start, f"busy[{index}].start")
-        end = _parse_timestamp(interval.end, f"busy[{index}].end")
-        if start >= end:
-            raise PlanInputError(f"busy[{index}]", "start must be before end")
-        intervals.append((start, end))
-    return intervals
+    return [
+        parse_interval(interval.start, interval.end, f"busy[{index}]")
+        for index, interval in enumerate(busy)
+    ]
 
 
 def _merge(intervals: list[_Interval], window: _Interval) -> list[_Interval]:
