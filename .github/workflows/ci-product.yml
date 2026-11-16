@@ -42,11 +42,14 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      # The uv version matches the image; Python matches its base image.
+      # Python matches the image's base image. uv downloads it, and uv
+      # 0.12.17 (the image's uv) only knows Python up to 3.14.7 on Linux, so
+      # CI uses 0.12.22, the version the lockfile was made and checked with.
+      # The image is unaffected: it uses the base image's Python.
       - name: Set up uv and Python
         uses: astral-sh/setup-uv@v9.0.0
         with:
-          version: "0.12.17"
+          version: "0.12.22"
           python-version: "3.14.8"
           working-directory: product
 
