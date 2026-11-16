@@ -65,3 +65,9 @@ src = ["src", "tests"]
 
 [tool.mypy]
 strict = true
+
+[tool.pyright]
+# Editors (pyright/basedpyright) resolve imports from the product venv, not the
+# repository root venv, which lacks the calendar and storage packages.
+venvPath = "."
+venv = ".venv"

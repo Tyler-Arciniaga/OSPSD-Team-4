@@ -5,12 +5,12 @@ from fastapi.testclient import TestClient
 
 from ospsd_team4_product.config import ConfigError
 from ospsd_team4_product.main import app, deployed_commit
-from tests.test_config import BASE
+from tests.test_focus_day import FAKES
 
 
 @pytest.fixture
 def configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name, value in BASE.items():
+    for name, value in FAKES.items():
         monkeypatch.setenv(name, value)
 
 
@@ -46,3 +46,17 @@ def test_deployed_commit_rejects_non_commit_values() -> None:
         == "abcdef1"
     )
     assert deployed_commit({}) == "unknown"
+
+
+@pytest.mark.usefixtures("configured")
+def test_startup_fails_when_a_provider_cannot_be_built(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Like Dropbox without credentials: the constructor raises.
+    monkeypatch.setenv("STORAGE_PROVIDER", "tests.helpers:failing_factory")
+
+    with (
+        pytest.raises(ConfigError, match="STORAGE_PROVIDER could not be built"),
+        TestClient(app),
+    ):
+        pass

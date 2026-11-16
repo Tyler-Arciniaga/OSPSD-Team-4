@@ -18,3 +18,23 @@ def make_calendar(*, token_file: str | Path) -> Provider:
 
 
 NOT_CALLABLE = 42
+
+
+class TokenCalendar:
+    """Records the token file it was built with; otherwise does nothing."""
+
+    def __init__(self, token_file: str) -> None:
+        self.token_file = token_file
+
+    def create(self) -> None: ...
+    def get(self) -> None: ...
+    def replace(self) -> None: ...
+    def delete(self) -> None: ...
+
+
+def make_token_calendar(*, token_file: str) -> TokenCalendar:
+    return TokenCalendar(token_file)
+
+
+def failing_factory() -> Provider:
+    raise RuntimeError("secret credential missing")

@@ -1,0 +1,251 @@
+# Errors
+
+This is the single reference for every error the product service can report:
+startup failures, the error body of `POST /v1/focus-day`, and how each
+provider's failures map to it. Code that maps errors links here instead of
+repeating the tables.
+
+## Codes and HTTP statuses
+
+The service reuses the HW1 error codes from `issue_tracker_contract.errors`
+(`ErrorCode`, `STATUS_FOR_CODE`) and adds no new ones, so callers branch on
+the same codes as for the HW2 service.
+
+| Code                     | HTTP status |
+| ------------------------ | ----------- |
+| `invalid_input`          | 422         |
+| `not_found`              | 404         |
+| `access_denied`          | 403         |
+| `service_not_configured` | 503         |
+| `precondition_failed`    | 412         |
+| `provider_error`         | 502         |
+| `internal_error`         | 500         |
+
+`idempotency_key_reused` (422) and `request_in_progress` (409) exist in the
+HW1 model but the product does not use them.
+
+## Step errors
+
+Every failure inside the operation is a `StepError`
+(`src/ospsd_team4_product/errors.py`). Only the adapters create them from
+provider failures; nothing else from a provider reaches the orchestrator.
+
+| Field              | Meaning                                                                    |
+| ------------------ | -------------------------------------------------------------------------- |
+| `step`             | `list_issues`, `plan`, `create_events` or `write_standup_doc`              |
+| `code`             | An HW1 code from the table above; it sets the HTTP status                  |
+| `message`          | Safe to show callers. Always written by this service, never a provider's   |
+| `retryable`        | Repeating the same request later may succeed (a transient outage)          |
+| `may_have_applied` | A write was sent but its outcome is unknown, so it may have taken effect  |
+| `details`          | Optional per-field problems (`ErrorDetail`), for invalid input             |
+| `cause`            | A short internal reason, written to logs only, never returned              |
+
+Provider messages are never passed on because they can contain paths, IDs,
+URLs or operator hints. The one exception is the tracker: its `ServiceError`
+messages already follow the HW1 rule (written by our tracker package for
+callers), so they pass through unchanged.
+
+## Error body of `POST /v1/focus-day`
+
+Source: `src/ospsd_team4_product/models.py`, `orchestrator.py`. The body
+extends the HW1 shape: `error.code`, `error.message` and `error.details` keep
+their HW1 meaning, and the product adds `error.step`, `error.retryable` and
+`error.may_have_applied`. The top level reports how far the operation got:
+
+| Field         | Meaning                                                                 |
+| ------------- | ----------------------------------------------------------------------- |
+| `status`      | `partial` if `created` is not empty, otherwise `failed`                 |
+| `steps`       | All four steps, each `ok`, `failed` or `skipped`; the failed one has `error` |
+| `plan`        | The plan, or `null` if planning did not finish                          |
+| `created`     | Issue ID to event ID, for every event known to exist                    |
+| `doc`         | Always `null` on failure                                                |
+| `failed_step` | The step that failed (same as `error.step`)                             |
+| `error`       | The fields above                                                        |
+
+Example (calendar outage on block 2 of 3, HTTP 502):
+
+```json
+{
+  "status": "partial",
+  "steps": [
+    {"name": "list_issues", "status": "ok", "error": null},
+    {"name": "plan", "status": "ok", "error": null},
+    {"name": "create_events", "status": "failed", "error": {"...": "same as error"}},
+    {"name": "write_standup_doc", "status": "skipped", "error": null}
+  ],
+  "plan": {"blocks": ["..."], "unscheduled": []},
+  "created": {"demo-1": "fake-event-1"},
+  "doc": null,
+  "failed_step": "create_events",
+  "error": {
+    "code": "provider_error",
+    "message": "The calendar is currently unavailable",
+    "details": null,
+    "step": "create_events",
+    "retryable": true,
+    "may_have_applied": false
+  }
+}
+```
+
+Rules:
+
+- Any failed step returns the HTTP status of its code. A plan that leaves
+  some issues unscheduled (`no_free_slot`) is not an error: it is 200 with
+  `status: ok`.
+- To retry, send the same request with `replay: {"plan": ..., "created": ...}`
+  copied from the failure body. On replay `list_issues` and `plan` are
+  `skipped`, existing events are kept, and only missing ones are created.
+- If `error.may_have_applied` is true for `create_events`, an event may exist
+  that is not in `created`. A replay cannot know about it, so check the
+  calendar first; replaying anyway can create a duplicate.
+- Each failure is logged as one JSON line (`event: focus_day_failed`) with
+  the step, code, flags, number of created events and `cause`, never the
+  message or any provider text.
+
+## `list_issues` (tracker)
+
+Source: `src/ospsd_team4_product/adapters/tracker.py`.
+
+| Tracker failure                  | Code           | retryable                      | may_have_applied |
+| -------------------------------- | -------------- | ------------------------------ | ---------------- |
+| `ServiceError` with any code     | the same code  | yes only for `provider_error`  | no               |
+| any other exception              | provider_error | no                             | no               |
+
+A failed read changes nothing, so `may_have_applied` is always false. An
+unexpected exception is logged with its traceback and reported as "The issue
+tracker returned an unusable response".
+
+## `plan` (planner and request input)
+
+Source: `src/ospsd_team4_product/planner.py`, `src/ospsd_team4_product/doc.py`.
+
+All input is checked before any provider is called, so a rejected request has
+no side effect. Every problem is reported as the `plan` step failing with
+`invalid_input` (422), message "The request is invalid", and one
+`ErrorDetail` per problem naming the field (`busy[0].start` style). The
+other steps are `skipped`. Not retryable, nothing applied.
+
+Schema errors (the request body itself, `models.py`):
+
+| Field                                        | Problem                                     |
+| -------------------------------------------- | ------------------------------------------- |
+| `body`                                       | missing or not a JSON object                |
+| `assignee`, `day`                            | missing                                     |
+| `day`                                        | not `YYYY-MM-DD`, or not a real date        |
+| `working_window.start`, `working_window.end` | not `HH:MM` (00:00 to 23:59)                |
+| `default_minutes`                            | not a whole number from 1 to 1440           |
+| any unknown field                            | extra fields are rejected                   |
+
+Planner and path rules (`PlanInputError(field, message)`):
+
+| Field                                        | Problem                                         |
+| -------------------------------------------- | ----------------------------------------------- |
+| `assignee`                                   | not 1 to 64 of `A-Z a-z 0-9 . _ -`, or `.`/`..` |
+| `timezone`                                   | not an IANA time zone name                      |
+| `working_window`                             | start is not before end                         |
+| `busy[i].start`, `busy[i].end`               | not RFC 3339 with whole seconds and an offset   |
+| `busy[i]`                                    | start is not before end                         |
+| `replay.plan.blocks[i].start`, `.end`        | not RFC 3339 with whole seconds and an offset   |
+| `replay.plan.blocks[i]`                      | start is not before end                         |
+| `replay.plan.blocks[i].issue_id`             | the same issue appears in two blocks            |
+| `replay.created`                             | names an issue with no block in `replay.plan`   |
+
+## `create_events` (calendar)
+
+Source: `src/ospsd_team4_product/adapters/calendar.py`. Mapping from
+calendar-contract v0.1.0 `CalendarError`:
+
+| CalendarError                           | Code                   | retryable | may_have_applied            |
+| --------------------------------------- | ---------------------- | --------- | --------------------------- |
+| `INVALID_INPUT`                         | invalid_input          | no        | no                          |
+| `NOT_FOUND`                             | not_found              | no        | no                          |
+| `ACCESS_DENIED`                         | access_denied          | no        | no                          |
+| `PROVIDER_UNAVAILABLE`, retryable=True  | provider_error         | yes       | no                          |
+| `PROVIDER_UNAVAILABLE`, retryable=False | service_not_configured | no        | no                          |
+| `PROVIDER_ERROR` on create              | provider_error         | as given  | yes, unless retryable=True  |
+| `PROVIDER_ERROR` on get (replay)        | provider_error         | as given  | no                          |
+| any other exception on create           | provider_error         | no        | yes                         |
+| any other exception on get              | provider_error         | no        | no                          |
+| `CreateEvent` fails validation          | internal_error         | no        | no                          |
+
+Notes:
+
+- `PROVIDER_UNAVAILABLE` with retryable=False is how Team 5 reports a missing,
+  expired or revoked OAuth token. An operator must re-authorize, so it is a
+  configuration problem, not an outage.
+- An uncertain create (`PROVIDER_ERROR`, retryable=False, or any unexpected
+  exception) is never retried, by the adapter or the orchestrator. Its message
+  tells the caller to check the calendar before retrying.
+- On replay, `get` returning `NOT_FOUND` is not an error: the event is
+  recreated.
+- The planner only produces valid times, so a `CreateEvent` validation
+  failure is a bug in this service.
+
+## `write_standup_doc` (storage)
+
+Source: `src/ospsd_team4_product/adapters/storage.py`. The shared contract
+(cloud-storage-api 0.3.1) has no upsert, so the doc is written as:
+
+1. `replace`. Success: done.
+2. `ConflictError` (the file changed while replacing): `replace` once more.
+3. `NotFoundError`: `create`.
+4. `ConflictError` from that `create` (someone created it in between):
+   `replace` once more.
+
+Anything else fails the step with this mapping. The same plan always gives
+the same bytes, so repeating the whole write is safe.
+
+| Storage error                   | Code                | retryable | may_have_applied |
+| ------------------------------- | ------------------- | --------- | ---------------- |
+| `InvalidRequestError`           | invalid_input       | no        | no               |
+| `PermissionDeniedError`         | access_denied       | no        | no               |
+| `NotFoundError`                 | not_found           | no        | no               |
+| `ConflictError`                 | precondition_failed | no        | no               |
+| `FileTooLargeError`             | invalid_input       | no        | no               |
+| `InvalidOperationError`         | invalid_input       | no        | no               |
+| `ProviderUnavailableError`      | provider_error      | yes       | yes              |
+| `ProviderError`                 | provider_error      | no        | yes              |
+| other `StorageError` / anything | provider_error      | no        | yes              |
+
+Unexpected exceptions are logged by class name only.
+
+## Startup errors
+
+Configuration is checked once at startup (`config.py`, `factories.py`). A
+problem raises `ConfigError`, logs `startup_config_invalid`, and the process
+exits before serving requests. Messages name the variable, never its value.
+
+| Message                                                           | Cause                                                        |
+| ----------------------------------------------------------------- | ------------------------------------------------------------ |
+| `Missing required configuration: <VAR>`                           | a `*_PROVIDER` variable, or `CALENDAR_TOKEN_FILE` when the calendar factory takes `token_file`, is unset |
+| `<VAR> must have the form module:attr`                            | malformed provider path                                      |
+| `<VAR> names a module that cannot be imported`                    | the module is not installed or fails to import               |
+| `<VAR> names an attribute that does not exist`                    | wrong attribute in the provider path                         |
+| `<VAR> must name a callable`                                      | the attribute is not a factory                               |
+| `CALENDAR_TOKEN_FILE must be an absolute path`                    | relative token path                                          |
+| `CALENDAR_TOKEN_FILE does not name a readable file`               | the secret file is not mounted or not readable               |
+| `DEFAULT_WORKING_WINDOW must have the form HH:MM-HH:MM with start before end` | bad default window                               |
+| `DEFAULT_MINUTES must be a whole number from 1 to 1440`           | bad default block length                                     |
+| `DEFAULT_TIMEZONE must be an IANA time zone name`                 | bad default zone                                             |
+| `<VAR> could not be built; check that provider's configuration`   | the factory raised, e.g. Team 3's `DropboxAuthError` when the Dropbox credentials are missing |
+| `TRACKER_PROVIDER must build an IssueProvider`                    | the factory returned the wrong type                          |
+| `CALENDAR_PROVIDER must build a CalendarService`                  | the factory returned the wrong type                          |
+| `STORAGE_PROVIDER must build a DocumentStorage`                   | the factory returned the wrong type                          |
+
+Because providers are built at startup, a missing Dropbox credential stops
+the service instead of failing each request with `service_not_configured`.
+
+## Other HTTP errors
+
+These are outside the operation, so they use the plain HW1 shape
+(`{"error": {"code", "message"}}`) with no step:
+
+| Case                         | Status | Code             | Message                 |
+| ---------------------------- | ------ | ---------------- | ----------------------- |
+| unknown path                 | 404    | `not_found`      | Resource not found      |
+| wrong method                 | 405    | `invalid_input`  | Request not supported   |
+| a bug (unexpected exception) | 500    | `internal_error` | Internal server error   |
+
+A bug is logged with its traceback (`event: unexpected_error`). Provider
+exceptions never reach this handler: the adapters translate all of them.
