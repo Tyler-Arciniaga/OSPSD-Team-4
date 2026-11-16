@@ -47,23 +47,61 @@ callers), so they pass through unchanged.
 
 ## Error body of `POST /v1/focus-day`
 
-Implemented in WP5. The body extends the HW1 shape: `error.code` and
-`error.message` keep their HW1 meaning, and the product adds `error.step`,
-`error.retryable` and `error.may_have_applied`. The top level reports how far
-the operation got:
+Source: `src/ospsd_team4_product/models.py`, `orchestrator.py`. The body
+extends the HW1 shape: `error.code`, `error.message` and `error.details` keep
+their HW1 meaning, and the product adds `error.step`, `error.retryable` and
+`error.may_have_applied`. The top level reports how far the operation got:
 
-| Field         | Meaning                                                           |
-| ------------- | ----------------------------------------------------------------- |
-| `status`      | `partial` if any calendar events were created, otherwise `failed` |
-| `steps`       | The status of each of the four steps                              |
-| `plan`        | The plan, if the `plan` step finished                             |
-| `created`     | The IDs of events created before the failure                      |
-| `failed_step` | The step that failed (same as `error.step`)                       |
-| `error`       | The fields above                                                  |
+| Field         | Meaning                                                                 |
+| ------------- | ----------------------------------------------------------------------- |
+| `status`      | `partial` if `created` is not empty, otherwise `failed`                 |
+| `steps`       | All four steps, each `ok`, `failed` or `skipped`; the failed one has `error` |
+| `plan`        | The plan, or `null` if planning did not finish                          |
+| `created`     | Issue ID to event ID, for every event known to exist                    |
+| `doc`         | Always `null` on failure                                                |
+| `failed_step` | The step that failed (same as `error.step`)                             |
+| `error`       | The fields above                                                        |
 
-Any failed step returns the HTTP status of its code. A plan that leaves some
-issues unscheduled (`no_free_slot`) is not an error: it is 200 with
-`status: ok`.
+Example (calendar outage on block 2 of 3, HTTP 502):
+
+```json
+{
+  "status": "partial",
+  "steps": [
+    {"name": "list_issues", "status": "ok", "error": null},
+    {"name": "plan", "status": "ok", "error": null},
+    {"name": "create_events", "status": "failed", "error": {"...": "same as error"}},
+    {"name": "write_standup_doc", "status": "skipped", "error": null}
+  ],
+  "plan": {"blocks": ["..."], "unscheduled": []},
+  "created": {"demo-1": "fake-event-1"},
+  "doc": null,
+  "failed_step": "create_events",
+  "error": {
+    "code": "provider_error",
+    "message": "The calendar is currently unavailable",
+    "details": null,
+    "step": "create_events",
+    "retryable": true,
+    "may_have_applied": false
+  }
+}
+```
+
+Rules:
+
+- Any failed step returns the HTTP status of its code. A plan that leaves
+  some issues unscheduled (`no_free_slot`) is not an error: it is 200 with
+  `status: ok`.
+- To retry, send the same request with `replay: {"plan": ..., "created": ...}`
+  copied from the failure body. On replay `list_issues` and `plan` are
+  `skipped`, existing events are kept, and only missing ones are created.
+- If `error.may_have_applied` is true for `create_events`, an event may exist
+  that is not in `created`. A replay cannot know about it, so check the
+  calendar first; replaying anyway can create a duplicate.
+- Each failure is logged as one JSON line (`event: focus_day_failed`) with
+  the step, code, flags, number of created events and `cause`, never the
+  message or any provider text.
 
 ## `list_issues` (tracker)
 
@@ -82,19 +120,36 @@ tracker returned an unusable response".
 
 Source: `src/ospsd_team4_product/planner.py`, `src/ospsd_team4_product/doc.py`.
 
-The planner and the doc path check raise `PlanInputError(field, message)`.
-WP5 reports it as `invalid_input` with one `ErrorDetail` naming the field:
+All input is checked before any provider is called, so a rejected request has
+no side effect. Every problem is reported as the `plan` step failing with
+`invalid_input` (422), message "The request is invalid", and one
+`ErrorDetail` per problem naming the field (`busy[0].start` style). The
+other steps are `skipped`. Not retryable, nothing applied.
 
-| Field                         | Problem                                          |
-| ----------------------------- | ------------------------------------------------ |
-| `timezone`                    | not an IANA time zone name                       |
-| `working_window`              | start is not before end                          |
-| `default_minutes`             | less than 1                                      |
-| `busy[i].start`, `busy[i].end` | not RFC 3339 with whole seconds and an offset   |
-| `busy[i]`                     | start is not before end                          |
-| `assignee`                    | not 1 to 64 of `A-Z a-z 0-9 . _ -`, or `.`/`..` |
+Schema errors (the request body itself, `models.py`):
 
-Not retryable, nothing applied.
+| Field                                        | Problem                                     |
+| -------------------------------------------- | ------------------------------------------- |
+| `body`                                       | missing or not a JSON object                |
+| `assignee`, `day`                            | missing                                     |
+| `day`                                        | not `YYYY-MM-DD`, or not a real date        |
+| `working_window.start`, `working_window.end` | not `HH:MM` (00:00 to 23:59)                |
+| `default_minutes`                            | not a whole number from 1 to 1440           |
+| any unknown field                            | extra fields are rejected                   |
+
+Planner and path rules (`PlanInputError(field, message)`):
+
+| Field                                        | Problem                                         |
+| -------------------------------------------- | ----------------------------------------------- |
+| `assignee`                                   | not 1 to 64 of `A-Z a-z 0-9 . _ -`, or `.`/`..` |
+| `timezone`                                   | not an IANA time zone name                      |
+| `working_window`                             | start is not before end                         |
+| `busy[i].start`, `busy[i].end`               | not RFC 3339 with whole seconds and an offset   |
+| `busy[i]`                                    | start is not before end                         |
+| `replay.plan.blocks[i].start`, `.end`        | not RFC 3339 with whole seconds and an offset   |
+| `replay.plan.blocks[i]`                      | start is not before end                         |
+| `replay.plan.blocks[i].issue_id`             | the same issue appears in two blocks            |
+| `replay.created`                             | names an issue with no block in `replay.plan`   |
 
 ## `create_events` (calendar)
 
@@ -180,3 +235,17 @@ exits before serving requests. Messages name the variable, never its value.
 
 Because providers are built at startup, a missing Dropbox credential stops
 the service instead of failing each request with `service_not_configured`.
+
+## Other HTTP errors
+
+These are outside the operation, so they use the plain HW1 shape
+(`{"error": {"code", "message"}}`) with no step:
+
+| Case                         | Status | Code             | Message                 |
+| ---------------------------- | ------ | ---------------- | ----------------------- |
+| unknown path                 | 404    | `not_found`      | Resource not found      |
+| wrong method                 | 405    | `invalid_input`  | Request not supported   |
+| a bug (unexpected exception) | 500    | `internal_error` | Internal server error   |
+
+A bug is logged with its traceback (`event: unexpected_error`). Provider
+exceptions never reach this handler: the adapters translate all of them.
