@@ -193,3 +193,9 @@ override.tf.json
 .terraformrc
 terraform.rc
 probe-results/
+# Product service credentials (HW3). The Google OAuth client and token files
+# and any Dropbox token file live outside the repository; these patterns
+# catch a misplaced copy.
+client_secret*.json
+**/token*.json
+**/*credentials*.json

@@ -1,0 +1,19 @@
+# Only pyproject.toml, uv.lock, README.md and src/ are needed to build.
+# Everything else stays out, above all credentials and token files.
+.env
+.env.*
+**/.env
+**/.env.*
+*.json
+.venv
+**/__pycache__
+**/*.py[cod]
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.DS_Store
+tests
+docs
+infra
+Dockerfile
+.dockerignore
