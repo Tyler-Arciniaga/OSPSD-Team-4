@@ -1,0 +1,8 @@
+$ pipvenv/bin/python -I live_check.py .env   # TRELLO_* loaded from the gitignored .env, never printed
+ping(): True
+create_issue -> id=6afa02513db5ac2cc4b370bb title='team-4 package verification 15be3dda'
+get_issue(fresh=True) -> id=6afa02513db5ac2cc4b370bb title='team-4 package verification 15be3dda'
+list_issues(limit=5) -> 3 issues, newest first; created card first: True
+delete_issue(6afa02513db5ac2cc4b370bb) -> done
+get_issue after delete -> ServiceError code=not_found status=404
+LIVE CHECKS PASSED

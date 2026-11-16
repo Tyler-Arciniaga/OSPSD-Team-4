@@ -1,0 +1,67 @@
+[project]
+name = "ospsd-team4-product"
+version = "0.1.0"
+description = "Team 4's HW3 product service: plans focus blocks from tracker issues, books them in a calendar and writes a standup doc to cloud storage."
+readme = "README.md"
+# team5-calendar requires Python 3.14.
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi[standard]>=0.142.2",
+    "pydantic>=2.14",
+    # The service runs in a slim image with no system time zone database.
+    "tzdata>=2025.2",
+    # Every contract is a direct dependency, pinned to an immutable tag.
+    # The tracker contract is a PEP 508 URL rather than a [tool.uv.sources]
+    # entry: team-4-issue-tracker-trello declares the same URL, and uv treats
+    # a `tag =` source and an `@tag` URL as conflicting requirements
+    # (docs/evidence/partner-installs.md, note 1).
+    "issue-tracker-contract @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@issue-tracker-contract-v1.1.0#subdirectory=contract",
+    "calendar-contract",
+    "cloud-storage-api",
+    # Implementations, selected at runtime by TRACKER_PROVIDER,
+    # CALENDAR_PROVIDER and STORAGE_PROVIDER.
+    "team-4-issue-tracker-trello",
+    "team5-calendar",
+    "dropbox-client-impl",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv]
+# team5-calendar asks for calendar-contract v0.1.0-rc.1. Replace it with the
+# final v0.1.0 (same interface). Only uv honors this, so the image is built
+# with `uv sync --frozen` from the committed uv.lock.
+override-dependencies = [
+    "calendar-contract @ git+https://github.com/Airbus-A330/OSPSD-Calendar.git@v0.1.0",
+]
+
+# Contracts are pinned to tags. team5-calendar and dropbox-client-impl have no
+# immutable tag yet, so they are pinned to exact commits; switch each to its
+# tag once one exists. Never pin a branch.
+[tool.uv.sources]
+calendar-contract = { git = "https://github.com/Airbus-A330/OSPSD-Calendar.git", tag = "v0.1.0" }
+cloud-storage-api = { git = "https://github.com/Dayana20/ospsd26-cloud-storage.git", tag = "0.3.1", subdirectory = "src/cloud_storage_api" }
+team-4-issue-tracker-trello = { git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git", tag = "team-4-issue-tracker-trello-v1.0.0", subdirectory = "team-4-trello-impl" }
+team5-calendar = { git = "https://github.com/juno-junhyuk-lee/OSPSD-Team-5.git", rev = "b1d6e7fa2bea4cfbab16d6e5a195a2a445885ba2", subdirectory = "packages/team5-calendar" }
+dropbox-client-impl = { git = "https://github.com/Shreyas191/OSPSD-Team-3.git", rev = "6b5175608416bd5f56793207d968f96b62730d51", subdirectory = "src/dropbox_client_impl" }
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.0",
+    "pytest>=9.1.1",
+    "ruff>=0.16.10",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Lets tests name helpers in tests/ as provider import paths.
+pythonpath = ["."]
+
+[tool.ruff]
+# Ruff's default rules, as in the HW2 service.
+src = ["src", "tests"]
+
+[tool.mypy]
+strict = true

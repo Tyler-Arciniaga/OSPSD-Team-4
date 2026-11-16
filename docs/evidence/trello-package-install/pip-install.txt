@@ -1,0 +1,39 @@
+$ python3.11 -m venv pipvenv && pipvenv/bin/pip install --no-cache-dir "team-4-issue-tracker-trello @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@team-4-issue-tracker-trello-v1.0.0#subdirectory=team-4-trello-impl"
+Collecting team-4-issue-tracker-trello @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@team-4-issue-tracker-trello-v1.0.0#subdirectory=team-4-trello-impl
+  Cloning https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git (to revision team-4-issue-tracker-trello-v1.0.0) to <tmp>
+  Resolved https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git to commit ce00648eeb6fccbbcd5bf85b90672db1c8b3c5af
+Collecting issue-tracker-contract @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@issue-tracker-contract-v1.1.0#subdirectory=contract (from team-4-issue-tracker-trello @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@team-4-issue-tracker-trello-v1.0.0#subdirectory=team-4-trello-impl)
+  Cloning https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git (to revision issue-tracker-contract-v1.1.0) to <tmp>
+  Resolved https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git to commit 83bb9f79b90e5684a33f53b915d00c2ca5f08ab0
+Collecting pydantic>=2 (from issue-tracker-contract @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@issue-tracker-contract-v1.1.0#subdirectory=contract->team-4-issue-tracker-trello @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@team-4-issue-tracker-trello-v1.0.0#subdirectory=team-4-trello-impl)
+Collecting annotated-types>=0.6.0 (from pydantic>=2->issue-tracker-contract @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@issue-tracker-contract-v1.1.0#subdirectory=contract->team-4-issue-tracker-trello @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@team-4-issue-tracker-trello-v1.0.0#subdirectory=team-4-trello-impl)
+Collecting pydantic-core==2.50.4 (from pydantic>=2->issue-tracker-contract @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@issue-tracker-contract-v1.1.0#subdirectory=contract->team-4-issue-tracker-trello @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@team-4-issue-tracker-trello-v1.0.0#subdirectory=team-4-trello-impl)
+Collecting typing-extensions>=4.16.0 (from pydantic>=2->issue-tracker-contract @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@issue-tracker-contract-v1.1.0#subdirectory=contract->team-4-issue-tracker-trello @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@team-4-issue-tracker-trello-v1.0.0#subdirectory=team-4-trello-impl)
+Collecting typing-inspection>=0.4.4 (from pydantic>=2->issue-tracker-contract @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@issue-tracker-contract-v1.1.0#subdirectory=contract->team-4-issue-tracker-trello @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@team-4-issue-tracker-trello-v1.0.0#subdirectory=team-4-trello-impl)
+Successfully built team-4-issue-tracker-trello issue-tracker-contract
+Successfully installed annotated-types-0.8.0 issue-tracker-contract-1.1.0 pydantic-2.14.3 pydantic-core-2.50.4 team-4-issue-tracker-trello-1.0.0 typing-extensions-4.16.0 typing-inspection-0.4.5
+$ pipvenv/bin/pip list
+Package                     Version
+--------------------------- -------
+annotated-types             0.8.0
+issue-tracker-contract      1.1.0
+packaging                   26.3
+pip                         26.3
+pydantic                    2.14.3
+pydantic_core               2.50.4
+setuptools                  84.2.1
+team-4-issue-tracker-trello 1.0.0
+typing_extensions           4.16.0
+typing-inspection           0.4.5
+wheel                       0.48.0
+$ pipvenv/bin/python -I offline_check.py
+team-4-issue-tracker-trello 1.0.0
+issue-tracker-contract 1.1.0
+import team_4_issue_tracker_trello: ok
+import issue_tracker_contract: ok
+app importable: False
+fastapi importable: False
+opentelemetry importable: False
+isinstance(provider, IssueProvider): True
+env unset -> ServiceError code=service_not_configured cause=missing_credentials status=503
+OFFLINE CHECKS PASSED

@@ -1,0 +1,52 @@
+$ uv init --bare --python 3.11   # then set requires-python = ">=3.11.5"
+$ uv add --no-cache "git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@team-4-issue-tracker-trello-v1.0.0#subdirectory=team-4-trello-impl"
+Using CPython 3.11.5 interpreter at: <local python 3.11.5>
+Creating virtual environment at: .venv
+   Updating https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git (team-4-issue-tracker-trello-v1.0.0)
+    Updated https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git (c88ce2fd287f2524ba09ad5d94faf3983fdac08d)
+Resolved 8 packages in 1.25s
+   Building team-4-issue-tracker-trello @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@c88ce2fd287f2524ba09ad5d94faf3983fdac08d#subdirectory=team-4-trello-impl
+      Built team-4-issue-tracker-trello @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@c88ce2fd287f2524ba09ad5d94faf3983fdac08d#subdirectory=team-4-trello-impl
+   Building issue-tracker-contract @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@18fb7ae6f9c9cf5dbfed7208114d036a582ba54c#subdirectory=contract
+      Built issue-tracker-contract @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@18fb7ae6f9c9cf5dbfed7208114d036a582ba54c#subdirectory=contract
+Downloading pydantic-core (2.0MiB)
+ Downloaded pydantic-core
+Prepared 7 packages in 534ms
+Installed 7 packages in 11ms
+ + annotated-types==0.8.0
+ + issue-tracker-contract==1.1.0 (from git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@18fb7ae6f9c9cf5dbfed7208114d036a582ba54c#subdirectory=contract)
+ + pydantic==2.14.3
+ + pydantic-core==2.50.4
+ + team-4-issue-tracker-trello==1.0.0 (from git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@c88ce2fd287f2524ba09ad5d94faf3983fdac08d#subdirectory=team-4-trello-impl)
+ + typing-extensions==4.16.0
+ + typing-inspection==0.4.5
+$ cat pyproject.toml
+[project]
+name = "uvconsumer"
+version = "0.1.0"
+requires-python = ">=3.11.5"
+dependencies = [
+    "team-4-issue-tracker-trello",
+]
+
+[tool.uv.sources]
+team-4-issue-tracker-trello = { git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git", subdirectory = "team-4-trello-impl", rev = "team-4-issue-tracker-trello-v1.0.0" }
+$ grep -A2 "name = \"issue-tracker-contract\"" uv.lock
+name = "issue-tracker-contract"
+version = "1.1.0"
+source = { git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git?subdirectory=contract&rev=issue-tracker-contract-v1.1.0#18fb7ae6f9c9cf5dbfed7208114d036a582ba54c" }
+--
+    { name = "issue-tracker-contract" },
+]
+
+$ uv run python -I offline_check.py
+team-4-issue-tracker-trello 1.0.0
+issue-tracker-contract 1.1.0
+import team_4_issue_tracker_trello: ok
+import issue_tracker_contract: ok
+app importable: False
+fastapi importable: False
+opentelemetry importable: False
+isinstance(provider, IssueProvider): True
+env unset -> ServiceError code=service_not_configured cause=missing_credentials status=503
+OFFLINE CHECKS PASSED

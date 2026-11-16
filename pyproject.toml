@@ -18,6 +18,8 @@ issue-tracker-contract = { git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-
 [tool.pytest.ini_options]
 # team-4-trello-impl/src lets the Trello package's own tests import it.
 pythonpath = [".", "team-4-trello-impl/src"]
+# product/ has its own environment (Python 3.14) and checks; see product/README.md.
+addopts = ["--ignore=product"]
 
 [dependency-groups]
 dev = [
