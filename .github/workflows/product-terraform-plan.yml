@@ -1,0 +1,142 @@
+# Preview product infrastructure changes (product/infra/) before they are
+# applied. A copy of terraform-plan.yml for the product's own Terraform root
+# and HCP workspace; the HW2 configuration (infra/) is never touched.
+#
+# Runs only on pull requests that change product/infra/ or these workflows:
+# checks formatting, validates, runs the mock-provider tests, then plans
+# against the shared product state and posts the plan on the pull request.
+# It never applies anything (product-terraform-apply.yml does, by hand).
+
+name: Terraform plan (product)
+
+on:
+  pull_request:
+    paths:
+      - "product/infra/**"
+      - ".github/workflows/product-terraform-*.yml"
+
+permissions:
+  contents: read
+  pull-requests: write # to post the plan as a comment
+
+concurrency:
+  group: product-terraform-plan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: product/infra
+
+    env:
+      TF_IN_AUTOMATION: "1"
+      TF_INPUT: "0"
+      TF_VAR_secrets_env_group_id: ${{ vars.PRODUCT_SECRETS_ENV_GROUP_ID }}
+      # Pull requests from forks get no secrets: format, validation and tests
+      # only. The plan also needs the environment group ID.
+      HAS_CREDENTIALS: ${{ secrets.TF_API_TOKEN != '' && secrets.RENDER_API_KEY != '' && vars.PRODUCT_SECRETS_ENV_GROUP_ID != '' }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4.0.1
+        with:
+          terraform_version: "1.17.1"
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+          terraform_wrapper: false
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive -diff
+
+      - name: Initialize
+        run: |
+          if [ "$HAS_CREDENTIALS" = "true" ]; then
+            terraform init -input=false
+          else
+            echo "Missing TF_API_TOKEN, RENDER_API_KEY or PRODUCT_SECRETS_ENV_GROUP_ID:"
+            echo "validating without the shared state and skipping the plan."
+            terraform init -input=false -backend=false
+          fi
+
+      - name: Validate
+        run: terraform validate -no-color
+
+      # product/infra/tests: image pinning and provider wiring, against a mock
+      # Render provider. No credentials.
+      - name: Test
+        run: terraform test -no-color
+
+      - name: Plan
+        id: plan
+        if: env.HAS_CREDENTIALS == 'true'
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+        run: |
+          set +e
+          terraform plan -input=false -no-color -lock-timeout=5m > plan.txt 2>&1
+          status=$?
+          set -e
+          cat plan.txt
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Terraform plan (product)"
+            echo
+            echo '```'
+            cat plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post the plan on the pull request
+        if: steps.plan.outcome == 'success'
+        uses: actions/github-script@v9.0.0
+        env:
+          PLAN_STATUS: ${{ steps.plan.outputs.status }}
+        with:
+          script: |
+            const fs = require("fs");
+            const marker = "<!-- terraform-plan-product -->";
+            const limit = 60000;
+            let plan = fs.readFileSync("product/infra/plan.txt", "utf8");
+            if (plan.length > limit) {
+              plan = plan.slice(0, limit) + "\n... (truncated; see the workflow run for the full plan)";
+            }
+            const result = process.env.PLAN_STATUS === "0" ? "succeeded" : "FAILED";
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              marker,
+              `### Product Terraform plan ${result} for \`${context.sha.slice(0, 7)}\``,
+              "",
+              "Review this before applying. Applying is manual: run **Terraform apply (product)** from `main` after merging.",
+              "",
+              "<details open><summary>Plan</summary>",
+              "",
+              "```",
+              plan,
+              "```",
+              "",
+              "</details>",
+              "",
+              `[Workflow run](${run})`,
+            ].join("\n");
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const existing = comments.find((c) => c.user.type === "Bot" && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: Fail if the plan failed
+        if: steps.plan.outcome == 'success' && steps.plan.outputs.status != '0'
+        run: |
+          echo "terraform plan failed; see the plan output above."
+          exit 1
