@@ -1,0 +1,422 @@
+# Release the HW3 product service (product/): turn a commit on main into the
+# deployed revision, or return to an earlier one (product/docs/DEPLOYMENT.md).
+#
+# This is a copy of the HW2 release workflow (release.yml), parametrized for the
+# product: its own image repository, GitHub environments (product-production,
+# product-disposable), Render services and concurrency group. It reuses the
+# HW2 release tooling (scripts/release.py, scripts/build_image.sh) and the
+# product's own unqiue checks (product/scripts/disposable_env.sh, smoke_check.py).
+#
+# Runs on pushes to main that change the product or its workflows, with no
+# approval step. Started by hand (Actions -> Release (product) -> Run
+# workflow):
+#   - target production, ref main, no commit or digest: release main again.
+#   - target production, ref main, commit and digest: roll back to that
+#     revision, which must be a recorded successful production release.
+#   - target disposable, any ref: release that ref, or roll back, on the
+#     disposable service. It runs the in-memory providers, so it needs no
+#     credentials and touches no real account.
+#
+# Stages, each starting only if the one before passed:
+#   0. resolve  Decide what to release; check a rollback target.
+#   1. ci       The product CI checks (ci-product.yml) on this exact commit.
+#   2. build    Build product/ once, push it tagged with the commit SHA,
+#               capture its digest, and check that exact image (pulled back
+#               by digest) in a disposable container. Skipped for a rollback.
+#   3. deploy   Point the Render service at <image>@<digest>, deploy, wait
+#               until live, and confirm /readyz reports the commit.
+#   4. smoke    POST /v1/focus-day against the deployed service
+#               (product/scripts/smoke_check.py): a full run and a replay on
+#               the in-memory providers for disposable; a fully booked day
+#               (tracker read, doc written, no calendar event) for production.
+#   5. record   The release's GitHub Deployment; success only if smoke passed.
+
+name: Release (product)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "product/**"
+      - ".github/workflows/release-product.yml"
+      - ".github/workflows/ci-product.yml"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Service to release to. Production accepts only the main branch."
+        type: choice
+        options: [production, disposable]
+        default: production
+      commit:
+        description: "Rollback only: full commit SHA of a known-good release. Leave empty to release the chosen ref."
+        type: string
+        required: false
+      digest:
+        description: "Rollback only: that release's image digest (sha256:...)."
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+# One product release at a time per service, never cancelled halfway; only the
+# newest waiting run survives. Separate from the HW2 groups (render-*), so
+# product and HW2 releases do not wait for each other. The product Terraform
+# apply shares the production group.
+concurrency:
+  group: render-product-${{ inputs.target || 'production' }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      deployments: read
+
+    outputs:
+      mode: ${{ steps.mode.outputs.mode }}
+      target: ${{ steps.mode.outputs.target }}
+      environment: ${{ steps.mode.outputs.environment }}
+      commit: ${{ steps.mode.outputs.commit }}
+      image: ${{ steps.rollback.outputs.image }}
+      digest: ${{ steps.rollback.outputs.digest }}
+
+    steps:
+      - name: Decide what to release
+        id: mode
+        env:
+          TARGET: ${{ inputs.target || 'production' }}
+          COMMIT: ${{ inputs.commit }}
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          case "$TARGET" in
+            production | disposable) ;;
+            *) echo "::error::Unknown target '$TARGET'."; exit 1 ;;
+          esac
+          if [ "$TARGET" = production ] && [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::Production releases run only from main, not $GITHUB_REF."
+            exit 1
+          fi
+          if [ -z "$COMMIT" ] && [ -z "$DIGEST" ]; then
+            mode=build
+            commit="$GITHUB_SHA"
+          elif [ -n "$COMMIT" ] && [ -n "$DIGEST" ]; then
+            mode=rollback
+            commit="$COMMIT"
+          else
+            echo "::error::A rollback needs both a commit and a digest; a release needs neither."
+            exit 1
+          fi
+          {
+            echo "mode=$mode"
+            echo "target=$TARGET"
+            echo "environment=product-$TARGET"
+            echo "commit=$commit"
+          } >> "$GITHUB_OUTPUT"
+          echo "Mode: $mode of $commit to product-$TARGET."
+
+      - name: Check out the workflow's commit
+        if: steps.mode.outputs.mode == 'rollback'
+        uses: actions/checkout@v7
+
+      # The release tooling is the HW2 project's (repository root).
+      - name: Set up uv and Python
+        if: steps.mode.outputs.mode == 'rollback'
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.12.17"
+          python-version: "3.13.5"
+
+      - name: Check the rollback target is a known-good release
+        id: rollback
+        if: steps.mode.outputs.mode == 'rollback'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ENVIRONMENT: ${{ steps.mode.outputs.environment }}
+          COMMIT: ${{ steps.mode.outputs.commit }}
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          uv sync --locked --no-dev
+          uv run --locked --no-dev python -m scripts.release verify-rollback \
+            --repo "$GITHUB_REPOSITORY" --environment "$ENVIRONMENT" \
+            --commit "$COMMIT" --digest "$DIGEST"
+
+  ci:
+    needs: resolve
+    if: needs.resolve.outputs.mode == 'build'
+    uses: ./.github/workflows/ci-product.yml
+    with:
+      skip_image_build: true
+    permissions:
+      contents: read
+
+  build:
+    needs: [resolve, ci]
+    if: needs.resolve.outputs.mode == 'build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+      digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Check out the release commit
+        uses: actions/checkout@v7
+
+      - name: Log in to the container registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          owner="$(tr '[:upper:]' '[:lower:]' <<<"$GITHUB_REPOSITORY_OWNER")"
+          echo "IMAGE_REPO=ghcr.io/${owner}/ospsd-team4-product" >> "$GITHUB_ENV"
+
+      # The build context is product/.
+      - name: Build once and push
+        id: build
+        run: scripts/build_image.sh "$IMAGE_REPO" "$GITHUB_SHA" product
+
+      - name: Check the pushed image in a disposable container
+        env:
+          IMAGE_REF: ${{ steps.build.outputs.image }}@${{ steps.build.outputs.digest }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: product/scripts/disposable_env.sh
+
+      - name: Log out of the container registry
+        if: always()
+        run: docker logout ghcr.io
+
+  deploy:
+    needs: [resolve, build]
+    if: >-
+      always() && needs.resolve.result == 'success' &&
+      (needs.build.result == 'success' ||
+       (needs.resolve.outputs.mode == 'rollback' && needs.build.result == 'skipped'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    environment:
+      name: ${{ needs.resolve.outputs.environment }}
+      deployment: false
+
+    outputs:
+      skip: ${{ steps.guard.outputs.skip }}
+      url: ${{ steps.deploy.outputs.url }}
+      deploy_id: ${{ steps.deploy.outputs.deploy_id }}
+      started_at: ${{ steps.deploy.outputs.started_at }}
+      finished_at: ${{ steps.deploy.outputs.finished_at }}
+
+    env:
+      ENVIRONMENT: ${{ needs.resolve.outputs.environment }}
+      COMMIT: ${{ needs.resolve.outputs.commit }}
+      IMAGE: ${{ needs.resolve.outputs.mode == 'rollback' && needs.resolve.outputs.image || needs.build.outputs.image }}
+      DIGEST: ${{ needs.resolve.outputs.mode == 'rollback' && needs.resolve.outputs.digest || needs.build.outputs.digest }}
+      # Variables of the product-production / product-disposable environment.
+      RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID }}
+      SERVICE_URL: ${{ vars.SERVICE_URL }}
+
+    steps:
+      - name: Check out the workflow's commit
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Unlike release.yml, this workflow runs only for commits that change the
+      # product, so "not the tip of main" is not enough to skip: a newer
+      # docs-only commit starts no product release. Skip only if a newer
+      # commit on main changes the product; its own release deploys instead.
+      - name: Skip if a newer commit on main changes the product
+        id: guard
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != push ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --quiet origin main
+          newer="$(git diff --name-only "$GITHUB_SHA" origin/main -- \
+            product .github/workflows/release-product.yml .github/workflows/ci-product.yml)"
+          if [ -n "$newer" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "A newer commit on main changes the product; its release deploys instead."
+            {
+              echo "## Deploy skipped"
+              echo
+              echo "A newer commit on main changes the product. Its release deploys instead."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Until the bootstrap is finished (product/docs/DEPLOYMENT.md), these are
+      # unset and the release stops here, after the image was built and pushed.
+      - name: Check the environment is set up
+        if: steps.guard.outputs.skip == 'false'
+        env:
+          HAS_API_KEY: ${{ secrets.RENDER_API_KEY != '' }}
+          RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+        run: |
+          missing=""
+          [ "$HAS_API_KEY" = "true" ] || missing="$missing RENDER_API_KEY(secret)"
+          [ -n "$RENDER_OWNER_ID" ] || missing="$missing RENDER_OWNER_ID"
+          [ -n "$RENDER_SERVICE_ID" ] || missing="$missing RENDER_SERVICE_ID"
+          [ -n "$SERVICE_URL" ] || missing="$missing SERVICE_URL"
+          if [ -n "$missing" ]; then
+            echo "::error::The $ENVIRONMENT environment is missing:$missing. The bootstrap is not finished (product/docs/DEPLOYMENT.md); nothing was deployed."
+            exit 1
+          fi
+
+      - name: Set up uv and Python
+        if: steps.guard.outputs.skip == 'false'
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.12.17"
+          python-version: "3.13.5"
+
+      - name: Install the release tooling
+        if: steps.guard.outputs.skip == 'false'
+        run: uv sync --locked --no-dev
+
+      - name: Deploy the image digest
+        id: deploy
+        if: steps.guard.outputs.skip == 'false'
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+        run: |
+          echo "url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
+          uv run --locked --no-dev python -m scripts.release deploy \
+            --service-id "$RENDER_SERVICE_ID" --image "$IMAGE" --digest "$DIGEST"
+
+      - name: Check the service runs this commit
+        if: steps.guard.outputs.skip == 'false'
+        env:
+          DEPLOY_ID: ${{ steps.deploy.outputs.deploy_id }}
+          STARTED_AT: ${{ steps.deploy.outputs.started_at }}
+          FINISHED_AT: ${{ steps.deploy.outputs.finished_at }}
+        run: |
+          uv run --locked --no-dev python -m scripts.release check-ready \
+            --url "$SERVICE_URL" --commit "$COMMIT"
+          {
+            echo "## Deployed"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Environment | $ENVIRONMENT |"
+            echo "| URL | $SERVICE_URL |"
+            echo "| Commit | \`$COMMIT\` |"
+            echo "| Image | \`$IMAGE@$DIGEST\` |"
+            echo "| Render deploy | \`$DEPLOY_ID\` |"
+            echo "| Deploy window (UTC) | $STARTED_AT to $FINISHED_AT |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  smoke:
+    needs: [resolve, deploy]
+    if: always() && needs.deploy.result == 'success' && needs.deploy.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # No environment and no secrets: the checks go through the service's
+    # public API, and the service holds the provider credentials.
+    permissions:
+      contents: read
+
+    defaults:
+      run:
+        working-directory: product
+
+    steps:
+      - name: Check out the workflow's commit
+        uses: actions/checkout@v7
+
+      # Same versions as ci-product.yml.
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.12.22"
+          python-version: "3.14.8"
+          working-directory: product
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Smoke check POST /v1/focus-day
+        env:
+          SERVICE_URL: ${{ needs.deploy.outputs.url }}
+          COMMIT: ${{ needs.resolve.outputs.commit }}
+          MODE: ${{ needs.resolve.outputs.target == 'disposable' && 'fakes' || 'live' }}
+        run: |
+          uv run --locked python scripts/smoke_check.py \
+            --url "$SERVICE_URL" --commit "$COMMIT" --mode "$MODE"
+
+  record:
+    needs: [resolve, ci, build, deploy, smoke]
+    if: always() && needs.resolve.result == 'success' && needs.deploy.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      deployments: write
+
+    steps:
+      - name: Check out the workflow's commit
+        uses: actions/checkout@v7
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.12.17"
+          python-version: "3.13.5"
+
+      - name: Record the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODE: ${{ needs.resolve.outputs.mode }}
+          ENVIRONMENT: ${{ needs.resolve.outputs.environment }}
+          COMMIT: ${{ needs.resolve.outputs.commit }}
+          IMAGE: ${{ needs.resolve.outputs.mode == 'rollback' && needs.resolve.outputs.image || needs.build.outputs.image }}
+          DIGEST: ${{ needs.resolve.outputs.mode == 'rollback' && needs.resolve.outputs.digest || needs.build.outputs.digest }}
+          SERVICE_URL: ${{ needs.deploy.outputs.url }}
+          DEPLOY_ID: ${{ needs.deploy.outputs.deploy_id }}
+          STARTED_AT: ${{ needs.deploy.outputs.started_at }}
+          FINISHED_AT: ${{ needs.deploy.outputs.finished_at }}
+          CI_RESULT: ${{ needs.ci.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          SMOKE_RESULT: ${{ needs.smoke.result }}
+        run: |
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [ "$SMOKE_RESULT" = success ]; then
+            result=success
+            description="$MODE: smoke check passed"
+          else
+            result=failure
+            failed_stage=smoke
+            for stage in "ci:$CI_RESULT" "build:$BUILD_RESULT" "deploy:$DEPLOY_RESULT"; do
+              case "${stage#*:}" in
+                failure | cancelled) failed_stage="${stage%%:*}"; break ;;
+              esac
+            done
+            description="$MODE: failed at $failed_stage"
+          fi
+          uv sync --locked --no-dev
+          uv run --locked --no-dev python -m scripts.release record \
+            --repo "$GITHUB_REPOSITORY" --environment "$ENVIRONMENT" \
+            --commit "$COMMIT" --result "$result" --description "$description" \
+            --run-url "$run_url" --image "$IMAGE" --digest "$DIGEST" \
+            --service-url "$SERVICE_URL" --deploy-id "$DEPLOY_ID" \
+            --started-at "$STARTED_AT" --finished-at "$FINISHED_AT"
+          {
+            echo "## Release recorded: $result"
+            echo
+            echo "$description. Environment \`$ENVIRONMENT\`, commit \`$COMMIT\`, image \`$IMAGE@$DIGEST\`."
+            if [ "$result" = failure ]; then
+              echo
+              echo "The previous successful release in \`$ENVIRONMENT\` is still the known-good revision. If this release was deployed, Render runs it until someone rolls back (product/docs/DEPLOYMENT.md)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
