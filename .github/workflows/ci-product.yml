@@ -1,0 +1,116 @@
+# Checks for the HW3 product service in product/ (product/docs/DESIGN.md).
+# Separate from ci.yml because the product is its own uv project on Python
+# 3.14 (team5-calendar requires it), while the HW2 service uses 3.13.5.
+# Based on uv's GitHub Actions guide:
+# https://docs.astral.sh/uv/guides/integration/github/
+
+name: CI (product)
+
+# Runs only when the product or this workflow changes. The product release
+# workflow calls it (workflow_call) on the exact commit it deploys.
+on:
+  push:
+    paths:
+      - "product/**"
+      - ".github/workflows/ci-product.yml"
+  pull_request:
+    paths:
+      - "product/**"
+      - ".github/workflows/ci-product.yml"
+  workflow_call:
+    inputs:
+      skip_image_build:
+        description: >-
+          Skip the docker-image job. The release workflow sets this because it
+          builds the deployable image itself right after these checks.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: product
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      # The uv version matches the image; Python matches its base image.
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.12.17"
+          python-version: "3.14.8"
+          working-directory: product
+
+      # Installs from product/uv.lock (git-pinned partner packages included).
+      # Fails if the lockfile needs updating.
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Run lint checks
+        run: uv run --locked ruff check .
+
+      - name: Check formatting
+        run: uv run --locked ruff format --check .
+
+      - name: Run type checks
+        run: uv run --locked mypy src tests scripts
+
+      # Unit, orchestrator, adapter, import-boundary and fake conformance
+      # tests. No network access or provider credentials.
+      - name: Run tests
+        run: uv run --locked pytest
+
+  # Check that the product image builds. Nothing is pushed or deployed.
+  docker-image:
+    if: ${{ !inputs.skip_image_build }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Build the image
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --build-arg GIT_SHA="$GITHUB_SHA" \
+            --tag "ospsd-team4-product-ci:$GITHUB_SHA" \
+            .
+
+  # One status summarizing the jobs above, as in ci.yml. It passes only when
+  # every job succeeded, except docker-image when the caller skipped it. It
+  # is not called `checks`, so a branch rule requiring ci.yml's `checks`
+  # never matches this job instead.
+  product-checks:
+    if: always()
+    needs: [tests, docker-image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Require every check to pass
+        working-directory: .
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          SKIP_ALLOWED: ${{ inputs.skip_image_build && 'docker-image' || '' }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$RESULTS"
+          not_passed="$(jq -r --arg allowed "$SKIP_ALLOWED" '[to_entries[]
+            | select(.value.result != "success")
+            | select((.value.result == "skipped" and .key == $allowed) | not)
+            | .key] | join(", ")' <<<"$RESULTS")"
+          if [ -n "$not_passed" ]; then
+            echo "Did not pass: $not_passed"
+            exit 1
+          fi
+          echo "All checks passed."

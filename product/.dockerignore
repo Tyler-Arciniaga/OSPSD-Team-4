@@ -13,6 +13,7 @@
 .pytest_cache
 .DS_Store
 tests
+scripts
 docs
 infra
 Dockerfile
