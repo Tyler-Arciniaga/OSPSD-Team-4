@@ -1,4 +1,8 @@
-"""Issue tracker adapter for the `list_issues` step."""
+"""Issue tracker adapter for the `list_issues` step.
+
+The error mapping is documented in product/docs/ERRORS.md ("list_issues
+(tracker)").
+"""
 
 import logging
 from typing import Final

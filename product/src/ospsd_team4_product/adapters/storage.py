@@ -12,21 +12,8 @@ written as:
 Anything else fails the step. The same plan always gives the same bytes, so
 repeating the whole write is safe.
 
-Error mapping (shared storage errors -> HW1 codes):
-
-| Storage error                 | HW1 code            | retryable | may_have_applied |
-| ----------------------------- | ------------------- | --------- | ---------------- |
-| InvalidRequestError           | invalid_input       | no        | no               |
-| PermissionDeniedError         | access_denied       | no        | no               |
-| NotFoundError                 | not_found           | no        | no               |
-| ConflictError                 | precondition_failed | no        | no               |
-| FileTooLargeError             | invalid_input       | no        | no               |
-| InvalidOperationError         | invalid_input       | no        | no               |
-| ProviderError                 | provider_error      | no        | yes              |
-| ProviderUnavailableError      | provider_error      | yes       | yes              |
-| other StorageError / anything | provider_error      | no        | yes              |
-
-Provider messages are never passed on: they can contain paths.
+The error mapping is documented in product/docs/ERRORS.md
+("write_standup_doc (storage)"). Keep that table in sync with `_MAPPING`.
 """
 
 import logging

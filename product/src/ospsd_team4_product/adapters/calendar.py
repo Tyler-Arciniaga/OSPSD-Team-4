@@ -1,23 +1,7 @@
 """Calendar adapter for the `create_events` step.
 
-Error mapping (calendar-contract v0.1.0 -> HW1 codes):
-
-| CalendarError                         | HW1 code               | retryable | may_have_applied           |
-| ------------------------------------- | ---------------------- | --------- | -------------------------- |
-| INVALID_INPUT                         | invalid_input          | no        | no                         |
-| NOT_FOUND                             | not_found              | no        | no                         |
-| ACCESS_DENIED                         | access_denied          | no        | no                         |
-| PROVIDER_UNAVAILABLE, retryable=True  | provider_error         | yes       | no                         |
-| PROVIDER_UNAVAILABLE, retryable=False | service_not_configured | no        | no                         |
-| PROVIDER_ERROR on create              | provider_error         | as given  | yes, unless retryable=True |
-| PROVIDER_ERROR on get                 | provider_error         | as given  | no                         |
-
-PROVIDER_UNAVAILABLE with retryable=False is how Team 5 reports a missing,
-expired or revoked OAuth token: an operator must re-authorize, so it is a
-configuration problem, not an outage. An uncertain create (PROVIDER_ERROR,
-retryable=False) is never retried here or by the orchestrator. Any other
-exception counts as an unusable response; for a create its outcome is
-unknown.
+The error mapping is documented in product/docs/ERRORS.md
+("create_events (calendar)"). Keep that table in sync with this module.
 """
 
 import logging
