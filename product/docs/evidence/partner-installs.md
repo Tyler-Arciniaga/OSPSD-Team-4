@@ -6,6 +6,11 @@ that the product service's six packages (three contracts, three
 implementations) install together, resolve to the expected commits, and
 import.
 
+The two implementation pins were later switched from commits to release
+tags, and the calendar override was removed: see
+[Pin update (2026-11-16)](#pin-update-2026-11-16). The sections before it
+record the original check as it was run.
+
 ## Result
 
 | Package | Source | Pinned ref | Resolved commit | Result |
@@ -210,3 +215,59 @@ Startup takes a few seconds (importing the Google and Dropbox SDKs) before
 uvicorn accepts connections. Health checks in WP7 need to allow for that.
 No provider is constructed or contacted at startup, so the placeholder token
 was never read.
+
+## Pin update (2026-11-16)
+
+Both partner teams published immutable release tags, so the commit pins and
+the calendar-contract override were replaced in `product/pyproject.toml`
+and `product/uv.lock` was regenerated.
+
+| Package | Old pin | New pin | Resolved commit |
+| --- | --- | --- | --- |
+| `team5-calendar` 0.1.0 | commit `b1d6e7f` | tag `team5-calendar-v0.1.0` | `a4da568621744584f54c076fb4db8311e3bb00d8` |
+| `dropbox-client-impl` 0.1.0 | commit `6b51756` | tag `v0.3.0` | `fde60d4fb648df6defb918ff815fe940c525adc7` |
+| `cloud-storage-client-api` 0.1.0 (pulled in by Team 3) | commit `6b51756` | same tag | `fde60d4fb648df6defb918ff815fe940c525adc7` |
+| `calendar-contract` 0.1.0 | tag `v0.1.0` through a uv override | tag `v0.1.0`, no override | `db73e6261a93b0c3cc6aa0a48c4687f742aacc9b` (unchanged) |
+
+What changed between the old and new pins, checked with `git diff` in clones
+of the partner repositories (outside this repository):
+
+- **Team 5**: in `packages/team5-calendar`, `pyproject.toml` now requires
+  `calendar-contract @ ...@v0.1.0` instead of `@v0.1.0-rc.1`, the package
+  docstring names the stable contract, and the README changed. No code
+  changed. Both tags are annotated.
+- **Team 3**: `v0.3.0` is the merge commit `fde60d4` on their `hw2` branch.
+  `6b51756` is an ancestor of it, and `git diff 6b51756 v0.3.0 --
+  src/dropbox_client_impl` is empty: the package is byte-identical to the
+  one the live Dropbox round trip passed on.
+
+**`calendar-contract` is now a PEP 508 URL**, like the tracker contract
+(note 1). With the override gone, Team 5's metadata declares
+`calendar-contract @ git+https://github.com/Airbus-A330/OSPSD-Calendar.git@v0.1.0`
+directly, so the same `tag =` source versus `@tag` URL conflict applies.
+Declaring the same URL in `dependencies` resolves. Note 3 (the override) and
+note 6 (unmerged branch commits) no longer apply.
+
+Fresh install from the regenerated lock, copied to an empty directory
+outside the repository as in the WP2 check:
+
+```
+$ uv sync --frozen --no-dev --python 3.14
+Using CPython 3.14.8
+ + calendar-contract==0.1.0 (from git+https://github.com/Airbus-A330/OSPSD-Calendar.git@db73e6261a93b0c3cc6aa0a48c4687f742aacc9b)
+ + cloud-storage-api==0.2.0 (from git+https://github.com/Dayana20/ospsd26-cloud-storage@664afc92f7cc0b2ee51cde6ddfa088cc3b37206c#subdirectory=src/cloud_storage_api)
+ + cloud-storage-client-api==0.1.0 (from git+https://github.com/Shreyas191/OSPSD-Team-3.git@fde60d4fb648df6defb918ff815fe940c525adc7#subdirectory=src/cloud_storage_client_api)
+ + dropbox-client-impl==0.1.0 (from git+https://github.com/Shreyas191/OSPSD-Team-3.git@fde60d4fb648df6defb918ff815fe940c525adc7#subdirectory=src/dropbox_client_impl)
+ + issue-tracker-contract==1.1.0 (from git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@18fb7ae6f9c9cf5dbfed7208114d036a582ba54c#subdirectory=contract)
+ + team-4-issue-tracker-trello==1.0.0 (from git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@c88ce2fd287f2524ba09ad5d94faf3983fdac08d#subdirectory=team-4-trello-impl)
+ + team5-calendar==0.1.0 (from git+https://github.com/juno-junhyuk-lee/OSPSD-Team-5.git@a4da568621744584f54c076fb4db8311e3bb00d8#subdirectory=packages/team5-calendar)
+
+$ .venv/bin/python -I -c "import calendar_contract, team5_calendar, team_4_issue_tracker_trello, issue_tracker_contract, cloud_storage_api, dropbox_client_impl, ospsd_team4_product.main; ..."
+imports ok
+issubclass Dropbox->DocumentStorage True
+```
+
+The product checks (ruff, format, mypy, 258 tests) and
+`product/scripts/disposable_env.sh` (image build plus every startup and
+fake-provider check) passed on the new lock. Nothing was run against live
+Google; Team 5 reports their own live CRUD checks passed at the tag.

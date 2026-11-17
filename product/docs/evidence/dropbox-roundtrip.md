@@ -47,6 +47,10 @@ Exit status 0 means every check passed.
 - Credentials: a refresh token from `python -m dropbox_client_impl login`,
   stored outside the repo, with the app key and secret exported in the shell.
   Paths are relative to the Dropbox app's root.
+- Later pin: the product now pins Team 3's tag `v0.3.0` (merge commit
+  `fde60d4`). Its `src/dropbox_client_impl` is byte-identical to
+  `6b51756`, so this result still applies
+  (`partner-installs.md`, Pin update).
 
 Output, unedited:
 
