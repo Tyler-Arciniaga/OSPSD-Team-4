@@ -199,3 +199,5 @@ probe-results/
 client_secret*.json
 **/token*.json
 **/*credentials*.json
+# Dropbox refresh token written by `python -m dropbox_client_impl login`
+**/.dropbox_token*.json
