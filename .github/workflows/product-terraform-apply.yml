@@ -1,0 +1,156 @@
+# Apply reviewed product infrastructure changes (product/infra/). This is a copy of
+# terraform-apply.yml for the product's own Terraform root and HCP workspace.
+# It deploys no code: the product release workflow does that.
+#
+# Manual only, from main, after approval on the product-infrastructure
+# environment. Plans and applies, then plans again and fails unless the
+# second plan shows no changes.
+
+name: Terraform apply (product)
+
+on:
+  workflow_dispatch:
+    inputs:
+      disposable:
+        description: "Keep (or create) the disposable service (in-memory providers). Leave unticked to remove it."
+        type: boolean
+        default: false
+      bootstrap_image_digest:
+        description: "Only for the very first apply (product/docs/DEPLOYMENT.md, bootstrap): the sha256:... digest to start on. Otherwise leave empty: the latest successful product-production release is used."
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+# Shares the product release's production group (release-product.yml), so an
+# apply never overlaps a product release. Independent of the HW2 groups.
+concurrency:
+  group: render-product-production
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: product-infrastructure
+    permissions:
+      contents: read
+      deployments: read
+
+    defaults:
+      run:
+        working-directory: product/infra
+
+    env:
+      TF_IN_AUTOMATION: "1"
+      TF_INPUT: "0"
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+      TF_VAR_disposable_enabled: ${{ inputs.disposable }}
+      TF_VAR_secrets_env_group_id: ${{ vars.PRODUCT_SECRETS_ENV_GROUP_ID }}
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v7
+
+      # The release tooling is the HW2 project's (repository root).
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.12.17"
+          python-version: "3.13.5"
+
+      - name: Choose the digest a new service starts on
+        working-directory: .
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIVEN: ${{ inputs.bootstrap_image_digest }}
+        run: |
+          if [ -z "$TF_VAR_secrets_env_group_id" ]; then
+            echo "::error::The repository variable PRODUCT_SECRETS_ENV_GROUP_ID is not set (product/docs/DEPLOYMENT.md)."
+            exit 1
+          fi
+          if [ -n "$GIVEN" ]; then
+            digest="$GIVEN"
+            echo "Using the digest given by hand: $digest"
+          else
+            uv sync --locked --no-dev
+            if ! known="$(uv run --locked --no-dev python -m scripts.release known-good \
+                --repo "$GITHUB_REPOSITORY" --environment product-production)"; then
+              echo "::error::No successful product-production release is recorded yet. For the first apply, give bootstrap_image_digest (product/docs/DEPLOYMENT.md)."
+              exit 1
+            fi
+            echo "$known"
+            digest="$(sed -n 's/^digest=//p' <<<"$known")"
+          fi
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::'$digest' is not an image digest (sha256:<64 hex>)."
+            exit 1
+          fi
+          echo "TF_VAR_bootstrap_image_digest=$digest" >> "$GITHUB_ENV"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4.0.1
+        with:
+          terraform_version: "1.17.1"
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+          terraform_wrapper: false
+
+      - name: Initialize
+        run: terraform init -input=false
+
+      # The plan file stays on this runner and is never uploaded.
+      - name: Plan
+        run: |
+          terraform plan -input=false -no-color -lock-timeout=5m -out=tfplan | tee plan.txt
+          {
+            echo "## Plan applied by this run"
+            echo
+            echo "Disposable service: \`$TF_VAR_disposable_enabled\`. Digest for a newly created service: \`$TF_VAR_bootstrap_image_digest\`."
+            echo
+            echo '```'
+            cat plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Apply
+        run: terraform apply -input=false -no-color -lock-timeout=5m tfplan
+
+      - name: Show the service IDs and URLs
+        run: |
+          {
+            echo "## Services"
+            echo
+            echo "Set these as the \`RENDER_SERVICE_ID\` and \`SERVICE_URL\` variables of each GitHub environment."
+            echo
+            echo "| Environment | RENDER_SERVICE_ID | SERVICE_URL |"
+            echo "| --- | --- | --- |"
+            echo "| product-production | \`$(terraform output -raw service_id)\` | $(terraform output -raw service_url) |"
+            if [ "$TF_VAR_disposable_enabled" = "true" ]; then
+              echo "| product-disposable | \`$(terraform output -raw disposable_service_id)\` | $(terraform output -raw disposable_service_url) |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Plan again (must show no changes)
+        run: |
+          set +e
+          terraform plan -input=false -no-color -lock-timeout=5m -detailed-exitcode | tee replan.txt
+          status=${PIPESTATUS[0]}
+          set -e
+          {
+            echo "## Second plan (idempotency check)"
+            echo
+            echo '```'
+            cat replan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -eq 0 ]; then
+            echo "No changes: a repeated apply would do nothing."
+          elif [ "$status" -eq 2 ]; then
+            echo "The second plan still shows changes; a repeated apply would change something."
+            exit 1
+          else
+            exit "$status"
+          fi

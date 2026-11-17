@@ -16,7 +16,8 @@ starts.
 the expected commit.
 
 The release record is a GitHub Deployment per release, in the GitHub
-environment of the target (render-production or render-disposable), with the
+environment of the target (render-production or render-disposable, or
+product-production or product-disposable for the product service), with the
 commit as its ref and the image digest, run link and deploy window in its
 payload. Its status is `success` only when the smoke check passed.
 
@@ -49,7 +50,14 @@ import httpx
 RENDER_API = "https://api.render.com/v1"
 GITHUB_API = "https://api.github.com"
 REPO_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
-ENVIRONMENTS = ("render-production", "render-disposable")
+# The HW2 service's environments, then the HW3 product service's
+# (.github/workflows/release-product.yml), which reuses this script.
+ENVIRONMENTS = (
+    "render-production",
+    "render-disposable",
+    "product-production",
+    "product-disposable",
+)
 # The release record is read from the newest deployments of an environment.
 DEPLOYMENTS_PAGE = 100
 

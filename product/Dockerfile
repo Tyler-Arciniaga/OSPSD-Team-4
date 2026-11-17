@@ -33,8 +33,7 @@ RUN apt-get update \
 WORKDIR /app
 
 # Dependencies first, so source changes reuse this layer. --frozen installs
-# exactly what the committed uv.lock records, including the calendar-contract
-# override; plain pip would ignore the override.
+# exactly what the committed uv.lock records.
 COPY pyproject.toml uv.lock README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project --no-editable

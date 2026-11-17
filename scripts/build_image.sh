@@ -6,8 +6,10 @@
 # stage (the disposable-container check, the deploy, the release record and
 # any rollback) uses <repo>@<digest>. No `latest` tag is ever pushed.
 #
-# Usage: scripts/build_image.sh <image-repo> <commit>
+# Usage: scripts/build_image.sh <image-repo> <commit> [<context-dir>]
 #   e.g. scripts/build_image.sh ghcr.io/tyler-arciniaga/ospsd-team4-issue-service "$(git rev-parse HEAD)"
+#   <context-dir> is the build context relative to the repository root
+#   (default "."); the product service passes "product".
 #
 # Prints `image=<repo>` and `digest=sha256:...`, and appends them to
 # $GITHUB_OUTPUT and a summary to $GITHUB_STEP_SUMMARY when those are set.
@@ -16,12 +18,13 @@
 
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
-  echo "usage: $0 <image-repo> <commit>" >&2
+if [[ $# -lt 2 || $# -gt 3 ]]; then
+  echo "usage: $0 <image-repo> <commit> [<context-dir>]" >&2
   exit 2
 fi
 REPO="$1"
 COMMIT="$2"
+CONTEXT="${3:-.}"
 
 if [[ ! "$COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
   echo "commit must be a full, lowercase 40-character SHA, got '${COMMIT}'." >&2
@@ -60,7 +63,7 @@ docker buildx build \
   --build-arg GIT_SHA="$COMMIT" \
   --tag "$TAG" \
   --push \
-  .
+  "$CONTEXT"
 
 # Ask the registry, not the local build, which digest the tag now names.
 digest="$(docker buildx imagetools inspect "$TAG" --format '{{json .Manifest}}' | jq -r '.digest')"
