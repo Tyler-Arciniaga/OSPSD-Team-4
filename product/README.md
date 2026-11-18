@@ -12,7 +12,7 @@ storage is Team 3's Dropbox package, each chosen by configuration.
 | [docs/DESIGN.md](docs/DESIGN.md) | Architecture, a real request trace, decisions, failure modes |
 | [docs/ERRORS.md](docs/ERRORS.md) | Every error the service can return, and every startup error |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | The release pipeline, Terraform and the one-time human setup |
-| [docs/evidence/](docs/evidence/) | Partner installs, the Dropbox round trip, a live focus-day run |
+| [docs/evidence/](docs/evidence/) | Partner installs, the Dropbox round trip, a live focus-day run, a storage swap to Team 1's package, a controlled calendar failure |
 
 This service is separate from the HW2 issue service at the repository root:
 it has its own dependencies, image and deployment. Everything below runs from
@@ -57,6 +57,16 @@ Provider values:
 | Tracker | `team_4_issue_tracker_trello:TrelloIssueProvider` | `ospsd_team4_product.fakes:InMemoryIssueProvider` |
 | Calendar | `team5_calendar:create_calendar_service` | `ospsd_team4_product.fakes:InMemoryCalendarService` |
 | Storage | `dropbox_client_impl:DropboxDocumentStorage` | `ospsd_team4_product.fakes:InMemoryDocumentStorage` |
+
+Team 1's Dropbox package is also installed and can replace Team 3's by
+configuration alone: `STORAGE_PROVIDER=team1_dropbox:Team1DropboxStorage.from_env`,
+with the same three Dropbox variables
+([evidence/storage-swap.md](docs/evidence/storage-swap.md)).
+
+`CALENDAR_PROVIDER=ospsd_team4_product.fakes:calendar_outage_on_second_create`
+is a controlled calendar whose second `create` reports an outage, for
+showing the documented `create_events` error through a running service
+([evidence/calendar-failure.md](docs/evidence/calendar-failure.md)).
 
 The real implementations read their own credentials from the environment:
 `TRELLO_API_KEY`, `TRELLO_TOKEN`, `TRELLO_LIST_ID` (the list the service

@@ -4,6 +4,7 @@ from datetime import time
 from pathlib import Path
 
 import pytest
+from cloud_storage_api import DocumentStorage
 
 from ospsd_team4_product.config import (
     FALLBACK_MINUTES,
@@ -11,6 +12,7 @@ from ospsd_team4_product.config import (
     ConfigError,
     WorkingWindow,
     load_config,
+    resolve_import_path,
     takes_token_file,
 )
 from tests import helpers
@@ -186,3 +188,25 @@ def test_real_partner_import_paths_resolve(tmp_path: Path) -> None:
     assert config.calendar_token_file == str(token)
     assert config.tracker_factory.__name__ == "TrelloIssueProvider"
     assert config.storage_factory.__name__ == "DropboxDocumentStorage"
+
+
+def test_team1_storage_swap_builds_a_document_storage() -> None:
+    """Team 1's Dropbox package is selectable by STORAGE_PROVIDER alone.
+
+    `from_env` builds the SDK client without a network call, so placeholder
+    credentials are enough to check the contract type.
+    """
+    environ = {
+        "STORAGE_PROVIDER": "team1_dropbox:Team1DropboxStorage.from_env",
+        "DROPBOX_APP_KEY": "placeholder",
+        "DROPBOX_APP_SECRET": "placeholder",
+        "DROPBOX_REFRESH_TOKEN": "placeholder",
+    }
+    factory = resolve_import_path("STORAGE_PROVIDER", environ)
+
+    with pytest.MonkeyPatch.context() as mp:
+        for name in ("DROPBOX_APP_KEY", "DROPBOX_APP_SECRET", "DROPBOX_REFRESH_TOKEN"):
+            mp.setenv(name, environ[name])
+        storage = factory()
+
+    assert isinstance(storage, DocumentStorage)

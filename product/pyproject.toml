@@ -11,18 +11,20 @@ dependencies = [
     # The service runs in a slim image with no system time zone database.
     "tzdata>=2025.2",
     # Every contract is a direct dependency, pinned to an immutable tag.
-    # The tracker and calendar contracts are PEP 508 URLs rather than
-    # [tool.uv.sources] entries: their implementations declare the same URLs,
-    # and uv treats a `tag =` source and an `@tag` URL as conflicting
-    # requirements (docs/evidence/partner-installs.md, note 1).
-    "issue-tracker-contract @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@issue-tracker-contract-v1.1.0#subdirectory=contract",
-    "calendar-contract @ git+https://github.com/Airbus-A330/OSPSD-Calendar.git@v0.1.0",
-    "cloud-storage-api",
+    # All three are PEP 508 URLs rather than [tool.uv.sources] entries: an
+    # implementation declares the same URL, and uv treats a `tag =` source
+    # and an `@tag` URL as conflicting requirements
+    # (docs/evidence/partner-installs.md, note 1; for cloud-storage-api,
+    # Team 1's package: docs/evidence/storage-swap.md).
+    "cloud-storage-api @ git+https://github.com/Dayana20/ospsd26-cloud-storage.git@0.3.1#subdirectory=src/cloud_storage_api",
     # Implementations, selected at runtime by TRACKER_PROVIDER,
     # CALENDAR_PROVIDER and STORAGE_PROVIDER.
     "team-4-issue-tracker-trello",
     "team5-calendar",
     "dropbox-client-impl",
+    # Team 1's Dropbox storage, the swap-in alternative to Team 3's
+    # (STORAGE_PROVIDER=team1_dropbox:Team1DropboxStorage.from_env).
+    "team1-dropbox-storage",
 ]
 
 [build-system]
@@ -31,9 +33,11 @@ build-backend = "uv_build"
 
 # Every package is pinned to an immutable release tag. Never pin a branch.
 [tool.uv.sources]
-cloud-storage-api = { git = "https://github.com/Dayana20/ospsd26-cloud-storage.git", tag = "0.3.1", subdirectory = "src/cloud_storage_api" }
 team-4-issue-tracker-trello = { git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git", tag = "team-4-issue-tracker-trello-v1.0.0", subdirectory = "team-4-trello-impl" }
 team5-calendar = { git = "https://github.com/juno-junhyuk-lee/OSPSD-Team-5.git", tag = "team5-calendar-v0.1.0", subdirectory = "packages/team5-calendar" }
+# Team 1 has not tagged its package yet: pinned to the reviewed commit on its
+# hw3-dropbox-package branch. Switch to a tag as soon as one exists.
+team1-dropbox-storage = { git = "https://github.com/Dayana20/sandbox.git", rev = "784be97fc111338c6746b9d7288bf84a333a9b16", subdirectory = "packages/team1_dropbox" }
 dropbox-client-impl = { git = "https://github.com/Shreyas191/OSPSD-Team-3.git", tag = "v0.3.0", subdirectory = "src/dropbox_client_impl" }
 
 [dependency-groups]
