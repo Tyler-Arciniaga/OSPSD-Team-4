@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from calendar_contract import CalendarError, CreateEvent, ErrorCode
 
 from ospsd_team4_product.config import ConfigError, load_config
 from ospsd_team4_product.factories import build_providers
@@ -25,6 +26,36 @@ def test_fakes_are_selected_through_the_same_variables() -> None:
     assert isinstance(providers.tracker, InMemoryIssueProvider)
     assert isinstance(providers.calendar, InMemoryCalendarService)
     assert isinstance(providers.storage, InMemoryDocumentStorage)
+
+
+def test_controlled_calendar_outage_is_selected_by_configuration() -> None:
+    """The second create fails with a retryable outage; later calls succeed."""
+    providers = build_providers(
+        load_config(
+            FAKES
+            | {
+                "CALENDAR_PROVIDER": (
+                    "ospsd_team4_product.fakes:calendar_outage_on_second_create"
+                )
+            }
+        )
+    )
+    calendar = providers.calendar
+    request = CreateEvent(
+        title="Focus: x",
+        start="2026-11-20T09:00:00-05:00",
+        end="2026-11-20T10:00:00-05:00",
+    )
+
+    first = calendar.create(request)
+    with pytest.raises(CalendarError) as raised:
+        calendar.create(request)
+    third = calendar.create(request)
+
+    assert raised.value.code == ErrorCode.PROVIDER_UNAVAILABLE
+    assert raised.value.retryable is True
+    assert calendar.get(first.id) == first
+    assert calendar.get(third.id) == third
 
 
 def test_token_file_is_passed_to_the_calendar_factory(tmp_path: Path) -> None:

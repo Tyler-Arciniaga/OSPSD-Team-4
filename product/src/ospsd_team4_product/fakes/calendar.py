@@ -60,3 +60,26 @@ class InMemoryCalendarService:
             raise CalendarError(
                 ErrorCode.NOT_FOUND, "Event not found", retryable=False
             ) from None
+
+
+def calendar_outage_on_second_create() -> InMemoryCalendarService:
+    """A calendar that goes down on its second `create`, then recovers.
+
+    Select it with
+    `CALENDAR_PROVIDER=ospsd_team4_product.fakes:calendar_outage_on_second_create`
+    to show a controlled `create_events` failure through the running service
+    (docs/evidence/calendar-failure.md): the first block's event is created,
+    the second raises a retryable PROVIDER_UNAVAILABLE, and every later call
+    succeeds, so a replay against the same process completes.
+    """
+    service = InMemoryCalendarService()
+    service.failures.fail(
+        "create",
+        CalendarError(
+            ErrorCode.PROVIDER_UNAVAILABLE,
+            "Controlled outage (injected)",
+            retryable=True,
+        ),
+        on_call=2,
+    )
+    return service
