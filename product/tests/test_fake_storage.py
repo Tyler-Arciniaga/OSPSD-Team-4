@@ -13,7 +13,46 @@ from ospsd_team4_product.fakes import InMemoryDocumentStorage
 
 @pytest.fixture
 def storage() -> InMemoryDocumentStorage:
-    return InMemoryDocumentStorage()
+    return InMemoryDocumentStorage(folders=("/a/b", "/s/day", "/t"))
+
+
+def test_starts_with_the_standups_folder_only() -> None:
+    storage = InMemoryDocumentStorage()
+
+    assert storage.folders == {"/standups"}
+    assert storage.list_files("/standups") == []
+    storage.create("/standups/2026-11-18-tyler.md", b"x")
+
+
+def test_create_in_a_missing_folder_is_not_found_and_changes_nothing() -> None:
+    storage = InMemoryDocumentStorage()
+
+    with pytest.raises(NotFoundError):
+        storage.create("/other/doc.md", b"x")
+    with pytest.raises(NotFoundError):
+        storage.create("/standups/2026-11-18/doc.md", b"x")
+
+    assert storage.files == {}
+    assert storage.folders == {"/standups"}
+
+
+def test_make_parents_creates_missing_folders() -> None:
+    storage = InMemoryDocumentStorage(folders=(), make_parents=True)
+
+    storage.create("/a/b/doc.md", b"x")
+
+    assert storage.folders == {"/a", "/a/b"}
+
+
+def test_move_into_a_missing_folder_is_not_found(
+    storage: InMemoryDocumentStorage,
+) -> None:
+    storage.create("/s/a.md", b"x")
+
+    with pytest.raises(NotFoundError):
+        storage.move("/s/a.md", "/missing/a.md")
+
+    assert set(storage.files) == {"/s/a.md"}
 
 
 def test_round_trip(storage: InMemoryDocumentStorage) -> None:
@@ -79,4 +118,5 @@ def test_move_and_folder_delete(storage: InMemoryDocumentStorage) -> None:
 
     storage.delete("/s")
     assert set(storage.files) == {"/t/a.md"}
+    assert "/s" not in storage.folders and "/s/day" not in storage.folders
     storage.check_health()

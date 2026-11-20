@@ -13,12 +13,12 @@ after a deploy. It needs no credentials: the service holds them.
    - `live` (production, real providers): the day is fully booked, so the
      plan has no blocks and no calendar event is created. The run still
      reads the real tracker and writes the real doc, at the same path every
-     time (/standups/2000-01-03/release-smoke.md), so repeated releases
+     time (/standups/2000-01-03-release-smoke.md), so repeated releases
      overwrite one file instead of adding more. The calendar is not
      exercised: the service has no way to remove an event it creates.
 
-   Both targets also send an invalid request, which must fail the `plan`
-   step with 422 before any provider is called.
+   Both targets also send an invalid request (an upper-case assignee), which
+   must fail the `validate` step with 422 before any provider is called.
 
 It prints step statuses and counts only, never issue titles or provider
 text, and appends a summary to $GITHUB_STEP_SUMMARY when it is set.
@@ -52,7 +52,7 @@ LIVE_REQUEST: dict[str, Any] = {
         {"start": "2000-01-03T09:00:00-05:00", "end": "2000-01-03T17:00:00-05:00"}
     ],
 }
-INVALID_REQUEST: dict[str, Any] = {"assignee": "../smoke", "day": "2026-11-18"}
+INVALID_REQUEST: dict[str, Any] = {"assignee": "Release-Smoke", "day": "2026-11-18"}
 
 
 class Client(Protocol):
@@ -130,7 +130,7 @@ def check_fakes(client: Client) -> list[str]:
         raise SmokeError(
             f"first run: {len(blocks)} blocks but {len(first['created'])} events"
         )
-    if first["doc"]["path"] != f"/standups/2026-11-18/{SMOKE_ASSIGNEE}.md":
+    if first["doc"]["path"] != f"/standups/2026-11-18-{SMOKE_ASSIGNEE}.md":
         raise SmokeError("first run: the doc was written to an unexpected path")
 
     replay = FAKES_REQUEST | {
@@ -153,7 +153,7 @@ def check_live(client: Client) -> list[str]:
     _expect_ok(status, body, "booked day")
     if body["plan"]["blocks"] or body["created"]:
         raise SmokeError("booked day: a block or event was created")
-    if body["doc"]["path"] != f"/standups/2000-01-03/{SMOKE_ASSIGNEE}.md":
+    if body["doc"]["path"] != f"/standups/2000-01-03-{SMOKE_ASSIGNEE}.md":
         raise SmokeError("booked day: the doc was written to an unexpected path")
     return [
         (
@@ -165,11 +165,11 @@ def check_live(client: Client) -> list[str]:
 
 def check_invalid(client: Client) -> str:
     status, body = _post(client, INVALID_REQUEST)
-    if status != 422 or body.get("failed_step") != "plan":
+    if status != 422 or body.get("failed_step") != "validate":
         raise SmokeError(
             f"invalid request: HTTP {status}, failed step {body.get('failed_step')!r}"
         )
-    return "invalid request: 422, rejected in the plan step"
+    return "invalid request: 422, rejected in the validate step"
 
 
 def run(client: Client, *, commit: str, mode: str, **ready: Any) -> list[str]:

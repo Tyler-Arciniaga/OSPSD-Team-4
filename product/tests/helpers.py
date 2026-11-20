@@ -3,6 +3,8 @@ STORAGE_PROVIDER. They stand in for real providers in configuration tests."""
 
 from pathlib import Path
 
+from ospsd_team4_product.fakes import InMemoryDocumentStorage
+
 
 class Provider:
     """A provider built with no arguments."""
@@ -38,3 +40,8 @@ def make_token_calendar(*, token_file: str) -> TokenCalendar:
 
 def failing_factory() -> Provider:
     raise RuntimeError("secret credential missing")
+
+
+def storage_that_makes_parents() -> InMemoryDocumentStorage:
+    """The in-memory storage, making missing parent folders as Dropbox does."""
+    return InMemoryDocumentStorage(folders=(), make_parents=True)
