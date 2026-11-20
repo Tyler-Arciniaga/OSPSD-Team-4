@@ -32,7 +32,7 @@ provider failures; nothing else from a provider reaches the orchestrator.
 
 | Field              | Meaning                                                                    |
 | ------------------ | -------------------------------------------------------------------------- |
-| `step`             | `validate`, `list_issues`, `plan`, `create_events` or `write_standup_doc`  |
+| `step`             | `validate`, `check_doc`, `list_issues`, `plan`, `create_events` or `write_standup_doc` |
 | `code`             | An HW1 code from the table above; it sets the HTTP status                  |
 | `message`          | Safe to show callers. Always written by this service, never a provider's   |
 | `retryable`        | Repeating the same request later may succeed (a transient outage)          |
@@ -55,10 +55,11 @@ their HW1 meaning, and the product adds `error.step`, `error.retryable` and
 | Field         | Meaning                                                                 |
 | ------------- | ----------------------------------------------------------------------- |
 | `status`      | `partial` if `created` is not empty, otherwise `failed`                 |
-| `steps`       | All five steps, each `ok`, `failed` or `skipped`; the failed one has `error` |
+| `steps`       | All six steps, each `ok`, `failed` or `skipped`; the failed one has `error` |
 | `plan`        | The plan, or `null` if planning did not finish                          |
 | `created`     | Issue ID to event ID, for every event known to exist                    |
 | `doc`         | Always `null` on failure                                                |
+| `issues_truncated` | `true` if `list_issues` returned 100 issues (older ones may be missing), `false` if fewer, `null` if `list_issues` did not run (F6) |
 | `failed_step` | The step that failed (same as `error.step`)                             |
 | `error`       | The fields above                                                        |
 
@@ -69,6 +70,7 @@ Example (calendar outage on block 2 of 3, HTTP 502):
   "status": "partial",
   "steps": [
     {"name": "validate", "status": "ok", "error": null},
+    {"name": "check_doc", "status": "ok", "error": null},
     {"name": "list_issues", "status": "ok", "error": null},
     {"name": "plan", "status": "ok", "error": null},
     {"name": "create_events", "status": "failed", "error": {"...": "same as error"}},
@@ -77,6 +79,7 @@ Example (calendar outage on block 2 of 3, HTTP 502):
   "plan": {"blocks": ["..."], "unscheduled": []},
   "created": {"demo-1": "fake-event-1"},
   "doc": null,
+  "issues_truncated": false,
   "failed_step": "create_events",
   "error": {
     "code": "provider_error",
@@ -95,8 +98,13 @@ Rules:
   some issues unscheduled (`no_free_slot`) is not an error: it is 200 with
   `status: ok`.
 - To retry, send the same request with `replay: {"plan": ..., "created": ...}`
-  copied from the failure body. On replay `list_issues` and `plan` are
-  `skipped`, existing events are kept, and only missing ones are created.
+  copied from the failure body. On replay `check_doc`, `list_issues` and
+  `plan` are `skipped`, existing events are kept, and only missing ones are
+  created.
+- A run without `replay` whose doc already exists stops at `check_doc` with
+  412 `precondition_failed`, before anything is booked
+  ([`check_doc`](#check_doc-storage)). Sending the same request twice
+  therefore never books a second set of events.
 - If `error.may_have_applied` is true for `create_events`, an event may exist
   that is not in `created`. A replay cannot know about it, so check the
   calendar first; replaying anyway can create a duplicate.
@@ -116,6 +124,12 @@ Source: `src/ospsd_team4_product/adapters/tracker.py`.
 A failed read changes nothing, so `may_have_applied` is always false. An
 unexpected exception is logged with its traceback and reported as "The issue
 tracker returned an unusable response".
+
+Not an error: the tracker contract returns at most `MAX_LIST_LIMIT` (100)
+issues, newest first. When it returns 100, older issues may be missing from
+the plan (they appear in neither `blocks` nor `unscheduled`), and the
+response, success or failure, has `issues_truncated: true` (F6). A list of
+exactly 100 also sets it, since the contract cannot tell the two apart.
 
 ## `validate` (request input)
 
@@ -153,6 +167,34 @@ Planner and path rules (`PlanInputError(field, message)`):
 | `replay.plan.blocks[i]`                      | start is not before end                         |
 | `replay.plan.blocks[i].issue_id`             | the same issue appears in two blocks            |
 | `replay.created`                             | names an issue with no block in `replay.plan`   |
+
+## `check_doc` (storage)
+
+Source: `src/ospsd_team4_product/adapters/storage.py` (`check_doc_absent`).
+Runs only on a run without `replay`, after `validate` and before any other
+provider call (F5). It calls `get_metadata` on the doc path:
+
+| Result of `get_metadata`        | Outcome                                                  |
+| ------------------------------- | -------------------------------------------------------- |
+| `NotFoundError`                 | No doc: the run continues                                |
+| returns file info               | precondition_failed (412), not retryable, nothing applied |
+| any other error                 | the storage mapping below, with `may_have_applied` always false (it is a read) |
+
+The 412 message is "A standup doc already exists for this assignee and day;
+replay the earlier response instead". To plan that day again from scratch,
+remove the earlier events and the doc by hand first.
+
+`get_metadata` cannot tell a missing doc from a missing doc folder, so a
+missing `/standups` passes this check and is reported by
+`write_standup_doc` (503, below) once the events exist.
+
+What the check does not catch:
+
+- A run that failed before writing its doc (for example the calendar failed
+  on block 2 of 3, or the doc folder is missing) leaves no doc, so sending
+  it again without `replay` books its events a second time. Replay instead.
+- Two runs for the same assignee and day that start at the same time both
+  pass the check before either writes the doc.
 
 ## `create_events` (calendar)
 

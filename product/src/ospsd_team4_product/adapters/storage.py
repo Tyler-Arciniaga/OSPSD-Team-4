@@ -1,4 +1,4 @@
-"""Storage adapter for the `write_standup_doc` step.
+"""Storage adapter for the `check_doc` and `write_standup_doc` steps.
 
 The shared contract (cloud-storage-api 0.3.1) has no upsert, so the doc is
 written as:
@@ -19,8 +19,9 @@ unknown (`ProviderError`, or an unexpected exception) is therefore
 `retryable` as well as `may_have_applied`, unlike the calendar's uncertain
 create.
 
-The error mapping is documented in product/docs/ERRORS.md
-("write_standup_doc (storage)"). Keep that table in sync with `_MAPPING`.
+The error mapping is documented in product/docs/ERRORS.md ("check_doc
+(storage)" and "write_standup_doc (storage)"). Keep those tables in sync with
+`_MAPPING`.
 """
 
 import logging
@@ -47,6 +48,7 @@ from ospsd_team4_product.errors import Step, StepError
 logger = logging.getLogger(__name__)
 
 STEP: Final[Step] = "write_standup_doc"
+CHECK_DOC_STEP: Final[Step] = "check_doc"
 
 # (code, message, retryable, may_have_applied), most specific class first.
 _MAPPING: tuple[tuple[type[StorageError], ErrorCode, str, bool, bool], ...] = (
@@ -124,25 +126,37 @@ class StoredDoc:
     id: str | None
 
 
-def translate(exc: Exception) -> StepError:
+def doc_exists_already() -> StepError:
+    return StepError(
+        CHECK_DOC_STEP,
+        ErrorCode.PRECONDITION_FAILED,
+        "A standup doc already exists for this assignee and day; "
+        "replay the earlier response instead",
+        cause="doc_exists",
+    )
+
+
+def translate(exc: Exception, step: Step = STEP) -> StepError:
+    """Map a storage failure; on the read-only `check_doc` step nothing applied."""
+    wrote = step == STEP
     if isinstance(exc, StorageError):
         for error_type, code, message, retryable, may_have_applied in _MAPPING:
             if isinstance(exc, error_type):
                 return StepError(
-                    STEP,
+                    step,
                     code,
                     message,
                     retryable=retryable,
-                    may_have_applied=may_have_applied,
+                    may_have_applied=may_have_applied and wrote,
                     cause=f"storage_{exc.code}",
                 )
     logger.error("storage raised an unexpected exception: %s", type(exc).__name__)
     return StepError(
-        STEP,
+        step,
         ErrorCode.PROVIDER_ERROR,
         "Storage returned an unusable response",
         retryable=True,
-        may_have_applied=True,
+        may_have_applied=wrote,
         cause=type(exc).__name__,
     )
 
@@ -150,6 +164,16 @@ def translate(exc: Exception) -> StepError:
 class StorageAdapter:
     def __init__(self, storage: DocumentStorage) -> None:
         self._storage = storage
+
+    def check_doc_absent(self, path: str) -> None:
+        """Raise StepError (412 on `check_doc`) if a file exists at `path`."""
+        try:
+            self._storage.get_metadata(path)
+        except NotFoundError:
+            return
+        except Exception as exc:  # noqa: BLE001  (every failure is translated)
+            raise translate(exc, CHECK_DOC_STEP) from None
+        raise doc_exists_already()
 
     def write_doc(self, path: str, content: bytes) -> StoredDoc:
         """Create or replace the file at `path` (an already validated path)."""

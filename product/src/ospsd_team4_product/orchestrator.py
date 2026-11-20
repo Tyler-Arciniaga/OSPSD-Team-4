@@ -3,17 +3,21 @@
 Steps, in order, each run at most once per request:
 
 0. `validate`: the whole request, before any provider is called.
-1. `list_issues`: every issue in the configured tracker collection.
-2. `plan`: the pure planner; no I/O.
-3. `create_events`: one calendar event per block, in block order. Fails fast
+1. `check_doc`: a run without `replay` stops with 412 if the doc for this
+   assignee and day already exists, so sending the same request twice does
+   not book a second set of events (F5).
+2. `list_issues`: every issue in the configured tracker collection, up to
+   100; `issues_truncated` reports when the limit was reached (F6).
+3. `plan`: the pure planner; no I/O.
+4. `create_events`: one calendar event per block, in block order. Fails fast
    on the first calendar error; an uncertain create is never retried.
-4. `write_standup_doc`: upsert the doc, only once every event exists.
+5. `write_standup_doc`: upsert the doc, only once every event exists.
 
 All input is validated in the `validate` step, before any provider is
 called, so invalid input never has a side effect.
 
 Replay: a retry sends back the earlier response's `plan` and `created`. The
-plan is not recomputed (`list_issues` and `plan` are skipped): recomputing
+plan is not recomputed (`check_doc`, `list_issues` and `plan` are skipped): recomputing
 could move blocks, for example once the caller lists our own events as busy.
 For each block with an event ID in `created`, `get` confirms the event still
 exists; only blocks without an event, or whose event is NOT_FOUND, get a new
@@ -105,6 +109,7 @@ class _Progress:
     )
     plan: Plan | None = None
     created: dict[str, str] = field(default_factory=dict)
+    issues_truncated: bool | None = None
 
     def done(self, step: Step) -> None:
         self.statuses[step] = "ok"
@@ -119,6 +124,7 @@ class _Progress:
                 plan=PlanModel.of(self.plan),
                 created=self.created,
                 doc=doc,
+                issues_truncated=self.issues_truncated,
             ),
         )
 
@@ -145,6 +151,7 @@ class _Progress:
                 steps=steps,
                 plan=PlanModel.of(self.plan) if self.plan is not None else None,
                 created=self.created,
+                issues_truncated=self.issues_truncated,
                 failed_step=exc.step,
                 error=error,
             ),
@@ -217,9 +224,12 @@ class FocusDay:
             inputs = self._inputs(request)
             progress.done("validate")
             if inputs.replay_plan is None:
-                issues = self._tracker.list_issues()
+                self._storage.check_doc_absent(inputs.path)
+                progress.done("check_doc")
+                listed = self._tracker.list_issues()
+                progress.issues_truncated = listed.truncated
                 progress.done("list_issues")
-                progress.plan = self._plan(issues, inputs)
+                progress.plan = self._plan(listed.issues, inputs)
                 progress.done("plan")
             else:
                 progress.plan = inputs.replay_plan

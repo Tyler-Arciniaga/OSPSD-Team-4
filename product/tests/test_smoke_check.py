@@ -4,7 +4,8 @@ This proves the script's checks, not a deployment: the release workflow runs
 it against the deployed service.
 """
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -41,19 +42,40 @@ def test_passes_against_a_working_service(service: Service, mode: str) -> None:
     assert lines[-1] == "invalid request: 422, rejected in the validate step"
 
 
-def test_live_mode_creates_no_event_and_reuses_one_doc(service: Service) -> None:
-    smoke_check.run(service.client, commit=COMMIT, mode="live", sleep=no_wait)
+def at(hour: int, minute: int, second: int) -> Callable[[], datetime]:
+    return lambda: datetime(2026, 11, 20, hour, minute, second, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("mode", ["fakes", "live"])
+def test_each_run_writes_its_own_doc(service: Service, mode: str) -> None:
+    """A doc that exists stops a run (F5), so a second check still passes."""
+    smoke_check.run(
+        service.client, commit=COMMIT, mode=mode, now=at(15, 30, 0), sleep=no_wait
+    )
+    smoke_check.run(
+        service.client, commit=COMMIT, mode=mode, now=at(15, 31, 0), sleep=no_wait
+    )
+
+    day = "2000-01-03" if mode == "live" else "2026-11-18"
+    assert sorted(service.storage.files) == [
+        f"/standups/{day}-release-smoke-0123456-20261120-153000.md",
+        f"/standups/{day}-release-smoke-0123456-20261120-153100.md",
+    ]
+
+
+def test_live_mode_creates_no_event(service: Service) -> None:
     smoke_check.run(service.client, commit=COMMIT, mode="live", sleep=no_wait)
 
     assert service.calendar.events == {}
-    assert list(service.storage.files) == ["/standups/2000-01-03-release-smoke.md"]
 
 
-def test_fakes_mode_checks_the_replay(service: Service) -> None:
-    smoke_check.run(service.client, commit=COMMIT, mode="fakes", sleep=no_wait)
+def test_fakes_mode_checks_the_duplicate_run_and_the_replay(service: Service) -> None:
+    lines = smoke_check.run(service.client, commit=COMMIT, mode="fakes", sleep=no_wait)
 
+    assert "same request again: 412, stopped at check_doc, no events" in lines
     assert service.calendar.failures.calls("create") == 3
     assert service.calendar.failures.calls("get") == 3
+    assert service.tracker.failures.calls("list_issues") == 1
 
 
 def test_a_failing_step_fails_the_check(service: Service) -> None:

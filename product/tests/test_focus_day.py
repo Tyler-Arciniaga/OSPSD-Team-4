@@ -18,6 +18,7 @@ from cloud_storage_api import (
 )
 from fastapi.testclient import TestClient
 from issue_tracker_contract.errors import ErrorCode, ServiceError
+from issue_tracker_contract.models import MAX_LIST_LIMIT, Issue
 
 from ospsd_team4_product.factories import Providers
 from ospsd_team4_product.fakes import (
@@ -97,6 +98,7 @@ def test_success_books_every_block_and_writes_the_doc(service: Service) -> None:
         "status": "ok",
         "steps": [
             {"name": "validate", "status": "ok", "error": None},
+            {"name": "check_doc", "status": "ok", "error": None},
             {"name": "list_issues", "status": "ok", "error": None},
             {"name": "plan", "status": "ok", "error": None},
             {"name": "create_events", "status": "ok", "error": None},
@@ -131,6 +133,7 @@ def test_success_books_every_block_and_writes_the_doc(service: Service) -> None:
             "demo-3": "fake-event-3",
         },
         "doc": {"path": DOC_PATH, "id": "fake-file-1"},
+        "issues_truncated": False,
         "failed_step": None,
     }
     assert (
@@ -167,10 +170,124 @@ def test_defaults_come_from_configuration(service: Service) -> None:
     assert blocks[0]["end"] == "2026-11-18T10:30:00-05:00"
 
 
-def test_existing_doc_is_replaced(service: Service) -> None:
+def test_more_than_100_issues_plans_the_newest_100_and_says_so(
+    service: Service,
+) -> None:
+    service.tracker.issues = [
+        Issue(id=f"issue-{n:03}", title=f"Issue {n}") for n in range(130)
+    ]
+
+    response = service.post(REQUEST | {"busy": [], "default_minutes": 1})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["issues_truncated"] is True
+    planned = {block["issue_id"] for block in body["plan"]["blocks"]} | {
+        item["issue_id"] for item in body["plan"]["unscheduled"]
+    }
+    assert planned == {f"issue-{n:03}" for n in range(MAX_LIST_LIMIT)}
+
+
+def test_truncation_is_reported_on_a_failure_after_list_issues(
+    service: Service,
+) -> None:
+    service.tracker.issues = [
+        Issue(id=f"issue-{n:03}", title=f"Issue {n}") for n in range(MAX_LIST_LIMIT)
+    ]
+    service.calendar.failures.fail(
+        "create",
+        CalendarError(CalendarCode.PROVIDER_UNAVAILABLE, "down", retryable=True),
+    )
+
+    body = service.post(REQUEST).json()
+
+    assert body["failed_step"] == "create_events"
+    assert body["issues_truncated"] is True
+
+
+# The same request sent again without `replay` (F5)
+
+
+def test_same_request_again_is_rejected_before_any_event(service: Service) -> None:
+    first = service.post(REQUEST).json()
+    doc = service.storage.files[DOC_PATH]
+
+    response = service.post(REQUEST)
+
+    assert response.status_code == 412
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["failed_step"] == "check_doc"
+    assert body["plan"] is None
+    assert body["created"] == {}
+    assert body["issues_truncated"] is None
+    assert body["error"] == {
+        "code": "precondition_failed",
+        "message": (
+            "A standup doc already exists for this assignee and day; "
+            "replay the earlier response instead"
+        ),
+        "details": None,
+        "step": "check_doc",
+        "retryable": False,
+        "may_have_applied": False,
+    }
+    assert statuses(body) == {
+        "validate": "ok",
+        "check_doc": "failed",
+        "list_issues": "skipped",
+        "plan": "skipped",
+        "create_events": "skipped",
+        "write_standup_doc": "skipped",
+    }
+    # Only run 1's events exist, and its doc is untouched.
+    assert set(service.calendar.events) == set(first["created"].values())
+    assert service.storage.files[DOC_PATH] == doc
+    assert service.tracker.failures.calls("list_issues") == 1
+
+
+def test_a_doc_written_by_anyone_stops_the_run(service: Service) -> None:
     service.storage.create(DOC_PATH, b"old")
 
+    response = service.post(REQUEST)
+
+    assert response.status_code == 412
+    assert service.calendar.events == {}
+    assert service.storage.files[DOC_PATH] == b"old"
+
+
+def test_another_assignee_or_day_is_not_affected(service: Service) -> None:
     assert service.post(REQUEST).status_code == 200
+
+    assert service.post(REQUEST | {"assignee": "chan"}).status_code == 200
+    assert service.post(REQUEST | {"day": "2026-11-19", "busy": []}).status_code == 200
+
+
+def test_doc_check_failure_books_nothing(service: Service) -> None:
+    service.storage.failures.fail("get_metadata", ProviderUnavailableError(SECRET))
+
+    response = service.post(REQUEST)
+
+    assert response.status_code == 502
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["failed_step"] == "check_doc"
+    assert body["error"]["code"] == "provider_error"
+    assert body["error"]["retryable"] is True
+    assert body["error"]["may_have_applied"] is False
+    assert service.tracker.failures.calls("list_issues") == 0
+    assert service.calendar.failures.calls("create") == 0
+    assert SECRET not in response.text
+
+
+def test_replay_over_an_existing_doc_rewrites_it(service: Service) -> None:
+    first = service.post(REQUEST).json()
+    service.storage.files[DOC_PATH] = b"edited"
+
+    response = service.post(replay_of(first))
+
+    assert response.status_code == 200
+    assert statuses(response.json())["check_doc"] == "skipped"
     assert service.storage.files[DOC_PATH].startswith(b"# Standup")
 
 
@@ -201,12 +318,14 @@ def test_tracker_failure(service: Service) -> None:
     }
     assert statuses(body) == {
         "validate": "ok",
+        "check_doc": "ok",
         "list_issues": "failed",
         "plan": "skipped",
         "create_events": "skipped",
         "write_standup_doc": "skipped",
     }
-    assert body["steps"][1]["error"] == body["error"]
+    assert body["steps"][2]["error"] == body["error"]
+    assert body["issues_truncated"] is None
     assert service.calendar.failures.calls("create") == 0
 
 
@@ -239,6 +358,7 @@ def test_calendar_failure_on_block_two_of_three(service: Service) -> None:
     assert body["error"]["may_have_applied"] is False
     assert statuses(body) == {
         "validate": "ok",
+        "check_doc": "ok",
         "list_issues": "ok",
         "plan": "ok",
         "create_events": "failed",
@@ -366,11 +486,14 @@ def test_replay_skips_events_that_exist(service: Service) -> None:
     assert body["plan"] == first["plan"]
     assert statuses(body) == {
         "validate": "ok",
+        "check_doc": "skipped",
         "list_issues": "skipped",
         "plan": "skipped",
         "create_events": "ok",
         "write_standup_doc": "ok",
     }
+    assert body["issues_truncated"] is None
+    assert service.storage.failures.calls("get_metadata") == 1
     assert service.tracker.failures.calls("list_issues") == 1
     assert service.calendar.failures.calls("create") == 3
     assert service.calendar.failures.calls("get") == 3
@@ -455,14 +578,17 @@ def assert_rejected(service: Service, body: dict[str, Any], field: str) -> None:
     assert [detail["field"] for detail in result["error"]["details"]] == [field]
     assert statuses(result) == {
         "validate": "failed",
+        "check_doc": "skipped",
         "list_issues": "skipped",
         "plan": "skipped",
         "create_events": "skipped",
         "write_standup_doc": "skipped",
     }
     assert service.tracker.failures.calls("list_issues") == 0
+    assert service.storage.failures.calls("get_metadata") == 0
     assert service.calendar.failures.calls("create") == 0
     assert service.storage.files == {}
+    assert result["issues_truncated"] is None
 
 
 @pytest.mark.parametrize(
