@@ -2,14 +2,15 @@
 
 Steps, in order, each run at most once per request:
 
+0. `validate`: the whole request, before any provider is called.
 1. `list_issues`: every issue in the configured tracker collection.
 2. `plan`: the pure planner; no I/O.
 3. `create_events`: one calendar event per block, in block order. Fails fast
    on the first calendar error; an uncertain create is never retried.
 4. `write_standup_doc`: upsert the doc, only once every event exists.
 
-All input is validated before any provider is called, so invalid input
-never has a side effect.
+All input is validated in the `validate` step, before any provider is
+called, so invalid input never has a side effect.
 
 Replay: a retry sends back the earlier response's `plan` and `created`. The
 plan is not recomputed (`list_issues` and `plan` are skipped): recomputing
@@ -151,9 +152,9 @@ class _Progress:
         )
 
 
-def _invalid(exc: PlanInputError) -> StepError:
+def _invalid(exc: PlanInputError, step: Step = "validate") -> StepError:
     return StepError(
-        "plan",
+        step,
         ErrorCode.INVALID_INPUT,
         INVALID_REQUEST,
         details=[ErrorDetail(field=exc.field, message=exc.message)],
@@ -162,10 +163,10 @@ def _invalid(exc: PlanInputError) -> StepError:
 
 
 def rejected_request(details: list[ErrorDetail]) -> Outcome:
-    """The outcome for a body that failed schema validation (`plan` step)."""
+    """The outcome for a body that failed schema validation (`validate` step)."""
     return _Progress().failure(
         StepError(
-            "plan",
+            "validate",
             ErrorCode.INVALID_INPUT,
             INVALID_REQUEST,
             details=details,
@@ -214,6 +215,7 @@ class FocusDay:
         progress = _Progress()
         try:
             inputs = self._inputs(request)
+            progress.done("validate")
             if inputs.replay_plan is None:
                 issues = self._tracker.list_issues()
                 progress.done("list_issues")
@@ -274,10 +276,12 @@ class FocusDay:
         return replace(inputs, replay_plan=replay_plan, replay_created=replay_created)
 
     def _plan(self, issues: list[PlanIssue], inputs: _Inputs) -> Plan:
+        # `validate` already ran the planner's input checks, so this is only
+        # reached if the planner and those checks disagree.
         try:
             return inputs.plan(issues)
         except PlanInputError as exc:
-            raise _invalid(exc) from None
+            raise _invalid(exc, "plan") from None
 
     def _create_events(self, plan: Plan, created: dict[str, str]) -> None:
         """Make sure each block has an event; `created` is updated in place.
