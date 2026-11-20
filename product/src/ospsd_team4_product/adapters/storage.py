@@ -8,6 +8,10 @@ written as:
 3. `NotFoundError`: `create`.
 4. `ConflictError` from that `create` (someone created it in between):
    `replace` once more.
+5. `NotFoundError` from that `create`: the doc folder does not exist. The
+   contract does not promise that `create` makes missing parent folders, so
+   the folder is created once at setup, and its absence is reported as
+   `service_not_configured` (an operator has to create it).
 
 Anything else fails the step. The same plan always gives the same bytes, so
 repeating the whole write is safe.
@@ -102,6 +106,15 @@ _MAPPING: tuple[tuple[type[StorageError], ErrorCode, str, bool, bool], ...] = (
 )
 
 
+def folder_missing() -> StepError:
+    return StepError(
+        STEP,
+        ErrorCode.SERVICE_NOT_CONFIGURED,
+        "The standup doc folder does not exist; an operator must create it",
+        cause="storage_doc_folder_missing",
+    )
+
+
 @dataclass(frozen=True)
 class StoredDoc:
     path: str
@@ -138,6 +151,8 @@ class StorageAdapter:
         """Create or replace the file at `path` (an already validated path)."""
         try:
             info = self._upsert(path, content)
+        except StepError:
+            raise
         except Exception as exc:  # noqa: BLE001  (every failure is translated)
             raise translate(exc) from None
         return StoredDoc(path=info.path, id=info.id)
@@ -156,3 +171,5 @@ class StorageAdapter:
             return self._storage.create(path, content)
         except ConflictError:
             return replace()
+        except NotFoundError:
+            raise folder_missing() from None

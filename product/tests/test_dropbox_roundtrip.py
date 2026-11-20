@@ -1,7 +1,8 @@
 """The live round-trip script, run against the in-memory storage.
 
 This proves the script's checks and report, not Dropbox behavior: the live
-result is recorded separately in docs/evidence/.
+result is recorded separately in docs/evidence/. The fake is set to make
+missing parent folders, as Dropbox did in that run.
 """
 
 import pytest
@@ -10,7 +11,7 @@ from scripts import dropbox_roundtrip
 
 from ospsd_team4_product.fakes import InMemoryDocumentStorage
 
-FAKE = {"STORAGE_PROVIDER": "ospsd_team4_product.fakes:InMemoryDocumentStorage"}
+FAKE = {"STORAGE_PROVIDER": "tests.helpers:storage_that_makes_parents"}
 
 
 def test_every_check_passes_against_the_fake(
@@ -25,7 +26,7 @@ def test_every_check_passes_against_the_fake(
 
 
 def test_everything_is_cleaned_up() -> None:
-    storage = InMemoryDocumentStorage()
+    storage = InMemoryDocumentStorage(folders=(), make_parents=True)
     root = "/ospsd-team4-roundtrip-test"
 
     dropbox_roundtrip.run(storage, root)

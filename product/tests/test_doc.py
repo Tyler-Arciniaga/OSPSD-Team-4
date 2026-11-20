@@ -25,9 +25,9 @@ PLAN = Plan(
 )
 
 
-def test_doc_path() -> None:
-    assert doc_path(DAY, "tyler") == "/standups/2026-11-18/tyler.md"
-    assert doc_path(DAY, "a.b_c-1") == "/standups/2026-11-18/a.b_c-1.md"
+def test_doc_path_is_flat() -> None:
+    assert doc_path(DAY, "tyler") == "/standups/2026-11-18-tyler.md"
+    assert doc_path(DAY, "a.b_c-1") == "/standups/2026-11-18-a.b_c-1.md"
 
 
 @pytest.mark.parametrize(
