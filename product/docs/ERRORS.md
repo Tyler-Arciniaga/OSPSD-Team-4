@@ -32,7 +32,7 @@ provider failures; nothing else from a provider reaches the orchestrator.
 
 | Field              | Meaning                                                                    |
 | ------------------ | -------------------------------------------------------------------------- |
-| `step`             | `list_issues`, `plan`, `create_events` or `write_standup_doc`              |
+| `step`             | `validate`, `list_issues`, `plan`, `create_events` or `write_standup_doc`  |
 | `code`             | An HW1 code from the table above; it sets the HTTP status                  |
 | `message`          | Safe to show callers. Always written by this service, never a provider's   |
 | `retryable`        | Repeating the same request later may succeed (a transient outage)          |
@@ -55,7 +55,7 @@ their HW1 meaning, and the product adds `error.step`, `error.retryable` and
 | Field         | Meaning                                                                 |
 | ------------- | ----------------------------------------------------------------------- |
 | `status`      | `partial` if `created` is not empty, otherwise `failed`                 |
-| `steps`       | All four steps, each `ok`, `failed` or `skipped`; the failed one has `error` |
+| `steps`       | All five steps, each `ok`, `failed` or `skipped`; the failed one has `error` |
 | `plan`        | The plan, or `null` if planning did not finish                          |
 | `created`     | Issue ID to event ID, for every event known to exist                    |
 | `doc`         | Always `null` on failure                                                |
@@ -68,6 +68,7 @@ Example (calendar outage on block 2 of 3, HTTP 502):
 {
   "status": "partial",
   "steps": [
+    {"name": "validate", "status": "ok", "error": null},
     {"name": "list_issues", "status": "ok", "error": null},
     {"name": "plan", "status": "ok", "error": null},
     {"name": "create_events", "status": "failed", "error": {"...": "same as error"}},
@@ -116,15 +117,17 @@ A failed read changes nothing, so `may_have_applied` is always false. An
 unexpected exception is logged with its traceback and reported as "The issue
 tracker returned an unusable response".
 
-## `plan` (planner and request input)
+## `validate` (request input)
 
-Source: `src/ospsd_team4_product/planner.py`, `src/ospsd_team4_product/doc.py`.
+Source: `src/ospsd_team4_product/models.py`, `orchestrator.py`, `planner.py`,
+`doc.py`.
 
-All input is checked before any provider is called, so a rejected request has
-no side effect. Every problem is reported as the `plan` step failing with
-`invalid_input` (422), message "The request is invalid", and one
-`ErrorDetail` per problem naming the field (`busy[0].start` style). The
-other steps are `skipped`. Not retryable, nothing applied.
+All input is checked in the first step, `validate`, before any provider is
+called, so a rejected request has no side effect. Every problem is reported
+as the `validate` step failing with `invalid_input` (422), message "The
+request is invalid", and one `ErrorDetail` per problem naming the field
+(`busy[0].start` style). The other steps are `skipped`. Not retryable,
+nothing applied.
 
 Schema errors (the request body itself, `models.py`):
 
@@ -141,7 +144,7 @@ Planner and path rules (`PlanInputError(field, message)`):
 
 | Field                                        | Problem                                         |
 | -------------------------------------------- | ----------------------------------------------- |
-| `assignee`                                   | not 1 to 64 of `A-Z a-z 0-9 . _ -`, or `.`/`..` |
+| `assignee`                                   | not 1 to 64 of `a-z 0-9 . _ -` (lowercase only), or `.`/`..` |
 | `timezone`                                   | not an IANA time zone name                      |
 | `working_window`                             | start is not before end                         |
 | `busy[i].start`, `busy[i].end`               | not RFC 3339 with whole seconds and an offset   |
@@ -192,6 +195,12 @@ Source: `src/ospsd_team4_product/adapters/storage.py`. The shared contract
 3. `NotFoundError`: `create`.
 4. `ConflictError` from that `create` (someone created it in between):
    `replace` once more.
+5. `NotFoundError` from that `create`: the doc folder (`/standups`) does not
+   exist. The contract does not promise that `create` makes missing parent
+   folders, so an operator creates the folder once at setup
+   ([DEPLOYMENT.md](DEPLOYMENT.md#3-dropbox-team-3s-storage)), and its
+   absence is `service_not_configured` (503), not retryable, nothing applied.
+   Once the folder exists, a replay writes the doc.
 
 Anything else fails the step with this mapping. The same plan always gives
 the same bytes, so repeating the whole write is safe.
@@ -200,7 +209,8 @@ the same bytes, so repeating the whole write is safe.
 | ------------------------------- | ------------------- | --------- | ---------------- |
 | `InvalidRequestError`           | invalid_input       | no        | no               |
 | `PermissionDeniedError`         | access_denied       | no        | no               |
-| `NotFoundError`                 | not_found           | no        | no               |
+| `NotFoundError` from `create`   | service_not_configured | no     | no               |
+| `NotFoundError` (otherwise)     | not_found           | no        | no               |
 | `ConflictError`                 | precondition_failed | no        | no               |
 | `FileTooLargeError`             | invalid_input       | no        | no               |
 | `InvalidOperationError`         | invalid_input       | no        | no               |

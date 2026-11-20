@@ -38,7 +38,7 @@ def test_passes_against_a_working_service(service: Service, mode: str) -> None:
     lines = smoke_check.run(service.client, commit=COMMIT, mode=mode, sleep=no_wait)
 
     assert lines[0] == f"ready with commit {COMMIT}"
-    assert lines[-1] == "invalid request: 422, rejected in the plan step"
+    assert lines[-1] == "invalid request: 422, rejected in the validate step"
 
 
 def test_live_mode_creates_no_event_and_reuses_one_doc(service: Service) -> None:
@@ -46,7 +46,7 @@ def test_live_mode_creates_no_event_and_reuses_one_doc(service: Service) -> None
     smoke_check.run(service.client, commit=COMMIT, mode="live", sleep=no_wait)
 
     assert service.calendar.events == {}
-    assert list(service.storage.files) == ["/standups/2000-01-03/release-smoke.md"]
+    assert list(service.storage.files) == ["/standups/2000-01-03-release-smoke.md"]
 
 
 def test_fakes_mode_checks_the_replay(service: Service) -> None:
