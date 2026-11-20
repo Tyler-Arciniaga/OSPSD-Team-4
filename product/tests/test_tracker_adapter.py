@@ -4,7 +4,7 @@ import pytest
 from issue_tracker_contract.errors import ErrorCode, ServiceError
 from issue_tracker_contract.models import MAX_LIST_LIMIT, Issue
 
-from ospsd_team4_product.adapters.tracker import TrackerAdapter
+from ospsd_team4_product.adapters.tracker import IssueList, TrackerAdapter
 from ospsd_team4_product.errors import StepError
 from ospsd_team4_product.fakes import InMemoryIssueProvider
 from ospsd_team4_product.planner import PlanIssue
@@ -15,18 +15,33 @@ def test_lists_issues_for_the_planner() -> None:
         [Issue(id="b", title="B"), Issue(id="a", title="A")]
     )
 
-    assert TrackerAdapter(provider).list_issues() == [
-        PlanIssue(id="b", title="B"),
-        PlanIssue(id="a", title="A"),
-    ]
-
-
-def test_asks_for_the_contract_maximum() -> None:
-    provider = InMemoryIssueProvider(
-        [Issue(id=str(i), title="t") for i in range(MAX_LIST_LIMIT + 5)]
+    assert TrackerAdapter(provider).list_issues() == IssueList(
+        issues=[PlanIssue(id="b", title="B"), PlanIssue(id="a", title="A")],
+        truncated=False,
     )
 
-    assert len(TrackerAdapter(provider).list_issues()) == MAX_LIST_LIMIT
+
+def test_asks_for_the_contract_maximum_and_reports_truncation() -> None:
+    provider = InMemoryIssueProvider(
+        [Issue(id=str(i), title="t") for i in range(MAX_LIST_LIMIT + 30)]
+    )
+
+    listed = TrackerAdapter(provider).list_issues()
+
+    assert [issue.id for issue in listed.issues] == [
+        str(i) for i in range(MAX_LIST_LIMIT)
+    ]
+    assert listed.truncated is True
+
+
+@pytest.mark.parametrize(("count", "truncated"), [(99, False), (100, True)])
+def test_a_full_page_is_reported_as_truncated(count: int, truncated: bool) -> None:
+    """Exactly 100 counts: the contract cannot tell it from more than 100."""
+    provider = InMemoryIssueProvider(
+        [Issue(id=str(i), title="t") for i in range(count)]
+    )
+
+    assert TrackerAdapter(provider).list_issues().truncated is truncated
 
 
 @pytest.mark.parametrize(
