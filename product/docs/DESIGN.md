@@ -6,7 +6,7 @@
 
 #### Reviewers: Team 3 (ashik-ece)
 
-#### Status: Implemented (HW3 Milestone 1); review follow-ups F1 to F3 implemented, F4 to F7 planned ([Follow-up work](#follow-up-work-from-design-review))
+#### Status: Implemented (HW3 Milestone 1); review follow-ups F1 to F4 implemented, F5 to F7 planned ([Follow-up work](#follow-up-work-from-design-review))
 
 #### Last Update Date: 11/20/2026
 
@@ -368,7 +368,7 @@ HW1 code and status, `retryable`, `may_have_applied`, and the `plan` and
 | Calendar fails on block k of n | 502 `provider_error`, `partial` | Blocks 1 to k-1 booked and in `created`; no doc | Replay: existing events are kept, only the missing ones are created, then the doc is written | `test_calendar_failure_on_block_two_of_three`, `test_replay_after_a_calendar_failure_creates_only_the_missing_events` |
 | Uncertain create | 502 `provider_error`, `may_have_applied: true`, not retryable | Events before it in `created`; this one may exist with no known ID | Check the calendar first. Replaying anyway can create a duplicate | `test_uncertain_create_is_reported_and_not_retried` |
 | Calendar token missing, expired or revoked | 503 `service_not_configured`, step `create_events` | Nothing new | Operator re-authorizes and replaces the secret file (DEPLOYMENT.md, step 2); then replay | `test_expired_calendar_token_is_a_configuration_failure` |
-| Doc write fails after all events exist | Storage's code (for example 502 `provider_error`, `retryable: true` with F4), `partial`, step `write_standup_doc` | Every event booked and in `created`; no doc, or possibly the doc (`may_have_applied`), which is harmless because rewriting it gives the same bytes | Replay: every event is confirmed with `get`, none recreated, and only the doc is written | `test_doc_failure_after_events_is_partial`, `test_replay_after_a_doc_failure_only_writes_the_doc` |
+| Doc write fails after all events exist | Storage's code (for example 502 `provider_error`, `retryable: true` (F4)), `partial`, step `write_standup_doc` | Every event booked and in `created`; no doc, or possibly the doc (`may_have_applied`), which is harmless because rewriting it gives the same bytes | Replay: every event is confirmed with `get`, none recreated, and only the doc is written | `test_doc_failure_after_events_is_partial`, `test_replay_after_a_doc_failure_only_writes_the_doc` |
 | Doc folder missing (the operator has not created it) | 503 `service_not_configured`, `partial`, step `write_standup_doc`, not retryable (F2) | Every event booked and in `created`; no doc | Operator creates the folder (DEPLOYMENT.md, step 3); then replay | `test_missing_doc_folder_is_a_configuration_failure` |
 | Doc write fails with no events (empty plan) | Storage's code, `failed` | Nothing | Replay or retry | `test_storage_failure_with_no_events_is_failed` |
 | Replay, recorded events all exist | 200, `ok` | No new events; doc rewritten with the same bytes | Nothing | `test_replay_skips_events_that_exist`; live in the evidence |
@@ -414,7 +414,7 @@ GitHub issue; the IDs F1 to F7 are used above.
 | F1 | `validate_assignee` accepts only lowercase, so every storage provider gives the same result | Assignee case on Dropbox | Done |
 | F2 | Stop relying on `create` making parent folders: the doc path becomes flat, `/standups/<YYYY-MM-DD>-<assignee>.md`, in one folder created at setup, and a missing folder is reported as `service_not_configured` | Parent folders aren't part of the contract | Done |
 | F3 | Report invalid input as a separate first step, `validate`, instead of `plan` | Small clarity point | Done |
-| F4 | Storage provider errors in `write_standup_doc` are `retryable: true`, since rewriting the doc is safe | `retryable` seems inconsistent with this row | Planned |
+| F4 | Storage provider errors in `write_standup_doc` are `retryable: true`, since rewriting the doc is safe | `retryable` seems inconsistent with this row | Done |
 | F5 | A run without `replay` checks the doc path first and returns 412 `precondition_failed` if the doc exists | Cases to add: same request without `replay` | Planned |
 | F6 | Report when `list_issues` returned the full 100, so dropped issues are visible | Cases to add: more than 100 issues | Planned |
 | F7 | Caller authentication (Level 4) | Cases to add: no caller authentication | Planned |
