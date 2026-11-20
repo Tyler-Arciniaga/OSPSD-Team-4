@@ -11,7 +11,11 @@ from typing import Any
 import pytest
 from calendar_contract import CalendarError
 from calendar_contract import ErrorCode as CalendarCode
-from cloud_storage_api import PermissionDeniedError, ProviderUnavailableError
+from cloud_storage_api import (
+    PermissionDeniedError,
+    ProviderError,
+    ProviderUnavailableError,
+)
 from fastapi.testclient import TestClient
 from issue_tracker_contract.errors import ErrorCode, ServiceError
 
@@ -290,6 +294,22 @@ def test_doc_failure_after_events_is_partial(service: Service) -> None:
     assert body["error"]["retryable"] is True
     assert body["error"]["may_have_applied"] is True
     assert statuses(body)["create_events"] == "ok"
+    assert SECRET not in response.text
+
+
+def test_uncertain_doc_write_is_retryable(service: Service) -> None:
+    """Rewriting the doc gives the same bytes, so an uncertain write is safe to repeat."""
+    service.storage.failures.fail("replace", ProviderError(SECRET))
+
+    response = service.post(REQUEST)
+
+    assert response.status_code == 502
+    body = response.json()
+    assert body["status"] == "partial"
+    assert body["failed_step"] == "write_standup_doc"
+    assert body["error"]["code"] == "provider_error"
+    assert body["error"]["retryable"] is True
+    assert body["error"]["may_have_applied"] is True
     assert SECRET not in response.text
 
 

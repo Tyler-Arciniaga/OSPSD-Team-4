@@ -14,7 +14,10 @@ written as:
    `service_not_configured` (an operator has to create it).
 
 Anything else fails the step. The same plan always gives the same bytes, so
-repeating the whole write is safe.
+repeating the whole write is safe: a provider failure whose outcome is
+unknown (`ProviderError`, or an unexpected exception) is therefore
+`retryable` as well as `may_have_applied`, unlike the calendar's uncertain
+create.
 
 The error mapping is documented in product/docs/ERRORS.md
 ("write_standup_doc (storage)"). Keep that table in sync with `_MAPPING`.
@@ -100,7 +103,7 @@ _MAPPING: tuple[tuple[type[StorageError], ErrorCode, str, bool, bool], ...] = (
         ProviderError,
         ErrorCode.PROVIDER_ERROR,
         "Storage returned an unusable response",
-        False,
+        True,
         True,
     ),
 )
@@ -138,6 +141,7 @@ def translate(exc: Exception) -> StepError:
         STEP,
         ErrorCode.PROVIDER_ERROR,
         "Storage returned an unusable response",
+        retryable=True,
         may_have_applied=True,
         cause=type(exc).__name__,
     )
