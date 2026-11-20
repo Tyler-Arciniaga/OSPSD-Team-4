@@ -31,7 +31,8 @@ def test_doc_path() -> None:
 
 
 @pytest.mark.parametrize(
-    "assignee", ["", ".", "..", "a/b", "a b", "../x", "tylér", "x" * 65, "a\n"]
+    "assignee",
+    ["", ".", "..", "a/b", "a b", "../x", "tylér", "x" * 65, "a\n", "Tyler", "TYLER"],
 )
 def test_bad_assignee_is_rejected(assignee: str) -> None:
     with pytest.raises(PlanInputError) as error:
