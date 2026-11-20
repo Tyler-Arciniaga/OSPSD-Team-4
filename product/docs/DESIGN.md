@@ -6,9 +6,9 @@
 
 #### Reviewers: Team 3 (ashik-ece)
 
-#### Status: Implemented (HW3 Milestone 1); review follow-ups planned ([Follow-up work](#follow-up-work-from-design-review))
+#### Status: Implemented (HW3 Milestone 1); review follow-ups F1 to F3 implemented, F4 to F7 planned ([Follow-up work](#follow-up-work-from-design-review))
 
-#### Last Update Date: 11/17/2026
+#### Last Update Date: 11/20/2026
 
 #### Relevant Links
 
@@ -84,7 +84,7 @@ orchestrator.FocusDay.run
   |-- 4. write_standup_doc --> StorageAdapter  --> DocumentStorage  (cloud-storage-api 0.3.1)
   |                                                 '-> dropbox_client_impl  -> Dropbox
   v
-5. response: status, steps (4 in total), plan, created, doc  (or the error body with failed_step details)
+5. response: status, steps (5 in total, validate first), plan, created, doc  (or the error body with failed_step details)
 
 Startup (lifespan): config.py resolves *_PROVIDER paths -> factories.py builds the three
 providers once -> any problem exits before serving, naming the variable (ERRORS.md, Startup errors)
@@ -152,9 +152,9 @@ event ID booked for it:
 tries `replace` first, and when the file does not exist yet (`NotFoundError`)
 it calls `create`. On this run Dropbox also created the missing
 `/standups/2026-11-19` folder, but the storage contract does not promise
-that, so the design stops relying on it: the path becomes flat
+that, so the design no longer relies on it: since F2 the path is flat
 (`/standups/2026-11-19-tyler.md`), the operator creates `/standups` once
-during setup, and a missing folder is reported as an error (F2). Result: path
+during setup, and a missing folder is reported as an error. Result: path
 `/standups/2026-11-19/tyler.md`, id `id:oinkehfsr60AAAAAAAAADA`.
 
 ```markdown
@@ -209,9 +209,9 @@ None.
   error body instead, with `partial` or `failed` (4.3).
 - `steps` always lists every step in order. Each is `ok`, `failed` or
   `skipped`, and `error` is set only on the step that failed. On a replay,
-  `list_issues` and `plan` are `skipped`. This run has four steps; a fifth,
-  `validate`, will come first once invalid input is reported on its own
-  step (F3).
+  `list_issues` and `plan` are `skipped`. This run, recorded before F3,
+  has four steps. Since F3 a fifth, `validate`, comes first: `ok` on
+  success and on replay, `failed` for invalid input.
 - `plan.blocks` keeps each issue's title so a replay can recreate an event
   and rewrite the doc without reading the tracker again. `unscheduled` lists
   issues that did not fit, as `{"issue_id", "reason": "no_free_slot"}`.
@@ -311,8 +311,7 @@ call, so a rejected request has no side effect:
    is a bug in this service (`internal_error`).
 
 A problem found in stages 1 or 2 is reported as its own step, `validate`,
-so the response shows the request never reached the planner (F3; today it
-is reported as step `plan`).
+so the response shows the request never reached the planner (F3).
 
 **How implementations are selected.** `TRACKER_PROVIDER`, `CALENDAR_PROVIDER`
 and `STORAGE_PROVIDER` each name a `module:attr`. At startup, `config.py`
@@ -359,7 +358,7 @@ HW1 code and status, `retryable`, `may_have_applied`, and the `plan` and
 
 | Case | HTTP, status | What exists afterwards | What the caller should do | Test |
 | --- | --- | --- | --- | --- |
-| Invalid input (bad zone, window, busy interval, assignee including upper case (F1), or replay plan) | 422 `invalid_input`, `failed`, step `validate` (F3; today `plan`) | Nothing: rejected before any provider call | Fix the field named in `error.details` | `test_invalid_input_is_rejected_before_any_call`, `test_invalid_replay_is_rejected_before_any_call` |
+| Invalid input (bad zone, window, busy interval, assignee including upper case (F1), or replay plan) | 422 `invalid_input`, `failed`, step `validate` (F3) | Nothing: rejected before any provider call | Fix the field named in `error.details` | `test_invalid_input_is_rejected_before_any_call`, `test_invalid_replay_is_rejected_before_any_call` |
 | Same request sent again without `replay` (for example after a timeout or a lost response) | Today: 200 `ok`. With F5: 412 `precondition_failed`, `failed`, before any event is created | Today: a second set of events, and the doc overwritten with only the second run's blocks, so the first run's events are referenced nowhere. With F5: nothing new | Replay with the earlier response, or remove the earlier events and doc by hand to plan the day again | Added with F5 |
 | More than 100 issues in the list | 200, `ok` | Only the 100 newest issues are planned (`list_issues(limit=MAX_LIST_LIMIT)`, newest first). Older ones are dropped silently and do not appear in `unscheduled` (F6 reports this) | Keep the list under 100 issues | Added with F6 |
 | Unauthenticated caller | Accepted: there is no caller authentication yet (F7) | Anyone who can reach the endpoint can book events on the test calendar and, through `assignee`, overwrite any assignee's doc | Nothing yet; Level 4 adds authentication | Added with F7 |
@@ -370,7 +369,7 @@ HW1 code and status, `retryable`, `may_have_applied`, and the `plan` and
 | Uncertain create | 502 `provider_error`, `may_have_applied: true`, not retryable | Events before it in `created`; this one may exist with no known ID | Check the calendar first. Replaying anyway can create a duplicate | `test_uncertain_create_is_reported_and_not_retried` |
 | Calendar token missing, expired or revoked | 503 `service_not_configured`, step `create_events` | Nothing new | Operator re-authorizes and replaces the secret file (DEPLOYMENT.md, step 2); then replay | `test_expired_calendar_token_is_a_configuration_failure` |
 | Doc write fails after all events exist | Storage's code (for example 502 `provider_error`, `retryable: true` with F4), `partial`, step `write_standup_doc` | Every event booked and in `created`; no doc, or possibly the doc (`may_have_applied`), which is harmless because rewriting it gives the same bytes | Replay: every event is confirmed with `get`, none recreated, and only the doc is written | `test_doc_failure_after_events_is_partial`, `test_replay_after_a_doc_failure_only_writes_the_doc` |
-| Doc folder missing (the operator has not created it) | With F2: 503 `service_not_configured`, `partial`, step `write_standup_doc` | Every event booked and in `created`; no doc | Operator creates the folder (DEPLOYMENT.md); then replay | Added with F2 |
+| Doc folder missing (the operator has not created it) | 503 `service_not_configured`, `partial`, step `write_standup_doc`, not retryable (F2) | Every event booked and in `created`; no doc | Operator creates the folder (DEPLOYMENT.md, step 3); then replay | `test_missing_doc_folder_is_a_configuration_failure` |
 | Doc write fails with no events (empty plan) | Storage's code, `failed` | Nothing | Replay or retry | `test_storage_failure_with_no_events_is_failed` |
 | Replay, recorded events all exist | 200, `ok` | No new events; doc rewritten with the same bytes | Nothing | `test_replay_skips_events_that_exist`; live in the evidence |
 | Replay after an event was deleted (NOT_FOUND) | 200, `ok` | That event recreated with a new ID in `created`; others unchanged | Keep the new response | `test_replay_recreates_an_event_that_was_not_found`; live in the evidence |
@@ -410,12 +409,12 @@ faulty release created; they have to be removed by hand
 Changes agreed after Team 3's review of this document. Each becomes a
 GitHub issue; the IDs F1 to F7 are used above.
 
-| ID | Change | Comment it answers |
-| --- | --- | --- |
-| F1 | `validate_assignee` accepts only lowercase, so every storage provider gives the same result | Assignee case on Dropbox |
-| F2 | Stop relying on `create` making parent folders: the doc path becomes flat, `/standups/<YYYY-MM-DD>-<assignee>.md`, in one folder created at setup, and a missing folder is reported as `service_not_configured` | Parent folders aren't part of the contract |
-| F3 | Report invalid input as a separate first step, `validate`, instead of `plan` | Small clarity point |
-| F4 | Storage provider errors in `write_standup_doc` are `retryable: true`, since rewriting the doc is safe | `retryable` seems inconsistent with this row |
-| F5 | A run without `replay` checks the doc path first and returns 412 `precondition_failed` if the doc exists | Cases to add: same request without `replay` |
-| F6 | Report when `list_issues` returned the full 100, so dropped issues are visible | Cases to add: more than 100 issues |
-| F7 | Caller authentication (Level 4) | Cases to add: no caller authentication |
+| ID | Change | Comment it answers | Status |
+| --- | --- | --- | --- |
+| F1 | `validate_assignee` accepts only lowercase, so every storage provider gives the same result | Assignee case on Dropbox | Done |
+| F2 | Stop relying on `create` making parent folders: the doc path becomes flat, `/standups/<YYYY-MM-DD>-<assignee>.md`, in one folder created at setup, and a missing folder is reported as `service_not_configured` | Parent folders aren't part of the contract | Done |
+| F3 | Report invalid input as a separate first step, `validate`, instead of `plan` | Small clarity point | Done |
+| F4 | Storage provider errors in `write_standup_doc` are `retryable: true`, since rewriting the doc is safe | `retryable` seems inconsistent with this row | Planned |
+| F5 | A run without `replay` checks the doc path first and returns 412 `precondition_failed` if the doc exists | Cases to add: same request without `replay` | Planned |
+| F6 | Report when `list_issues` returned the full 100, so dropped issues are visible | Cases to add: more than 100 issues | Planned |
+| F7 | Caller authentication (Level 4) | Cases to add: no caller authentication | Planned |
