@@ -43,7 +43,7 @@ REQUEST: dict[str, Any] = {
     "default_minutes": 90,
     "replay": None,
 }
-DOC_PATH = "/standups/2026-11-18/tyler.md"
+DOC_PATH = "/standups/2026-11-18-tyler.md"
 SECRET = "token=sk-live-SECRET"
 
 
@@ -92,6 +92,7 @@ def test_success_books_every_block_and_writes_the_doc(service: Service) -> None:
     assert body == {
         "status": "ok",
         "steps": [
+            {"name": "validate", "status": "ok", "error": None},
             {"name": "list_issues", "status": "ok", "error": None},
             {"name": "plan", "status": "ok", "error": None},
             {"name": "create_events", "status": "ok", "error": None},
@@ -195,12 +196,13 @@ def test_tracker_failure(service: Service) -> None:
         "may_have_applied": False,
     }
     assert statuses(body) == {
+        "validate": "ok",
         "list_issues": "failed",
         "plan": "skipped",
         "create_events": "skipped",
         "write_standup_doc": "skipped",
     }
-    assert body["steps"][0]["error"] == body["error"]
+    assert body["steps"][1]["error"] == body["error"]
     assert service.calendar.failures.calls("create") == 0
 
 
@@ -232,6 +234,7 @@ def test_calendar_failure_on_block_two_of_three(service: Service) -> None:
     assert body["error"]["retryable"] is True
     assert body["error"]["may_have_applied"] is False
     assert statuses(body) == {
+        "validate": "ok",
         "list_issues": "ok",
         "plan": "ok",
         "create_events": "failed",
@@ -290,6 +293,31 @@ def test_doc_failure_after_events_is_partial(service: Service) -> None:
     assert SECRET not in response.text
 
 
+def test_missing_doc_folder_is_a_configuration_failure(service: Service) -> None:
+    service.storage.folders.clear()
+
+    response = service.post(REQUEST)
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "partial"
+    assert body["failed_step"] == "write_standup_doc"
+    assert body["error"]["code"] == "service_not_configured"
+    assert body["error"]["retryable"] is False
+    assert body["error"]["may_have_applied"] is False
+    assert len(body["created"]) == 3
+    assert service.storage.files == {}
+
+    # The operator creates the folder; a replay then only writes the doc.
+    service.storage.folders.add("/standups")
+    replayed = service.post(replay_of(body)).json()
+
+    assert replayed["status"] == "ok"
+    assert replayed["created"] == body["created"]
+    assert replayed["doc"]["path"] == DOC_PATH
+    assert service.calendar.failures.calls("create") == 3
+
+
 def test_storage_failure_with_no_events_is_failed(service: Service) -> None:
     booked = {"start": "2026-11-18T09:00:00-05:00", "end": "2026-11-18T17:00:00-05:00"}
     service.storage.failures.fail("replace", PermissionDeniedError("denied"))
@@ -317,6 +345,7 @@ def test_replay_skips_events_that_exist(service: Service) -> None:
     assert body["created"] == first["created"]
     assert body["plan"] == first["plan"]
     assert statuses(body) == {
+        "validate": "ok",
         "list_issues": "skipped",
         "plan": "skipped",
         "create_events": "ok",
@@ -391,7 +420,7 @@ def test_replay_stops_when_an_event_cannot_be_checked(service: Service) -> None:
     assert body["error"]["may_have_applied"] is False
 
 
-# Invalid input: rejected in the `plan` step before any provider call
+# Invalid input: rejected in the `validate` step before any provider call
 
 
 def assert_rejected(service: Service, body: dict[str, Any], field: str) -> None:
@@ -400,12 +429,17 @@ def assert_rejected(service: Service, body: dict[str, Any], field: str) -> None:
     assert response.status_code == 422
     result = response.json()
     assert result["status"] == "failed"
-    assert result["failed_step"] == "plan"
+    assert result["failed_step"] == "validate"
     assert result["error"]["code"] == "invalid_input"
-    assert result["error"]["step"] == "plan"
+    assert result["error"]["step"] == "validate"
     assert [detail["field"] for detail in result["error"]["details"]] == [field]
-    assert statuses(result)["plan"] == "failed"
-    assert statuses(result)["list_issues"] == "skipped"
+    assert statuses(result) == {
+        "validate": "failed",
+        "list_issues": "skipped",
+        "plan": "skipped",
+        "create_events": "skipped",
+        "write_standup_doc": "skipped",
+    }
     assert service.tracker.failures.calls("list_issues") == 0
     assert service.calendar.failures.calls("create") == 0
     assert service.storage.files == {}
@@ -416,6 +450,7 @@ def assert_rejected(service: Service, body: dict[str, Any], field: str) -> None:
     [
         ({"assignee": "../etc"}, "assignee"),
         ({"assignee": ".."}, "assignee"),
+        ({"assignee": "Tyler"}, "assignee"),
         ({"timezone": "Mars/Base"}, "timezone"),
         ({"working_window": {"start": "17:00", "end": "09:00"}}, "working_window"),
         (
@@ -452,7 +487,7 @@ def test_missing_body_is_rejected(service: Service) -> None:
     response = service.client.post("/v1/focus-day")
 
     assert response.status_code == 422
-    assert response.json()["failed_step"] == "plan"
+    assert response.json()["failed_step"] == "validate"
 
 
 def _replay_body(blocks: list[dict[str, str]], created: dict[str, str]) -> Any:

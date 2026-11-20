@@ -167,7 +167,7 @@ def _field(location: tuple[int | str, ...]) -> str:
 def handle_validation_error(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
-    """A malformed body fails the `plan` step before any provider call."""
+    """A malformed body fails the `validate` step before any provider call."""
     details = [
         ErrorDetail(field=_field(tuple(error["loc"])), message=error["msg"])
         for error in exc.errors()
