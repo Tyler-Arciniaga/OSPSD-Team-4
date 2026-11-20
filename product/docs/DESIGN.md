@@ -6,7 +6,7 @@
 
 #### Reviewers: Team 3 (ashik-ece)
 
-#### Status: Implemented (HW3 Milestone 1); review follow-ups F1 to F4 implemented, F5 to F7 planned ([Follow-up work](#follow-up-work-from-design-review))
+#### Status: Implemented (HW3 Milestone 1); review follow-ups F1 to F6 implemented, F7 planned ([Follow-up work](#follow-up-work-from-design-review))
 
 #### Last Update Date: 11/20/2026
 
@@ -31,12 +31,14 @@
 HW2 issue service, with one operation: `POST /v1/focus-day`. Given an
 assignee, a day and the times they are busy, it:
 
-1. reads the issues in our tracker (our Trello implementation),
-2. plans one focus block per issue in the available free time,
-3. books each block in a calendar (i.e. Team 5's Google Calendar implementation),
-4. writes a standup doc listing the plan to cloud storage (i.e. Team 3's Dropbox
+1. checks that no standup doc exists yet for that assignee and day, so the
+   same request sent twice does not book the day twice (F5),
+2. reads the issues in our tracker (our Trello implementation),
+3. plans one focus block per issue in the available free time,
+4. books each block in a calendar (i.e. Team 5's Google Calendar implementation),
+5. writes a standup doc listing the plan to cloud storage (i.e. Team 3's Dropbox
    implementation),
-5. returns the status of every step.
+6. returns the status of every step.
 
 Currently, the steps are fixed and there is no LLM. Each implementation is reached only
 through its shared contract package and is chosen by configuration
@@ -76,6 +78,7 @@ main.py  (schema validation, HW1-shaped errors, failure log line)
 orchestrator.FocusDay.run
   |  0. validate everything (planner rules, doc path, replay plan)
   |
+  |-- 0b. check_doc ---------> StorageAdapter  --> DocumentStorage.get_metadata  (not on replay; 412 if the doc exists)
   |-- 1. list_issues --------> TrackerAdapter  --> IssueProvider    (issue-tracker-contract v1.1.0)
   |                                                 '-> team_4_issue_tracker_trello  -> Trello REST
   |-- 2. plan ---------------> planner.plan_day    (pure function, no I/O)
@@ -84,7 +87,7 @@ orchestrator.FocusDay.run
   |-- 4. write_standup_doc --> StorageAdapter  --> DocumentStorage  (cloud-storage-api 0.3.1)
   |                                                 '-> dropbox_client_impl  -> Dropbox
   v
-5. response: status, steps (5 in total, validate first), plan, created, doc  (or the error body with failed_step details)
+5. response: status, steps (6 in total, validate first), plan, created, doc, issues_truncated  (or the error body with failed_step details)
 
 Startup (lifespan): config.py resolves *_PROVIDER paths -> factories.py builds the three
 providers once -> any problem exits before serving, naming the variable (ERRORS.md, Startup errors)
@@ -113,10 +116,17 @@ start before end. The assignee `tyler` is lowercase, as required (F1). The
 doc path is built now, `/standups/2026-11-19/tyler.md`, from the validated
 `day` and `assignee`. There is no `replay`.
 
+**0b. `check_doc` (since F5, not in this recording).** Because there is no
+`replay`, `StorageAdapter.check_doc_absent` calls `get_metadata` on the doc
+path. It raises `NotFoundError` (no doc for this assignee and day yet), so
+the run continues. Had the doc existed, the run would stop here with 412
+`precondition_failed` and book nothing.
+
 **1. `list_issues`.** `TrackerAdapter.list_issues` calls
 `IssueProvider.list_issues(limit=MAX_LIST_LIMIT)` on
 `TrelloIssueProvider`, which reads the list named by `TRELLO_LIST_ID` (our
-`HW3-Product` list). It returns three issues, reduced to `id` and `title`:
+`HW3-Product` list). It returns three issues, reduced to `id` and `title`. Three is below the
+contract's maximum of 100, so (since F6) `issues_truncated` is `false`:
 
 | id | title |
 | --- | --- |
@@ -209,9 +219,15 @@ None.
   error body instead, with `partial` or `failed` (4.3).
 - `steps` always lists every step in order. Each is `ok`, `failed` or
   `skipped`, and `error` is set only on the step that failed. On a replay,
-  `list_issues` and `plan` are `skipped`. This run, recorded before F3,
-  has four steps. Since F3 a fifth, `validate`, comes first: `ok` on
-  success and on replay, `failed` for invalid input.
+  `check_doc`, `list_issues` and `plan` are `skipped`. This run, recorded
+  before F3, has four steps. Since F3 `validate` comes first (`ok` on
+  success and on replay, `failed` for invalid input), and since F5
+  `check_doc` follows it, for six steps.
+- `issues_truncated` (since F6, not in this recording) is `true` when
+  `list_issues` returned the contract maximum of 100, so older issues may
+  be missing from the plan; `false` when it returned fewer; `null` when it
+  did not run (replay, or a failure before it). It is on the error body
+  too.
 - `plan.blocks` keeps each issue's title so a replay can recreate an event
   and rewrite the doc without reading the tracker again. `unscheduled` lists
   issues that did not fit, as `{"issue_id", "reason": "no_free_slot"}`.
@@ -244,7 +260,8 @@ Contract quotes are from `calendar-contract` `v0.1.0`
   write per event, and a storage outage could then stop booking.
 - **Tradeoff:** a caller that loses the response must check the calendar by
   hand. In return: no database, cleanup or key-reuse rules. Sending the same
-  request again without `replay` is caught by the doc check in F5.
+  request again without `replay` is caught by the doc check (F5), as long
+  as the first run got as far as writing its doc.
 - **Evidence:** the [live run](evidence/focus-day-live.md) replayed twice
   against Google Calendar: nothing duplicated, and only a deleted event was
   recreated.
@@ -346,6 +363,8 @@ environment variables and one mounted secret file:
 6. Invalid input never reaches a provider.
 7. Bad configuration, or a provider that cannot be built, stops startup.
    The service never serves requests half-configured.
+8. A run without `replay` books nothing if the doc for its assignee and day
+   exists, or if storage cannot say whether it does (F5).
 
 ## 4.3 Failure modes
 
@@ -359,8 +378,11 @@ HW1 code and status, `retryable`, `may_have_applied`, and the `plan` and
 | Case | HTTP, status | What exists afterwards | What the caller should do | Test |
 | --- | --- | --- | --- | --- |
 | Invalid input (bad zone, window, busy interval, assignee including upper case (F1), or replay plan) | 422 `invalid_input`, `failed`, step `validate` (F3) | Nothing: rejected before any provider call | Fix the field named in `error.details` | `test_invalid_input_is_rejected_before_any_call`, `test_invalid_replay_is_rejected_before_any_call` |
-| Same request sent again without `replay` (for example after a timeout or a lost response) | Today: 200 `ok`. With F5: 412 `precondition_failed`, `failed`, before any event is created | Today: a second set of events, and the doc overwritten with only the second run's blocks, so the first run's events are referenced nowhere. With F5: nothing new | Replay with the earlier response, or remove the earlier events and doc by hand to plan the day again | Added with F5 |
-| More than 100 issues in the list | 200, `ok` | Only the 100 newest issues are planned (`list_issues(limit=MAX_LIST_LIMIT)`, newest first). Older ones are dropped silently and do not appear in `unscheduled` (F6 reports this) | Keep the list under 100 issues | Added with F6 |
+| Same request sent again without `replay` after a run that wrote its doc (for example after a timeout or a lost response) | 412 `precondition_failed`, `failed`, step `check_doc`, not retryable (F5) | Nothing new: no tracker read, no event, the earlier doc untouched | Replay with the earlier response, or remove the earlier events and doc by hand to plan the day again | `test_same_request_again_is_rejected_before_any_event`, `test_a_doc_written_by_anyone_stops_the_run` |
+| Same request sent again without `replay` after a run that failed before writing its doc | 200 `ok` (not caught: there is no doc to find) | A second set of events for the blocks the first run booked | Replay instead; if it was sent anyway, remove the duplicate events by hand | Known gap (F5), documented in ERRORS.md |
+| Two runs for the same assignee and day at the same time | Both pass `check_doc` | Two sets of events; the doc lists the later run's | Do not run concurrently; remove the duplicates by hand | Known gap (F5) |
+| Storage fails during `check_doc` | Storage's code (for example 502 `provider_error`, retryable), `failed`, step `check_doc`, `may_have_applied: false` | Nothing: fails closed, before the tracker or calendar are called | Retry the same request later if `retryable` | `test_doc_check_failure_books_nothing`, `test_check_failures_are_reads_that_applied_nothing` |
+| 100 or more issues in the list | 200, `ok`, `issues_truncated: true` (F6) | Only the 100 newest issues are planned (`list_issues(limit=MAX_LIST_LIMIT)`, newest first). Older ones are in neither `blocks` nor `unscheduled`. Exactly 100 also sets the flag: the contract cannot tell it from more | Close or move issues so the list is under 100 | `test_more_than_100_issues_plans_the_newest_100_and_says_so`, `test_a_full_page_is_reported_as_truncated` |
 | Unauthenticated caller | Accepted: there is no caller authentication yet (F7) | Anyone who can reach the endpoint can book events on the test calendar and, through `assignee`, overwrite any assignee's doc | Nothing yet; Level 4 adds authentication | Added with F7 |
 | Tracker fails | Tracker's code (for example 502 `provider_error`, retryable), `failed`, step `list_issues` | Nothing | Retry the same request later if `retryable` | `test_tracker_failure`, `test_unexpected_tracker_exception_does_not_leak` |
 | Partial fit: some issues do not fit | 200, `ok` | All fitting blocks booked, doc written; the rest in `plan.unscheduled` with `no_free_slot` | Nothing; not an error | `test_partial_fit_is_a_success` |
@@ -401,7 +423,12 @@ faulty release created; they have to be removed by hand
 - The storage contract has no folder operation and does not promise that
   `create` makes missing parent folders. The doc folder must be created once
   during setup (F2).
-- At most 100 issues are read per request, the newest first (F6).
+- At most 100 issues are read per request, the newest first; when the
+  limit is reached the response sets `issues_truncated` (F6).
+- The doc check (F5) catches a repeated request only once its doc exists:
+  a run that failed before writing the doc, or two runs at the same time,
+  can still book a day twice. A run record in storage (Team 3's
+  alternative in 4.2) would close both gaps.
 - No caller authentication until Level 4 (F7).
 
 ## Follow-up work from design review
@@ -415,6 +442,6 @@ GitHub issue; the IDs F1 to F7 are used above.
 | F2 | Stop relying on `create` making parent folders: the doc path becomes flat, `/standups/<YYYY-MM-DD>-<assignee>.md`, in one folder created at setup, and a missing folder is reported as `service_not_configured` | Parent folders aren't part of the contract | Done |
 | F3 | Report invalid input as a separate first step, `validate`, instead of `plan` | Small clarity point | Done |
 | F4 | Storage provider errors in `write_standup_doc` are `retryable: true`, since rewriting the doc is safe | `retryable` seems inconsistent with this row | Done |
-| F5 | A run without `replay` checks the doc path first and returns 412 `precondition_failed` if the doc exists | Cases to add: same request without `replay` | Planned |
-| F6 | Report when `list_issues` returned the full 100, so dropped issues are visible | Cases to add: more than 100 issues | Planned |
+| F5 | A run without `replay` checks the doc path first (new step `check_doc`) and returns 412 `precondition_failed` if the doc exists | Cases to add: same request without `replay` | Done |
+| F6 | Report when `list_issues` returned the full 100 (`issues_truncated`), so dropped issues are visible | Cases to add: more than 100 issues | Done |
 | F7 | Caller authentication (Level 4) | Cases to add: no caller authentication | Planned |

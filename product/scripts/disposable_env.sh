@@ -18,7 +18,7 @@
 #     Team 3 packages import and build inside the image);
 #   - with the in-memory providers (selected through the same variables),
 #     /healthz and /readyz answer, /readyz reports the commit, and
-#     POST /v1/focus-day completes all five steps.
+#     POST /v1/focus-day completes all six steps.
 #
 # Usage: product/scripts/disposable_env.sh       (from a clean checkout)
 #        IMAGE_REF=<repo>@sha256:<digest> EXPECTED_COMMIT=<sha> product/scripts/disposable_env.sh
