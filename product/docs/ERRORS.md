@@ -215,8 +215,13 @@ the same bytes, so repeating the whole write is safe.
 | `FileTooLargeError`             | invalid_input       | no        | no               |
 | `InvalidOperationError`         | invalid_input       | no        | no               |
 | `ProviderUnavailableError`      | provider_error      | yes       | yes              |
-| `ProviderError`                 | provider_error      | no        | yes              |
-| other `StorageError` / anything | provider_error      | no        | yes              |
+| `ProviderError`                 | provider_error      | yes       | yes              |
+| other `StorageError` / anything | provider_error      | yes       | yes              |
+
+Every provider failure whose outcome is unknown is retryable, even though
+it may have applied: rewriting the doc gives the same bytes, so repeating
+it is safe. This differs from the calendar, where an uncertain create is not
+retryable because repeating it can book a duplicate event.
 
 Unexpected exceptions are logged by class name only.
 
