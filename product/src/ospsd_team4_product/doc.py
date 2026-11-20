@@ -34,8 +34,12 @@ def validate_assignee(assignee: str) -> str:
 
 
 def doc_path(day: date, assignee: str) -> str:
-    """`/standups/<YYYY-MM-DD>/<assignee>.md`."""
-    return f"{DOC_ROOT}/{day.isoformat()}/{validate_assignee(assignee)}.md"
+    """`/standups/<YYYY-MM-DD>-<assignee>.md`.
+
+    Flat, in one folder an operator creates once at setup: the storage
+    contract does not promise that `create` makes missing parent folders.
+    """
+    return f"{DOC_ROOT}/{day.isoformat()}-{validate_assignee(assignee)}.md"
 
 
 def _one_line(text: str) -> str:

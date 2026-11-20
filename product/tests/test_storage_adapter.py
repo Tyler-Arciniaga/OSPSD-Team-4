@@ -6,6 +6,7 @@ from cloud_storage_api import (
     FileTooLargeError,
     InvalidOperationError,
     InvalidRequestError,
+    NotFoundError,
     PermissionDeniedError,
     ProviderError,
     ProviderUnavailableError,
@@ -17,7 +18,7 @@ from ospsd_team4_product.adapters.storage import StorageAdapter, StoredDoc
 from ospsd_team4_product.errors import StepError
 from ospsd_team4_product.fakes import InMemoryDocumentStorage
 
-PATH = "/standups/2026-11-18/tyler.md"
+PATH = "/standups/2026-11-18-tyler.md"
 SECRET = "Dropbox said /secret/path token=abc"
 
 
@@ -153,6 +154,34 @@ def test_errors_are_mapped_without_leaking_messages(
     assert raised.value.code == code
     assert raised.value.retryable is retryable
     assert raised.value.may_have_applied is may_have_applied
+    assert SECRET not in raised.value.message
+    assert raised.value.__cause__ is None
+
+
+def test_missing_doc_folder_is_a_configuration_failure() -> None:
+    storage = InMemoryDocumentStorage(folders=())
+
+    with pytest.raises(StepError) as raised:
+        StorageAdapter(storage).write_doc(PATH, b"new")
+
+    assert raised.value.step == "write_standup_doc"
+    assert raised.value.code == ErrorCode.SERVICE_NOT_CONFIGURED
+    assert raised.value.status == 503
+    assert raised.value.retryable is False
+    assert raised.value.may_have_applied is False
+    assert storage.files == {}
+    assert calls(storage) == {"replace": 1, "create": 1}
+
+
+def test_not_found_from_create_is_reported_without_leaking(
+    storage: InMemoryDocumentStorage,
+) -> None:
+    storage.failures.fail("create", NotFoundError(SECRET))
+
+    with pytest.raises(StepError) as raised:
+        StorageAdapter(storage).write_doc(PATH, b"new")
+
+    assert raised.value.code == ErrorCode.SERVICE_NOT_CONFIGURED
     assert SECRET not in raised.value.message
     assert raised.value.__cause__ is None
 
