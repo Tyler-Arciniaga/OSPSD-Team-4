@@ -140,6 +140,7 @@ class FocusDayResponse(BaseModel):
     plan: PlanModel
     created: dict[str, str]
     doc: DocModel
+    issues_truncated: bool | None
     failed_step: None = None
 
 
@@ -151,5 +152,6 @@ class FocusDayErrorResponse(BaseModel):
     plan: PlanModel | None
     created: dict[str, str]
     doc: None = None
+    issues_truncated: bool | None
     failed_step: Step
     error: FocusDayErrorBody

@@ -109,6 +109,7 @@ class _Progress:
     )
     plan: Plan | None = None
     created: dict[str, str] = field(default_factory=dict)
+    issues_truncated: bool | None = None
 
     def done(self, step: Step) -> None:
         self.statuses[step] = "ok"
@@ -123,6 +124,7 @@ class _Progress:
                 plan=PlanModel.of(self.plan),
                 created=self.created,
                 doc=doc,
+                issues_truncated=self.issues_truncated,
             ),
         )
 
@@ -149,6 +151,7 @@ class _Progress:
                 steps=steps,
                 plan=PlanModel.of(self.plan) if self.plan is not None else None,
                 created=self.created,
+                issues_truncated=self.issues_truncated,
                 failed_step=exc.step,
                 error=error,
             ),
