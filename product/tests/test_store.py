@@ -206,7 +206,8 @@ def test_recorded_at_comes_back_as_the_same_instant(store: StateStore) -> None:
     [
         ({"remaining_percent": 101}, "0 to 100"),
         ({"remaining_percent": -1}, "0 to 100"),
-        ({"recorded_at": datetime(2026, 11, 19, 15, 30)}, "time zone"),
+        # Naive on purpose: the entry must reject it.
+        ({"recorded_at": AT.replace(tzinfo=None)}, "time zone"),
     ],
 )
 def test_progress_entry_rejects_bad_values(
