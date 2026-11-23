@@ -1,6 +1,6 @@
 [project]
 name = "team-4-issue-tracker-trello"
-version = "1.0.0"
+version = "1.1.0"
 description = "Team 4's Trello implementation of the shared issue tracker contract."
 readme = "README.md"
 requires-python = ">=3.11.5"
