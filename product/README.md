@@ -12,7 +12,8 @@ storage is Team 3's Dropbox package, each chosen by configuration.
 | [docs/DESIGN.md](docs/DESIGN.md) | Architecture, a real request trace, decisions, failure modes |
 | [docs/ERRORS.md](docs/ERRORS.md) | Every error the service can return, and every startup error |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | The release pipeline, Terraform and the one-time human setup |
-| [docs/evidence/](docs/evidence/) | Partner installs, the Dropbox round trip, a live focus-day run, a storage swap to Team 1's package, a controlled calendar failure |
+| [docs/evidence/](docs/evidence/) | Partner installs, the Dropbox round trip, a live focus-day run, a storage swap to Team 1's package, a controlled calendar failure, the TUI walkthrough |
+| [tui/README.md](tui/README.md) | `focus-day`, the terminal interface: getting started, screens, key bindings |
 
 This service is separate from the HW2 issue service at the repository root:
 it has its own dependencies, image and deployment. Everything below runs from
@@ -102,6 +103,10 @@ curl -s -X POST localhost:8000/v1/focus-day -H 'content-type: application/json' 
 To retry or resume, send the same request with
 `"replay": {"plan": ..., "created": ...}` copied from the response
 ([DESIGN.md, 4.2](docs/DESIGN.md#replay-not-recompute)).
+
+Or use the terminal interface, `focus-day`, which fills in the request
+from a form, shows the result on a day timeline and retries with `replay`
+for you: see [tui/README.md](tui/README.md).
 
 With the real providers, set the three real `*_PROVIDER` values,
 `CALENDAR_TOKEN_FILE` and the six credentials instead. This books real

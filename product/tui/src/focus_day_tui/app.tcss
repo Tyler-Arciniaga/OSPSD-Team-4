@@ -1,0 +1,99 @@
+/* Layout only: colors and polish beyond what the screen needs are out of scope. */
+
+#tabs {
+    height: 1;
+    padding: 0 1;
+    background: $panel;
+}
+
+#main {
+    height: 1fr;
+}
+
+#form {
+    width: 46;
+    padding: 0 1;
+    border-right: solid $panel-lighten-2;
+}
+
+#right {
+    width: 1fr;
+    padding: 0 1;
+}
+
+.line {
+    height: 1;
+    margin-top: 1;
+}
+
+.field-label {
+    width: 11;
+}
+
+.section {
+    margin-top: 1;
+    text-style: bold;
+}
+
+#form Input {
+    width: 1fr;
+}
+
+#window-start, #window-end, .busy-start, .busy-end {
+    max-width: 9;
+}
+
+.dash {
+    width: 3;
+    content-align: center middle;
+}
+
+#busy-rows, .busy-row {
+    height: auto;
+}
+
+.busy-row .line {
+    margin-top: 0;
+}
+
+.remove-busy {
+    margin-left: 1;
+}
+
+.field-error {
+    height: auto;
+    color: $error;
+}
+
+#add-busy, #submit {
+    margin-top: 1;
+}
+
+#unscheduled {
+    margin-top: 1;
+    color: $warning;
+}
+
+#results {
+    height: auto;
+    max-height: 14;
+    padding: 0 1;
+    border-top: solid $panel-lighten-2;
+}
+
+#loading {
+    height: 1;
+}
+
+#loading LoadingIndicator {
+    width: 6;
+    height: 1;
+}
+
+#messages.error {
+    color: $error;
+}
+
+#messages.ok {
+    color: $success;
+}

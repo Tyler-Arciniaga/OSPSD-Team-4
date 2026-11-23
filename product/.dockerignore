@@ -18,3 +18,4 @@ docs
 infra
 Dockerfile
 .dockerignore
+tui

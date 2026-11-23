@@ -55,6 +55,8 @@ pythonpath = ["."]
 [tool.ruff]
 # Ruff's default rules, as in the HW2 service.
 src = ["src", "tests"]
+# The TUI is its own uv project with its own checks (tui/README.md).
+extend-exclude = ["tui"]
 
 [tool.mypy]
 strict = true
