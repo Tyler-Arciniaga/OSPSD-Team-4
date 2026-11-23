@@ -33,7 +33,7 @@ from ospsd_team4_product.adapters.calendar import CalendarAdapter
 from ospsd_team4_product.adapters.storage import StorageAdapter
 from ospsd_team4_product.adapters.tracker import TrackerAdapter
 from ospsd_team4_product.config import ConfigError, load_config
-from ospsd_team4_product.factories import build_providers
+from ospsd_team4_product.factories import build_providers, build_store
 from ospsd_team4_product.models import (
     FocusDayErrorResponse,
     FocusDayRequest,
@@ -73,26 +73,33 @@ def deployed_commit(environ: Mapping[str, str] = os.environ) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Validate configuration and build the providers before serving.
+    """Validate configuration, build the providers and connect to the state
+    store before serving. The store is closed on shutdown.
 
     A failure stops startup, naming the variable concerned.
     """
     try:
         config = load_config()
         providers = build_providers(config)
+        store = build_store(config)
     except ConfigError as exc:
         logger.critical(
             json.dumps({"event": "startup_config_invalid", "message": str(exc)})
         )
         raise
     app.state.providers = providers
+    app.state.store = store
     app.state.focus_day = FocusDay(
         tracker=TrackerAdapter(providers.tracker),
         calendar=CalendarAdapter(providers.calendar),
         storage=StorageAdapter(providers.storage),
+        store=store,
         config=config,
     )
-    yield
+    try:
+        yield
+    finally:
+        store.close()
 
 
 app = FastAPI(title="OSPSD Team 4 Product Service", lifespan=lifespan)
@@ -140,13 +147,14 @@ def _log_failure(outcome: Outcome) -> None:
 
 _ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     status: {"model": FocusDayErrorResponse}
-    for status in (403, 404, 412, 422, 502, 503)
+    for status in (403, 404, 412, 422, 500, 502, 503)
 }
 
 
 @app.post("/v1/focus-day", response_model=FocusDayResponse, responses=_ERROR_RESPONSES)
 def focus_day(body: FocusDayRequest, request: Request) -> JSONResponse:
-    """List issues, plan focus blocks, book them, and write the standup doc."""
+    """List issues, plan focus blocks, book them, write the standup doc, and
+    save the plan."""
     operation: FocusDay = request.app.state.focus_day
     outcome = operation.run(body)
     _log_failure(outcome)

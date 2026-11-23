@@ -8,6 +8,7 @@
   orchestrator, planner, doc and endpoint see StepError and plain values.
   The HW1 error model (`issue_tracker_contract.errors`) is shared by all.
 - The planner and doc renderer are pure: standard library only.
+- Only store.py talks to the database; everything else uses StateStore.
 """
 
 import ast
@@ -95,6 +96,16 @@ def test_planner_and_doc_are_pure(name: str) -> None:
         for n in imported_names(PACKAGE / name)
         if n.startswith("ospsd_team4_product.")
     } <= {"ospsd_team4_product.planner"}
+
+
+DATABASE_DRIVERS = {"psycopg", "psycopg_pool", "sqlite3"}
+
+
+@pytest.mark.parametrize("path", modules(), ids=relative)
+def test_only_the_store_knows_the_database(path: Path) -> None:
+    if relative(path) == "store.py":
+        return
+    assert imported_names(path) & DATABASE_DRIVERS == set()
 
 
 def test_only_tests_and_configuration_select_the_fakes() -> None:

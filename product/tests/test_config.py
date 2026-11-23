@@ -1,4 +1,5 @@
-"""Startup configuration: provider import paths, token file and defaults."""
+"""Startup configuration: provider import paths, token file, defaults and the
+state database URL."""
 
 from datetime import time
 from pathlib import Path
@@ -21,6 +22,7 @@ BASE = {
     "TRACKER_PROVIDER": "tests.helpers:Provider",
     "CALENDAR_PROVIDER": "tests.helpers:make_provider",
     "STORAGE_PROVIDER": "tests.helpers:make_provider",
+    "STATE_DB_URL": "memory://",
 }
 
 
@@ -179,6 +181,7 @@ def test_real_partner_import_paths_resolve(tmp_path: Path) -> None:
         "TRACKER_PROVIDER": "team_4_issue_tracker_trello:TrelloIssueProvider",
         "CALENDAR_PROVIDER": "team5_calendar:create_calendar_service",
         "STORAGE_PROVIDER": "dropbox_client_impl:DropboxDocumentStorage",
+        "STATE_DB_URL": "postgresql://user:password@db.internal/focus_day",
     }
 
     with pytest.raises(ConfigError, match="CALENDAR_TOKEN_FILE"):
@@ -210,3 +213,56 @@ def test_team1_storage_swap_builds_a_document_storage() -> None:
         storage = factory()
 
     assert isinstance(storage, DocumentStorage)
+
+
+# STATE_DB_URL
+
+DB_URL = "postgresql://focus:sk-SECRET-pw@dpg-example-a/focus_day"
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_missing_state_db_url(value: str | None) -> None:
+    environ = dict(BASE)
+    if value is None:
+        del environ["STATE_DB_URL"]
+    else:
+        environ["STATE_DB_URL"] = value
+
+    with pytest.raises(
+        ConfigError, match="^Missing required configuration: STATE_DB_URL$"
+    ):
+        load_config(environ)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "sqlite:///tmp/state.db",
+        "mysql://focus:sk-SECRET-pw@db/focus_day",
+        "postgresql:///focus_day",
+        "/var/data/state.db",
+        "memory:",
+        "http://[sk-SECRET-pw",
+    ],
+)
+def test_state_db_url_must_be_postgres(value: str) -> None:
+    with pytest.raises(ConfigError) as raised:
+        load_config(BASE | {"STATE_DB_URL": value})
+
+    assert str(raised.value) == (
+        "STATE_DB_URL must be a postgresql:// URL (or memory:// for the in-memory store)"
+    )
+    assert "SECRET" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "value", [DB_URL, "postgres://focus@localhost:5432/focus_day", "memory://"]
+)
+def test_state_db_url_is_accepted(value: str) -> None:
+    assert load_config(BASE | {"STATE_DB_URL": value}).state_db_url == value
+
+
+def test_state_db_url_is_left_out_of_repr() -> None:
+    config = load_config(BASE | {"STATE_DB_URL": DB_URL})
+
+    assert "SECRET" not in repr(config)

@@ -45,6 +45,7 @@ a log line naming the variable, never its value (see
 | `CALENDAR_PROVIDER` | yes | `module:attr` of a callable returning a `CalendarService` |
 | `STORAGE_PROVIDER` | yes | `module:attr` of a callable returning a `DocumentStorage` |
 | `CALENDAR_TOKEN_FILE` | if the calendar factory takes `token_file` (Team 5's does) | Absolute path to the Google OAuth token file |
+| `STATE_DB_URL` | yes | The state database every instance shares: a `postgresql://user:password@host:port/database` URL, or `memory://` for the in-memory store (one process only, for tests and the disposable service). Holds a password: treat it as a secret ([DESIGN.md, State store](docs/DESIGN.md#state-store)) |
 | `DEFAULT_WORKING_WINDOW` | no, default `09:00-17:00` | Used when a request has no `working_window` |
 | `DEFAULT_MINUTES` | no, default `90` | Block length when a request has no `default_minutes` (1 to 1440) |
 | `DEFAULT_TIMEZONE` | no, default `America/New_York` | Used when a request has no `timezone` |
@@ -71,8 +72,8 @@ showing the documented `create_events` error through a running service
 The real implementations read their own credentials from the environment:
 `TRELLO_API_KEY`, `TRELLO_TOKEN`, `TRELLO_LIST_ID` (the list the service
 plans from), and `DROPBOX_APP_KEY`, `DROPBOX_APP_SECRET`,
-`DROPBOX_REFRESH_TOKEN`. Keep them, and the Google token file, outside the
-repository. How to obtain each one is in
+`DROPBOX_REFRESH_TOKEN`. Keep them, the Google token file and the
+production `STATE_DB_URL` outside the repository. How to obtain each one is in
 [DEPLOYMENT.md, One-time setup](docs/DEPLOYMENT.md#one-time-setup-human-only).
 
 Team 3's package loads a `.env` file from the repository root on import,
@@ -81,13 +82,23 @@ up from it by accident.
 
 ## Running locally
 
-With the fakes, which need no credentials:
+With the fakes and the in-memory state store, which need no credentials or
+database:
 
 ```sh
 export TRACKER_PROVIDER=ospsd_team4_product.fakes:InMemoryIssueProvider
 export CALENDAR_PROVIDER=ospsd_team4_product.fakes:InMemoryCalendarService
 export STORAGE_PROVIDER=ospsd_team4_product.fakes:InMemoryDocumentStorage
+export STATE_DB_URL=memory://
 uv run uvicorn ospsd_team4_product.main:app --port 8000
+```
+
+To keep plans in Postgres instead, start the local database from
+`docker-compose.yml` and point at it:
+
+```sh
+docker compose up -d db
+export STATE_DB_URL=postgresql://focus_day:focus_day@localhost:55432/focus_day
 ```
 
 Then, from another shell:
@@ -99,8 +110,8 @@ curl -s -X POST localhost:8000/v1/focus-day -H 'content-type: application/json' 
        "busy": [{"start": "2026-11-19T12:00:00-05:00", "end": "2026-11-19T13:00:00-05:00"}]}'
 ```
 
-The response lists six steps (`validate`, `check_doc`, `list_issues`,
-`plan`, `create_events`, `write_standup_doc`), and the doc is written to
+The response lists seven steps (`validate`, `check_doc`, `list_issues`,
+`plan`, `create_events`, `write_standup_doc`, `save_plan`), and the doc is written to
 `/standups/2026-11-19-tyler.md`. The assignee must be lowercase (`a-z`,
 `0-9`, `.`, `_`, `-`); anything else is rejected with 422 on the `validate`
 step. The in-memory storage starts with the `/standups` folder; with real
@@ -113,8 +124,22 @@ To retry or resume, send the same request with
 request again without `replay` once its doc exists returns 412
 `precondition_failed` on `check_doc` and books nothing.
 
+### Several instances
+
+`docker-compose.yml` runs two service instances (ports 8001 and 8002, with
+the fakes) sharing one Postgres database, which shows the service running as
+N = 2. Its header has the commands to post a focus day to each instance and
+see both plans in the one database:
+
+```sh
+docker compose up --build -d
+docker compose down -v   # when done
+```
+
+### Real providers
+
 With the real providers, set the three real `*_PROVIDER` values,
-`CALENDAR_TOKEN_FILE` and the six credentials instead. This books real
+`CALENDAR_TOKEN_FILE`, `STATE_DB_URL` and the six credentials instead. This books real
 events on the calendar account the token belongs to; the run recorded in
 [evidence/focus-day-live.md](docs/evidence/focus-day-live.md) shows the
 exact commands.
@@ -138,11 +163,23 @@ uv run mypy src tests scripts
 uv run pytest
 ```
 
-The tests use the fakes only and need no credentials or network. They
-include the planner, every adapter error mapping, every focus-day failure
-and replay path, the startup configuration errors, the import boundary
-(`tests/test_import_boundary.py`) and the post-deploy smoke check against
-the app in process.
+The tests use the fakes and need no credentials or network. They include
+the planner, every adapter error mapping, every focus-day failure and
+replay path (including `save_plan`), the startup configuration errors, the
+import boundary (`tests/test_import_boundary.py`) and the post-deploy smoke
+check against the app in process.
+
+The state store and multi-instance tests (`tests/test_store.py`,
+`tests/test_multi_instance.py`, and a few in `tests/test_health.py`) also
+need a Postgres they can wipe. Without `TEST_STATE_DB_URL` they are
+skipped; CI always runs them. To run them locally, use a separate database
+on the compose server:
+
+```sh
+docker compose up -d db
+docker compose exec db createdb -U focus_day focus_day_test   # once
+TEST_STATE_DB_URL=postgresql://focus_day:focus_day@localhost:55432/focus_day_test uv run pytest
+```
 
 Other checks:
 

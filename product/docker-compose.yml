@@ -1,0 +1,55 @@
+# Local multi-instance setup: one Postgres state database and two product
+# service instances sharing it, with the in-memory providers (no credentials).
+# It shows the service running as N = 2 instances, which the free Render
+# deployment cannot (product/docs/DESIGN.md, "State store").
+#
+#   cd product
+#   docker compose up --build -d
+#   curl -X POST localhost:8001/v1/focus-day -H 'content-type: application/json' \
+#     -d '{"assignee": "alice", "day": "2026-11-18"}'          # instance A
+#   curl -X POST localhost:8002/v1/focus-day -H 'content-type: application/json' \
+#     -d '{"assignee": "bob", "day": "2026-11-18"}'            # instance B
+#   docker compose exec db psql -U focus_day -c \
+#     "SELECT assignee, day, issue_id, event_id FROM plan_blocks ORDER BY 1, 2"
+#   docker compose down -v
+#
+# The database is also published on localhost:55432 for the Postgres tests
+# (product/README.md, "Code checks and tests"). The password is a local
+# placeholder, not a secret.
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: focus_day
+      POSTGRES_PASSWORD: focus_day
+      POSTGRES_DB: focus_day
+    ports:
+      - "127.0.0.1:55432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "focus_day", "-d", "focus_day"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  api-a: &api
+    build:
+      context: .
+    environment: &api-env
+      TRACKER_PROVIDER: ospsd_team4_product.fakes:InMemoryIssueProvider
+      CALENDAR_PROVIDER: ospsd_team4_product.fakes:InMemoryCalendarService
+      STORAGE_PROVIDER: ospsd_team4_product.fakes:InMemoryDocumentStorage
+      STATE_DB_URL: postgresql://focus_day:focus_day@db:5432/focus_day
+      PORT: "8000"
+    ports:
+      - "127.0.0.1:8001:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api-b:
+    <<: *api
+    environment:
+      <<: *api-env
+    ports:
+      - "127.0.0.1:8002:8000"

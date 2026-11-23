@@ -8,7 +8,7 @@
 
 #### Status: Implemented (HW3 Milestone 1); review follow-ups F1 to F6 implemented, F7 planned ([Follow-up work](#follow-up-work-from-design-review))
 
-#### Last Update Date: 11/20/2026
+#### Last Update Date: 11/23/2026
 
 #### Relevant Links
 
@@ -38,13 +38,17 @@ assignee, a day and the times they are busy, it:
 4. books each block in a calendar (i.e. Team 5's Google Calendar implementation),
 5. writes a standup doc listing the plan to cloud storage (i.e. Team 3's Dropbox
    implementation),
-6. returns the status of every step.
+6. saves the booked plan as the assignee's approved plan for the day, in a
+   Postgres state store shared by every service instance
+   ([State store](#state-store)),
+7. returns the status of every step.
 
 Currently, the steps are fixed and there is no LLM. Each implementation is reached only
 through its shared contract package and is chosen by configuration
 (`TRACKER_PROVIDER`, `CALENDAR_PROVIDER`, `STORAGE_PROVIDER`, each a
 `module:attr` import path). In-memory fakes are selected through the same
-variables for tests and the disposable environment.
+variables for tests and the disposable environment. The state database is
+chosen by `STATE_DB_URL`.
 
 **The service cannot see the real calendar.** The calendar contract has
 create, get, replace and delete, but no way to list or search events. The
@@ -64,7 +68,8 @@ caller sends, and conflict avoidance is only as good as that list.
 | Adapters | The only code that knows contract exceptions. Turns each provider failure into a HW1 compatible `StepError` naming its step |
 | Configuration | Reads the environment once, resolves the `module:attr` paths, applies any defaults |
 | Factories | The only code that calls a provider constructor, and the only place provider-specific arguments are supplied (i.e. Team 5's `token_file`) |
-| Fakes | In-memory tracker, calendar and storage with failure injection, for tests and the disposable service |
+| State store | `store.py`: approved plans, remaining work and the completion log in a Postgres database shared by every instance. The only code that knows the database ([State store](#state-store)) |
+| Fakes | In-memory tracker, calendar, storage and state store with failure injection, for tests and the disposable service |
 
 ### Diagram
 
@@ -86,18 +91,25 @@ orchestrator.FocusDay.run
   |                                                 '-> team5_calendar  -> Google Calendar, primary calendar
   |-- 4. write_standup_doc --> StorageAdapter  --> DocumentStorage  (cloud-storage-api 0.3.1)
   |                                                 '-> dropbox_client_impl  -> Dropbox
+  |-- 5. save_plan ----------> StateStore      --> PostgresStateStore -> Postgres (shared by all instances)
   v
-5. response: status, steps (6 in total, validate first), plan, created, doc, issues_truncated  (or the error body with failed_step details)
+6. response: status, steps (7 in total, validate first), plan, created, doc, issues_truncated  (or the error body with failed_step details)
 
-Startup (lifespan): config.py resolves *_PROVIDER paths -> factories.py builds the three
-providers once -> any problem exits before serving, naming the variable (ERRORS.md, Startup errors)
+Startup (lifespan): config.py resolves *_PROVIDER paths and checks STATE_DB_URL -> factories.py
+builds the three providers once and connects to the state database (creating its tables) -> any
+problem exits before serving, naming the variable (ERRORS.md, Startup errors)
 ```
 
 ### Request trace
 
 A real run on 2026-11-16, with the three real implementations (product
 commit `ae94c6a`). Full output and screenshots are in
-[evidence/focus-day-live.md](evidence/focus-day-live.md).
+[evidence/focus-day-live.md](evidence/focus-day-live.md). The run predates
+the `save_plan` step ([#85](https://github.com/Tyler-Arciniaga/OSPSD-Team-4/issues/85)),
+so it shows four steps; a run today ends with a fifth,
+`{"name": "save_plan", "status": "ok", "error": null}`, after which
+the three blocks and their event IDs are tyler's approved plan for
+2026-11-19.
 
 **Request**
 
@@ -221,8 +233,8 @@ None.
   `skipped`, and `error` is set only on the step that failed. On a replay,
   `check_doc`, `list_issues` and `plan` are `skipped`. This run, recorded
   before F3, has four steps. Since F3 `validate` comes first (`ok` on
-  success and on replay, `failed` for invalid input), and since F5
-  `check_doc` follows it, for six steps.
+  success and on replay, `failed` for invalid input), since F5 `check_doc`
+  follows it, and since #85 `save_plan` comes last, for seven steps.
 - `issues_truncated` (since F6, not in this recording) is `true` when
   `list_issues` returned the contract maximum of 100, so older issues may
   be missing from the plan; `false` when it returned fewer; `null` when it
@@ -248,8 +260,11 @@ Contract quotes are from `calendar-contract` `v0.1.0`
 - **Constraint:** "creation is not idempotent" and event IDs are
   "provider-assigned"; `CreateEvent` takes no ID or idempotency key. Knowing
   whether a block is booked means remembering the ID `create` returned.
-- **Approach:** the service stores nothing. Every response carries `plan`
-  and `created`; the caller sends them back as `replay` during retries.
+- **Approach:** the service stores nothing about a run in progress. Every
+  response carries `plan` and `created`; the caller sends them back as
+  `replay` during retries. (The [state store](#state-store) keeps only
+  plans whose every step succeeded, for the progress and status scenarios;
+  replay never reads it.)
 - **Alternative:** store each run server-side under an `Idempotency-Key`, as
   our HW2 service does for `POST /issues`.
 - **Another alternative (from Team 3's review):** keep a run record in the
@@ -297,6 +312,59 @@ Contract quotes are from `calendar-contract` `v0.1.0`
   12:00-13:00 busy hour was left free on the real calendar.
 - **Revisit when:** the calendar contract gains a list or free/busy operation.
 
+### State store
+
+- **Constraint:** reporting progress and asking about an issue (the RFD's
+  scenarios 2 and 3, [RFD, Proposal, "State"](RFD.md#proposal)) need state
+  that outlives a request: each assignee's approved plan, the remaining
+  share of unfinished issues, and a completion log. The service must also
+  run as N >= 1 instances, so a plan saved through one instance must be
+  readable through any other.
+- **Approach:** `store.py` keeps that state in one Postgres database that
+  every instance reaches through `STATE_DB_URL`; the instances themselves
+  stay stateless. It holds three kinds of record, each keyed by `assignee`:
+  - **Approved plan:** `assignee`, `day`, and per block `issue_id`, `title`,
+    `start`, `end`, `event_id`. One per (assignee, day); saving replaces it.
+  - **Remaining share:** `assignee`, `issue_id`, `remaining_percent` (1 to 100).
+  - **Completion log entry:** `assignee`, `day`, `issue_id`,
+    `remaining_percent` (0 = finished), `recorded_at` (UTC), `applied`. One
+    per (assignee, day, issue_id); recording it again updates it.
+
+  Focus-day saves its plan in a fifth step, `save_plan`, only after every
+  other step succeeded, so the store never holds a draft ("answer only from
+  approved plans"). Until focus-day has its own approval step, a fully
+  booked plan counts as approved. Every write is an upsert in one
+  transaction, and uniqueness and ranges are database constraints, so
+  concurrent requests on different instances converge on one row. Tables
+  are created at startup if missing (under an advisory lock, so instances
+  starting together do not race). The in-memory `InMemoryStateStore`
+  (`STATE_DB_URL=memory://`) follows the same rules for tests and the
+  disposable service; `tests/test_store.py` runs the same tests on both.
+- **Alternatives:**
+  - *SQLite inside the service* (the first plan for #85): each instance
+    would have its own file, so a second instance could not see the first
+    one's plans, and Render's free filesystem is wiped on every redeploy.
+  - *State in the client* (the TUI, #88): one user's client has only that
+    user's plans, but scenario 3 asks about anyone's issue; the Level 3
+    agent is a second client that cannot see the TUI's files; and the
+    service could not enforce "approved plans only" if the client sent the
+    plan. It would also put product state in the interface, which #88
+    rules out.
+  - *Reading the standup doc back:* it is Markdown for people, so parsing it
+    is fragile, and it has no event IDs.
+- **Tradeoff:** a database to run and secure, and one more dependency
+  (`psycopg`). In return any instance can answer, and the state survives
+  redeploys. A query costs a few milliseconds, small next to the tracker,
+  calendar and storage calls every request already makes.
+- **Evidence:** `tests/test_multi_instance.py` starts two service processes
+  on one database: plans saved through each are visible to an independent
+  store, and ten concurrent runs of the same plan through both leave one
+  whole plan. `tests/test_store.py` shows 20 writers on separate
+  connections converging and a failed save leaving the previous plan.
+  `docker-compose.yml` runs two instances by hand.
+- **Revisit when:** the free database's limits matter (see Known
+  limitations), or the state grows beyond these three records.
+
 ## Boundaries, validation, credentials and invariants
 
 **Boundaries.** Three layers, and each one imports only the layer below it:
@@ -307,11 +375,15 @@ Contract quotes are from `calendar-contract` `v0.1.0`
 | Adapters | `adapters/` | The shared contracts (`issue-tracker-contract`, `calendar-contract`, `cloud-storage-api`); they translate contract results and errors into our types |
 | Implementations | Trello, Team 5, Team 3 packages | Reached only through the contract interfaces; never imported by name |
 
+The state store sits beside the adapters: the orchestrator uses the
+`StateStore` protocol and `StoreError`, and only `store.py` imports the
+database driver.
+
 `tests/test_import_boundary.py` fails the build if any module imports an
 implementation or SDK, if anything other than the adapters, factories and
-fakes imports a provider interface, or if the planner or doc builder imports
+fakes imports a provider interface, if the planner or doc builder imports
 anything but a few pure standard-library modules (and the doc builder, the
-planner).
+planner), or if anything but `store.py` imports a database driver.
 
 **Where input is validated.** Everything is checked before the first provider
 call, so a rejected request has no side effect:
@@ -345,7 +417,9 @@ environment variables and one mounted secret file:
   `ospsd-team4-product-secrets`, entered by hand, with the Google token as
   a secret file mounted at `/etc/secrets/`.
 - Terraform links the environment group by ID only, so state holds no
-  values.
+  values. For the same reason the state database is created by hand and
+  its URL (which contains its password) is entered in the environment
+  group as `STATE_DB_URL`, rather than managed by Terraform.
 - `.gitignore` catches stray token and client-secret files. `.dockerignore`
   keeps every `*.json` and `.env` out of the image, and `disposable_env.sh`
   fails the release if a credential file is found in it.
@@ -361,10 +435,13 @@ environment variables and one mounted secret file:
 5. An uncertain write is never retried automatically, and is reported with
    `may_have_applied: true`.
 6. Invalid input never reaches a provider.
-7. Bad configuration, or a provider that cannot be built, stops startup.
-   The service never serves requests half-configured.
+7. Bad configuration, a provider that cannot be built, or an unreachable
+   state database stops startup. The service never serves requests
+   half-configured.
 8. A run without `replay` books nothing if the doc for its assignee and day
    exists, or if storage cannot say whether it does (F5).
+9. Only a run whose every other step succeeded saves a plan, and a plan is
+   saved whole or not at all.
 
 ## 4.3 Failure modes
 
@@ -393,11 +470,14 @@ HW1 code and status, `retryable`, `may_have_applied`, and the `plan` and
 | Doc write fails after all events exist | Storage's code (for example 502 `provider_error`, `retryable: true` (F4)), `partial`, step `write_standup_doc` | Every event booked and in `created`; no doc, or possibly the doc (`may_have_applied`), which is harmless because rewriting it gives the same bytes | Replay: every event is confirmed with `get`, none recreated, and only the doc is written | `test_doc_failure_after_events_is_partial`, `test_replay_after_a_doc_failure_only_writes_the_doc` |
 | Doc folder missing (the operator has not created it) | 503 `service_not_configured`, `partial`, step `write_standup_doc`, not retryable (F2) | Every event booked and in `created`; no doc | Operator creates the folder (DEPLOYMENT.md, step 3); then replay | `test_missing_doc_folder_is_a_configuration_failure` |
 | Doc write fails with no events (empty plan) | Storage's code, `failed` | Nothing | Replay or retry | `test_storage_failure_with_no_events_is_failed` |
+| Any step before `save_plan` fails | That step's error | No plan saved for the day (an earlier saved plan is kept) | As in that step's row; a successful replay saves the plan | `test_partial_run_saves_nothing`, `test_failed_run_saves_nothing`, `test_successful_replay_saves_the_plan` |
+| Saving the plan fails (database down or unreachable) | 500 `internal_error`, `retryable: true`, `may_have_applied: false`, step `save_plan`; `partial` if any event exists | Every event booked and the doc written; no plan saved (the save is one transaction) | Replay: events are confirmed with `get`, none recreated, the doc is rewritten and the plan saved | `test_save_failure_is_a_retryable_internal_error`, `test_replay_after_a_save_failure_saves_without_new_events` |
 | Replay, recorded events all exist | 200, `ok` | No new events; doc rewritten with the same bytes | Nothing | `test_replay_skips_events_that_exist`; live in the evidence |
 | Replay after an event was deleted (NOT_FOUND) | 200, `ok` | That event recreated with a new ID in `created`; others unchanged | Keep the new response | `test_replay_recreates_an_event_that_was_not_found`; live in the evidence |
 | Replay, but `get` itself fails | The calendar's code, step `create_events` | Unchanged; nothing created after the failed check | Replay again later | `test_replay_stops_when_an_event_cannot_be_checked` |
 | Bad configuration (missing or malformed `*_PROVIDER`, unreadable `CALENDAR_TOKEN_FILE`, bad default) | Service does not start | No service: logs `startup_config_invalid` naming the variable, exits | Operator fixes the variable; the release's disposable check catches this before deploy | `test_startup_fails_on_bad_config`, `test_config.py`, `disposable_env.sh` |
 | A provider cannot be built (for example missing Dropbox credentials) | Service does not start | As above, naming `STORAGE_PROVIDER` | Operator sets the credentials in the Render environment group | `test_startup_fails_when_a_provider_cannot_be_built` |
+| `STATE_DB_URL` missing or not a `postgresql://` URL, or its database unreachable | Service does not start | As above, naming `STATE_DB_URL`; the URL is never printed | Operator sets the Internal Database URL in the environment group, or brings the database back (DEPLOYMENT.md, State database) | `test_startup_fails_on_bad_state_db_url`, `test_startup_fails_when_the_state_database_is_unreachable`, `disposable_env.sh` |
 | A bug in this service | 500 `internal_error`, plain HW1 shape | Whatever ran before it | Report it; the log has the traceback | Handler in `main.py` |
 
 Each failed request is logged as one JSON line (`event: focus_day_failed`)
@@ -430,6 +510,21 @@ faulty release created; they have to be removed by hand
   can still book a day twice. A run record in storage (Team 3's
   alternative in 4.2) would close both gaps.
 - No caller authentication until Level 4 (F7).
+- **The free state database is temporary.** Render's free Postgres
+  [expires 30 days after creation](https://render.com/docs/free), and is
+  deleted after a further 14-day grace period unless it is upgraded to a
+  paid plan. A workspace may have only one free database at a time; it has
+  1 GB of storage, no backups and no managed connection pooling
+  ([Render: Deploy for Free](https://render.com/docs/free), checked
+  2026-11-23). Recreating it loses every saved plan, remaining share and
+  log entry (DEPLOYMENT.md, State database). Render may change these
+  terms, so check that page before relying on them.
+- **The deployment runs one instance.** Render's free web plan runs a
+  single instance, so N > 1 is shown locally (`docker-compose.yml`,
+  `tests/test_multi_instance.py`) rather than on Render.
+- The disposable service uses the in-memory state store
+  (`STATE_DB_URL=memory://`), since the one free database is production's.
+  Its state is lost on restart and is not shared between instances.
 
 ## Follow-up work from design review
 

@@ -1,8 +1,14 @@
 locals {
   # Set by hand in the environment group named by var.secrets_env_group_id,
   # so their values never reach Terraform state. The service refuses to start
-  # if the calendar token file is missing or unreadable, or if Dropbox cannot
-  # be built without its credentials.
+  # if the calendar token file is missing or unreadable, if Dropbox cannot
+  # be built without its credentials, or if STATE_DB_URL is unset or its
+  # database cannot be reached.
+  #
+  # STATE_DB_URL is the Internal Database URL of the state database
+  # (product/docs/DEPLOYMENT.md, "State database"). The database is created
+  # by hand, not here, because a Terraform-managed database would put its
+  # password in Terraform state.
   secret_names = {
     env_vars = [
       "TRELLO_API_KEY",
@@ -11,6 +17,7 @@ locals {
       "DROPBOX_APP_KEY",
       "DROPBOX_APP_SECRET",
       "DROPBOX_REFRESH_TOKEN",
+      "STATE_DB_URL",
     ]
     secret_files = [var.calendar_token_file_name]
   }
@@ -26,11 +33,14 @@ locals {
   }
 
   # The disposable service selects the in-memory providers through the same
-  # variables. It needs no credentials and is not linked to the secrets.
+  # variables. It needs no credentials and is not linked to the secrets. Its
+  # state store is in memory too (STATE_DB_URL=memory://): Render allows one
+  # free database per workspace, and that one is production's.
   disposable_env_vars = {
     TRACKER_PROVIDER  = { value = "ospsd_team4_product.fakes:InMemoryIssueProvider" }
     CALENDAR_PROVIDER = { value = "ospsd_team4_product.fakes:InMemoryCalendarService" }
     STORAGE_PROVIDER  = { value = "ospsd_team4_product.fakes:InMemoryDocumentStorage" }
+    STATE_DB_URL      = { value = "memory://" }
     DEFAULT_TIMEZONE  = { value = var.default_timezone }
   }
 }

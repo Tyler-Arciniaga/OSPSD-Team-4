@@ -25,6 +25,9 @@ dependencies = [
     # Team 1's Dropbox storage, the swap-in alternative to Team 3's
     # (STORAGE_PROVIDER=team1_dropbox:Team1DropboxStorage.from_env).
     "team1-dropbox-storage",
+    # The shared state store (store.py). `binary` bundles libpq, which the
+    # slim image lacks; `pool` keeps a few connections open per instance.
+    "psycopg[binary,pool]>=3.3.9",
 ]
 
 [build-system]

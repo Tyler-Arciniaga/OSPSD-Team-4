@@ -15,8 +15,9 @@ import inspect
 import os
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import time
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 TRACKER_PROVIDER = "TRACKER_PROVIDER"
@@ -26,6 +27,12 @@ CALENDAR_TOKEN_FILE = "CALENDAR_TOKEN_FILE"
 DEFAULT_WORKING_WINDOW = "DEFAULT_WORKING_WINDOW"
 DEFAULT_MINUTES = "DEFAULT_MINUTES"
 DEFAULT_TIMEZONE = "DEFAULT_TIMEZONE"
+STATE_DB_URL = "STATE_DB_URL"
+
+# STATE_DB_URL value that selects the in-memory store (fakes/state.py): one
+# process only, for tests and the disposable environment.
+MEMORY_STORE_URL = "memory://"
+POSTGRES_SCHEMES = ("postgresql", "postgres")
 
 # Used when the matching variable is unset or empty.
 FALLBACK_WORKING_WINDOW = "09:00-17:00"
@@ -73,6 +80,10 @@ class ProductConfig:
     default_working_window: WorkingWindow
     default_minutes: int
     default_timezone: str
+
+    # A postgresql:// URL, or MEMORY_STORE_URL. It holds the database
+    # password, so it is left out of repr() and never logged.
+    state_db_url: str = field(repr=False)
 
 
 def resolve_import_path(
@@ -175,6 +186,24 @@ def _timezone(environ: Mapping[str, str]) -> str:
     return value
 
 
+def _state_db_url(environ: Mapping[str, str]) -> str:
+    value = environ.get(STATE_DB_URL)
+    if not value:
+        raise ConfigError(f"Missing required configuration: {STATE_DB_URL}")
+    if value == MEMORY_STORE_URL:
+        return value
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        parts = None
+    if parts is None or parts.scheme not in POSTGRES_SCHEMES or not parts.netloc:
+        raise ConfigError(
+            f"{STATE_DB_URL} must be a postgresql:// URL"
+            f" (or {MEMORY_STORE_URL} for the in-memory store)"
+        )
+    return value
+
+
 def load_config(environ: Mapping[str, str] = os.environ) -> ProductConfig:
     """Return the validated configuration, or raise ConfigError."""
     tracker_factory = resolve_import_path(TRACKER_PROVIDER, environ)
@@ -189,4 +218,5 @@ def load_config(environ: Mapping[str, str] = os.environ) -> ProductConfig:
         default_working_window=_working_window(environ),
         default_minutes=_minutes(environ),
         default_timezone=_timezone(environ),
+        state_db_url=_state_db_url(environ),
     )

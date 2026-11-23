@@ -21,6 +21,7 @@ Step = Literal[
     "plan",
     "create_events",
     "write_standup_doc",
+    "save_plan",
 ]
 STEPS: tuple[Step, ...] = (
     "validate",
@@ -29,6 +30,7 @@ STEPS: tuple[Step, ...] = (
     "plan",
     "create_events",
     "write_standup_doc",
+    "save_plan",
 )
 
 

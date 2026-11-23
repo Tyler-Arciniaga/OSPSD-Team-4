@@ -56,6 +56,8 @@ from the Dropbox test account when they pile up.
 | `TRELLO_API_KEY`, `TRELLO_TOKEN`, `TRELLO_LIST_ID` | Secret | Product Render environment group, by hand |
 | `DROPBOX_APP_KEY`, `DROPBOX_APP_SECRET`, `DROPBOX_REFRESH_TOKEN` | Secret | Product Render environment group, by hand |
 | `google-calendar-token.json` (Team 5's OAuth token) | Secret file | Product Render environment group, by hand; mounted at `/etc/secrets/google-calendar-token.json` |
+| `STATE_DB_URL` (production) | Secret | Product Render environment group, by hand: the state database's Internal Database URL ([State database](#state-database)) |
+| `STATE_DB_URL` (disposable) | Configuration | `product/infra/main.tf`: `memory://`, the in-memory store |
 | `PRODUCT_SECRETS_ENV_GROUP_ID` | Configuration | GitHub repository variable |
 | `RENDER_SERVICE_ID`, `SERVICE_URL` | Configuration | Variables of `product-production` and `product-disposable` |
 | `RENDER_API_KEY`, `TF_API_TOKEN`, `RENDER_OWNER_ID` | Secret / configuration | GitHub, as for HW2 |
@@ -137,6 +139,8 @@ token without printing it: `jq -r .refresh_token ~/.config/ospsd-team4/dropbox_t
       `DROPBOX_APP_SECRET`, `DROPBOX_REFRESH_TOKEN`.
 - [ ] Add a **secret file** named `google-calendar-token.json` with the token
       file's contents.
+- [ ] Create the state database and add `STATE_DB_URL`
+      ([State database](#state-database), steps 1 and 2).
 - [ ] Note the group's `evg-...` ID.
 
 ### 6. GitHub (repository admin)
@@ -188,12 +192,68 @@ readable file`, the secret file is missing, misnamed, or not readable by the
 image's non-root user (uid 10001). That last case is not yet verified on
 Render; the service log names the variable, never its value.
 
+## State database
+
+Approved plans, remaining work and the completion log live in one Postgres
+database that every instance of the service shares
+([DESIGN.md, State store](DESIGN.md#state-store)). It is created by hand,
+not by Terraform: a Terraform-managed database would put its password in
+Terraform state. The service creates its own tables on startup, so the
+database only has to exist.
+
+1. [ ] **Create it.** Render dashboard, **New**, **Postgres**:
+   - Name `ospsd-team4-product-state`, database `focus_day`, user
+     `focus_day` (any names work; they end up in the URL).
+   - Region **Virginia (US East)**, the service's region
+     (`product/infra/variables.tf`). The service reaches it over Render's
+     private network only if both are in the same region.
+   - Instance type **Free**, PostgreSQL version 17 (CI and
+     `docker-compose.yml` use 17).
+
+   A workspace may have only one free database at a time. If the workspace
+   already has one, delete it first or choose a paid type.
+2. [ ] **Give the service its URL.** On the database's page, **Connect**,
+   copy the **Internal Database URL** (`postgresql://focus_day:...@dpg-...-a/focus_day`;
+   no `.render.com` host). Add it to the environment group
+   `ospsd-team4-product-secrets` as `STATE_DB_URL`. Do not use the External
+   URL: it goes over the internet and is not needed.
+3. [ ] **Check it.** After the next deploy, the service log has no
+   `startup_config_invalid` line, and a `POST /v1/focus-day` response ends
+   with `{"name": "save_plan", "status": "ok", ...}`. The release's smoke
+   check does this: it saves an empty plan for `release-smoke` on
+   2000-01-03 each time, replacing the previous one.
+
+**Order for an existing deployment.** The release that adds the store (#85)
+refuses to start without `STATE_DB_URL`. Do steps 1 and 2 **before** merging
+it: the running, older image ignores the extra variable, so adding it first
+is safe. If the release went out first, `deploy` fails with
+`Missing required configuration: STATE_DB_URL` in the log and the previous
+deploy keeps serving; do steps 1 and 2, then re-run the failed release.
+
+**Renewal.** Render's free databases expire 30 days after creation and are
+deleted 14 days after that unless upgraded ([Render: Deploy for
+Free](https://render.com/docs/free)). Before the expiry date shown on the
+database's page, either upgrade it to a paid type (keeps the data) or
+create a new free one and replace `STATE_DB_URL` (loses every saved plan,
+remaining share and log entry; the service recreates the empty tables).
+While the database is down or expired, a running service fails each request
+at the `save_plan` step (500, `retryable`), and a new deploy or restart
+cannot start (`Cannot connect to state database`), so Render keeps the
+previous deploy serving.
+
+**Rollback.** Rolling back to a release from before #85 leaves the
+database untouched; that release ignores `STATE_DB_URL` and saves nothing.
+Rolling forward again resumes saving. No migration is involved: the tables
+are only ever created, never altered.
+
 ## Verify locally
 
 ```sh
 cd product
 uv run pytest                                  # includes the smoke-check tests
-cd .. && product/scripts/disposable_env.sh     # build the image and check it
+# The state store tests need a Postgres to wipe (README.md, Checks):
+TEST_STATE_DB_URL=postgresql://focus_day:focus_day@localhost:55432/focus_day_test uv run pytest
+cd .. && product/scripts/disposable_env.sh     # build the image and check it (starts its own Postgres)
 cd product/infra && terraform init -backend=false && terraform validate && terraform test
 ```
 
@@ -213,5 +273,7 @@ or docs a faulty release created.
   `terraform login`, `RENDER_API_KEY` and `RENDER_OWNER_ID` exported), or
   delete it in the Render dashboard and then remove it from state. There is
   no destroy workflow for the product.
-- By hand: the environment group, the GitHub environments and variable, the
-  HCP workspace, the Google OAuth client and token, the Dropbox app.
+- By hand: the environment group, the state database
+  (`ospsd-team4-product-state`; deleting it deletes every saved plan), the
+  GitHub environments and variable, the HCP workspace, the Google OAuth
+  client and token, the Dropbox app.
