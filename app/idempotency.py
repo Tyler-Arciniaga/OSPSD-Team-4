@@ -27,6 +27,7 @@ import json
 import logging
 import math
 import sqlite3
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -47,6 +48,11 @@ KEY_RETENTION_SECONDS = 24 * 60 * 60
 # provider request can still take effect after the service stops waiting for
 # it (the provider timeout is 10 seconds per network operation).
 ATTEMPT_LEASE_SECONDS = 60
+
+# How long opening the store keeps retrying while another connection is
+# setting up the same new database file.
+STORE_SETUP_TIMEOUT_SECONDS = 30
+_STORE_SETUP_RETRY_SECONDS = 0.05
 
 # Keys are 1-255 visible ASCII characters, so they survive HTTP headers,
 # logs and copy-and-paste unchanged. UUIDs are recommended.
@@ -127,13 +133,46 @@ class IdempotencyStore:
         self.clock = clock
         self.retention_seconds = retention_seconds
         self.lease_seconds = lease_seconds
+        self._set_up = False
+        self._setup_lock = threading.Lock()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30, isolation_level=None)
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA synchronous=FULL")
-        connection.execute(_SCHEMA)
+        try:
+            self._set_up_file(connection)
+            connection.execute("PRAGMA synchronous=FULL")
+            # A no-op once the table exists; recreates it if the file was
+            # removed while the service runs.
+            connection.execute(_SCHEMA)
+        except BaseException:
+            connection.close()
+            raise
         return connection
+
+    def _set_up_file(self, connection: sqlite3.Connection) -> None:
+        """Switch the file to WAL mode, once per store.
+
+        Switching to WAL needs an exclusive lock, and SQLite reports a
+        conflicting switch as "database is locked" at once instead of waiting
+        for the busy timeout. So threads of this store set the file up one at
+        a time, and a switch racing another process is retried.
+        """
+        if self._set_up:
+            return
+        with self._setup_lock:
+            if self._set_up:
+                return
+            deadline = time.monotonic() + STORE_SETUP_TIMEOUT_SECONDS
+            while True:
+                try:
+                    connection.execute("PRAGMA journal_mode=WAL")
+                    break
+                except sqlite3.OperationalError as exc:
+                    busy = exc.sqlite_errorcode & 0xFF == sqlite3.SQLITE_BUSY
+                    if not busy or time.monotonic() >= deadline:
+                        raise
+                    time.sleep(_STORE_SETUP_RETRY_SECONDS)
+            self._set_up = True
 
     def check(self) -> None:
         """Open the store and create its table if needed; raise if it cannot.

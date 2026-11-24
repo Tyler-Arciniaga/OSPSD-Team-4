@@ -359,6 +359,90 @@ def test_claim_holds_the_write_lock_while_deciding(tmp_path: Path) -> None:
     assert competing_write_blocked == [True]
 
 
+def test_many_threads_can_open_a_new_store_at_once(tmp_path: Path) -> None:
+    # The first connections to a new file race to switch it to WAL mode.
+    # SQLite reports a lost race as "database is locked" without waiting, so
+    # before the store set the file up once, about 1 round in 20 failed.
+    body = request_fingerprint(IssueCreate(title=TITLE))
+    for round_number in range(50):
+        db_path = tmp_path / f"keys-{round_number}.db"
+        store = IdempotencyStore(db_path)
+        start = threading.Barrier(16)
+
+        def attempt(
+            n: int,
+            store: IdempotencyStore = store,
+            start: threading.Barrier = start,
+        ) -> ClaimKind:
+            start.wait()
+            return store.claim(key_digest(f"{KEY}-{n}"), body).kind
+
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            kinds = list(pool.map(attempt, range(16)))
+
+        assert kinds == [ClaimKind.NEW] * 16
+        with sqlite3.connect(db_path) as db:
+            assert db.execute("PRAGMA journal_mode").fetchone() == ("wal",)
+
+
+class _FailingWalSwitch:
+    """A connection whose first WAL switches fail with an SQLite error code."""
+
+    def __init__(self, connection: sqlite3.Connection, fail: list[int]) -> None:
+        self._connection = connection
+        self._fail = fail
+
+    def execute(
+        self, sql: str, parameters: tuple[str | float | None, ...] = ()
+    ) -> sqlite3.Cursor:
+        if sql == "PRAGMA journal_mode=WAL" and self._fail:
+            error = sqlite3.OperationalError("simulated failure")
+            error.sqlite_errorcode = self._fail.pop(0)
+            raise error
+        return self._connection.execute(sql, parameters)
+
+    def close(self) -> None:
+        self._connection.close()
+
+
+def _fail_wal_switches(monkeypatch: pytest.MonkeyPatch, codes: list[int]) -> None:
+    real_connect = sqlite3.connect
+    monkeypatch.setattr(
+        sqlite3,
+        "connect",
+        lambda *args, **kwargs: _FailingWalSwitch(real_connect(*args, **kwargs), codes),
+    )
+
+
+def test_store_setup_retries_while_another_process_sets_up_the_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Another process switching the same new file to WAL makes ours fail with
+    # SQLITE_BUSY at once; the busy timeout does not cover it.
+    codes = [sqlite3.SQLITE_BUSY, sqlite3.SQLITE_BUSY]
+    _fail_wal_switches(monkeypatch, codes)
+    store = IdempotencyStore(tmp_path / "keys.db")
+
+    claim = store.claim(key_digest(KEY), request_fingerprint(IssueCreate(title=TITLE)))
+
+    assert claim.kind is ClaimKind.NEW
+    assert codes == []
+
+
+def test_store_setup_does_not_retry_other_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    codes = [sqlite3.SQLITE_IOERR, sqlite3.SQLITE_BUSY]
+    _fail_wal_switches(monkeypatch, codes)
+    store = IdempotencyStore(tmp_path / "keys.db")
+
+    with pytest.raises(sqlite3.OperationalError) as raised:
+        store.check()
+
+    assert raised.value.sqlite_errorcode == sqlite3.SQLITE_IOERR
+    assert codes == [sqlite3.SQLITE_BUSY]
+
+
 # --- Uncertain provider outcomes --------------------------------------------
 
 
