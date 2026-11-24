@@ -10,6 +10,7 @@ storage is Team 3's Dropbox package, each chosen by configuration.
 | Document | What it covers |
 | --- | --- |
 | [docs/DESIGN.md](docs/DESIGN.md) | Architecture, a real request trace, decisions, failure modes |
+| [docs/AGENT.md](docs/AGENT.md) | Level 3 model choice for workflow selection, estimates, progress reports and issue matching |
 | [docs/ERRORS.md](docs/ERRORS.md) | Every error the service can return, and every startup error |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | The release pipeline, Terraform and the one-time human setup |
 | [docs/evidence/](docs/evidence/) | Partner installs, the Dropbox round trip, a live focus-day run, a storage swap to Team 1's package, a controlled calendar failure |
