@@ -26,7 +26,7 @@ import httpx
 import pytest
 
 from ospsd_team4_product.store import PostgresStateStore
-from tests.test_focus_day import FAKES, REQUEST
+from tests.test_focus_day import FAKES, REQUEST, replay_of
 
 PRODUCT = Path(__file__).parents[1]
 DAY = date(2026, 11, 18)
@@ -121,15 +121,17 @@ def test_a_plan_saved_through_one_instance_is_visible_to_another(
     assert {match.assignee for match in matches} == {"alice", "bob"}
 
 
-def test_the_same_plan_saved_through_both_instances_at_once_is_one_plan(
+def test_concurrent_saves_through_both_instances_leave_one_whole_plan(
     instances: tuple[Instance, Instance], shared: PostgresStateStore
 ) -> None:
     a, b = instances
+    # A repeated run for the same day must be a replay (check_doc, F5), so
+    # the concurrent saves are replays of one run, through both instances.
+    first = a.focus_day(REQUEST).json()
+    replay = replay_of(first)
 
     with ThreadPoolExecutor(max_workers=10) as pool:
-        responses = list(
-            pool.map(lambda i: (a, b)[i % 2].focus_day(REQUEST), range(10))
-        )
+        responses = list(pool.map(lambda i: (a, b)[i % 2].focus_day(replay), range(10)))
 
     assert [response.status_code for response in responses] == [200] * 10
     plan = shared.get_plan("tyler", DAY)
