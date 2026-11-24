@@ -18,7 +18,7 @@
 #     Team 3 packages import and build inside the image);
 #   - with the in-memory providers (selected through the same variables),
 #     /healthz and /readyz answer, /readyz reports the commit, and
-#     POST /v1/focus-day completes all four steps.
+#     POST /v1/focus-day completes all six steps.
 #
 # Usage: product/scripts/disposable_env.sh       (from a clean checkout)
 #        IMAGE_REF=<repo>@sha256:<digest> EXPECTED_COMMIT=<sha> product/scripts/disposable_env.sh
@@ -150,7 +150,7 @@ result="$(curl -sS -w ' %{http_code}' -X POST "http://127.0.0.1:${PORT}/v1/focus
 [[ "$result" == *' 200' && "$result" == *'"status":"ok"'* ]] \
   && pass "POST /v1/focus-day completes with the in-memory providers" \
   || fail "POST /v1/focus-day: ${result}"
-[[ "$result" == *'"failed_step":null'* && "$result" == *'"path":"/standups/2026-11-18/disposable.md"'* ]] \
+[[ "$result" == *'"failed_step":null'* && "$result" == *'"path":"/standups/2026-11-18-disposable.md"'* ]] \
   && pass "every step ran and the doc was written" || fail "unexpected focus-day body"
 
 logs="$(docker logs "$CONTAINER" 2>&1)"

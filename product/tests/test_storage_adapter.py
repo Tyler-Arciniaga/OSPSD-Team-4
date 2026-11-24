@@ -6,6 +6,7 @@ from cloud_storage_api import (
     FileTooLargeError,
     InvalidOperationError,
     InvalidRequestError,
+    NotFoundError,
     PermissionDeniedError,
     ProviderError,
     ProviderUnavailableError,
@@ -17,7 +18,7 @@ from ospsd_team4_product.adapters.storage import StorageAdapter, StoredDoc
 from ospsd_team4_product.errors import StepError
 from ospsd_team4_product.fakes import InMemoryDocumentStorage
 
-PATH = "/standups/2026-11-18/tyler.md"
+PATH = "/standups/2026-11-18-tyler.md"
 SECRET = "Dropbox said /secret/path token=abc"
 
 
@@ -129,11 +130,11 @@ class OddStorageError(StorageError):
         (PermissionDeniedError(SECRET), ErrorCode.ACCESS_DENIED, False, False),
         (FileTooLargeError(SECRET), ErrorCode.INVALID_INPUT, False, False),
         (InvalidOperationError(SECRET), ErrorCode.INVALID_INPUT, False, False),
-        (ProviderError(SECRET), ErrorCode.PROVIDER_ERROR, False, True),
+        (ProviderError(SECRET), ErrorCode.PROVIDER_ERROR, True, True),
         (ProviderUnavailableError(SECRET), ErrorCode.PROVIDER_ERROR, True, True),
-        (OddStorageError(SECRET), ErrorCode.PROVIDER_ERROR, False, True),
-        (StorageError(SECRET), ErrorCode.PROVIDER_ERROR, False, True),
-        (RuntimeError(SECRET), ErrorCode.PROVIDER_ERROR, False, True),
+        (OddStorageError(SECRET), ErrorCode.PROVIDER_ERROR, True, True),
+        (StorageError(SECRET), ErrorCode.PROVIDER_ERROR, True, True),
+        (RuntimeError(SECRET), ErrorCode.PROVIDER_ERROR, True, True),
     ],
     ids=lambda value: type(value).__name__ if isinstance(value, Exception) else None,
 )
@@ -157,6 +158,34 @@ def test_errors_are_mapped_without_leaking_messages(
     assert raised.value.__cause__ is None
 
 
+def test_missing_doc_folder_is_a_configuration_failure() -> None:
+    storage = InMemoryDocumentStorage(folders=())
+
+    with pytest.raises(StepError) as raised:
+        StorageAdapter(storage).write_doc(PATH, b"new")
+
+    assert raised.value.step == "write_standup_doc"
+    assert raised.value.code == ErrorCode.SERVICE_NOT_CONFIGURED
+    assert raised.value.status == 503
+    assert raised.value.retryable is False
+    assert raised.value.may_have_applied is False
+    assert storage.files == {}
+    assert calls(storage) == {"replace": 1, "create": 1}
+
+
+def test_not_found_from_create_is_reported_without_leaking(
+    storage: InMemoryDocumentStorage,
+) -> None:
+    storage.failures.fail("create", NotFoundError(SECRET))
+
+    with pytest.raises(StepError) as raised:
+        StorageAdapter(storage).write_doc(PATH, b"new")
+
+    assert raised.value.code == ErrorCode.SERVICE_NOT_CONFIGURED
+    assert SECRET not in raised.value.message
+    assert raised.value.__cause__ is None
+
+
 def test_not_found_after_create_conflict_is_reported(
     storage: InMemoryDocumentStorage,
 ) -> None:
@@ -168,3 +197,61 @@ def test_not_found_after_create_conflict_is_reported(
 
     assert raised.value.code == ErrorCode.NOT_FOUND
     assert calls(storage) == {"replace": 2, "create": 1}
+
+
+# check_doc (F5): a read before any event is booked
+
+
+def test_absent_doc_passes_the_check(storage: InMemoryDocumentStorage) -> None:
+    StorageAdapter(storage).check_doc_absent(PATH)
+
+    assert storage.failures.calls("get_metadata") == 1
+
+
+def test_missing_doc_folder_passes_the_check() -> None:
+    """The folder is reported later, by write_standup_doc (503)."""
+    StorageAdapter(InMemoryDocumentStorage(folders=())).check_doc_absent(PATH)
+
+
+def test_existing_doc_fails_the_check(storage: InMemoryDocumentStorage) -> None:
+    storage.create(PATH, b"old")
+
+    with pytest.raises(StepError) as raised:
+        StorageAdapter(storage).check_doc_absent(PATH)
+
+    assert raised.value.step == "check_doc"
+    assert raised.value.code == ErrorCode.PRECONDITION_FAILED
+    assert raised.value.status == 412
+    assert raised.value.retryable is False
+    assert raised.value.may_have_applied is False
+    assert storage.files[PATH] == b"old"
+
+
+@pytest.mark.parametrize(
+    ("error", "code", "retryable"),
+    [
+        (PermissionDeniedError(SECRET), ErrorCode.ACCESS_DENIED, False),
+        (InvalidOperationError(SECRET), ErrorCode.INVALID_INPUT, False),
+        (ProviderError(SECRET), ErrorCode.PROVIDER_ERROR, True),
+        (ProviderUnavailableError(SECRET), ErrorCode.PROVIDER_ERROR, True),
+        (RuntimeError(SECRET), ErrorCode.PROVIDER_ERROR, True),
+    ],
+    ids=lambda value: type(value).__name__ if isinstance(value, Exception) else None,
+)
+def test_check_failures_are_reads_that_applied_nothing(
+    storage: InMemoryDocumentStorage,
+    error: Exception,
+    code: ErrorCode,
+    retryable: bool,
+) -> None:
+    storage.failures.fail("get_metadata", error)
+
+    with pytest.raises(StepError) as raised:
+        StorageAdapter(storage).check_doc_absent(PATH)
+
+    assert raised.value.step == "check_doc"
+    assert raised.value.code == code
+    assert raised.value.retryable is retryable
+    assert raised.value.may_have_applied is False
+    assert SECRET not in raised.value.message
+    assert raised.value.__cause__ is None

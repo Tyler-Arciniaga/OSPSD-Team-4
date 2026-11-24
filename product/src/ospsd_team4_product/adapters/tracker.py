@@ -5,6 +5,7 @@ The error mapping is documented in product/docs/ERRORS.md ("list_issues
 """
 
 import logging
+from dataclasses import dataclass
 from typing import Final
 
 from issue_tracker_contract.errors import ErrorCode, ServiceError
@@ -19,11 +20,24 @@ logger = logging.getLogger(__name__)
 STEP: Final[Step] = "list_issues"
 
 
+@dataclass(frozen=True)
+class IssueList:
+    """The issues read, newest first.
+
+    `truncated`: the tracker returned the contract maximum
+    (`MAX_LIST_LIMIT`, 100), so older issues may have been left out (F6). A
+    list of exactly 100 also sets it: the contract cannot tell the two apart.
+    """
+
+    issues: list[PlanIssue]
+    truncated: bool
+
+
 class TrackerAdapter:
     def __init__(self, provider: IssueProvider) -> None:
         self._provider = provider
 
-    def list_issues(self) -> list[PlanIssue]:
+    def list_issues(self) -> IssueList:
         """Every issue in the configured collection, up to the contract's limit.
 
         The contract has no assignee field or filter, so this is every issue
@@ -50,4 +64,7 @@ class TrackerAdapter:
                 "The issue tracker returned an unusable response",
                 cause=type(exc).__name__,
             ) from None
-        return [PlanIssue(id=issue.id, title=issue.title) for issue in issues]
+        return IssueList(
+            issues=[PlanIssue(id=issue.id, title=issue.title) for issue in issues],
+            truncated=len(issues) >= MAX_LIST_LIMIT,
+        )

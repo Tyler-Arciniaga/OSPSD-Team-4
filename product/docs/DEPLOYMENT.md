@@ -37,12 +37,16 @@ HW2 image (accepted).
 | --- | --- | --- |
 | Providers | Our Trello package, Team 5's calendar, Team 3's Dropbox storage | The in-memory fakes, through the same `*_PROVIDER` variables |
 | Credentials | The linked environment group | None; not linked to the group |
-| Smoke check | A fully booked day: reads the tracker, writes `/standups/2000-01-03/release-smoke.md`, creates no calendar event | A full run and a replay of it |
+| Smoke check | A fully booked day: reads the tracker, writes `/standups/2000-01-03-release-smoke-<commit>-<UTC time>.md` (a new doc each run, since an existing doc stops a run, F5), creates no calendar event | A full run, the same request again (must be 412 at `check_doc`), and a replay of the first |
 | Created by | Always | `disposable` ticked on the apply workflow |
 
 The production smoke check cannot exercise the calendar without creating an
 event the service has no way to remove, so it books no block. The calendar
 is checked live only by a real request.
+
+Each production smoke run leaves one small doc in `/standups`
+(`2000-01-03-release-smoke-*.md`). They are harmless; remove them by hand
+from the Dropbox test account when they pile up.
 
 ### Configuration and secrets
 
@@ -108,6 +112,16 @@ Already done for the live round trip
 (`product/docs/evidence/dropbox-roundtrip.md`): the app key and secret, and
 the refresh token in `~/.config/ospsd-team4/dropbox_token.json`. Copy the
 token without printing it: `jq -r .refresh_token ~/.config/ospsd-team4/dropbox_token.json | pbcopy`.
+
+- [ ] Create the doc folder `standups` at the root of the Dropbox app, the
+      root the service's paths are relative to (for an app-folder app,
+      `Apps/<app name>/standups`), in the Dropbox web UI. Every doc is
+      written flat into it, as `/standups/<YYYY-MM-DD>-<assignee>.md`. The
+      storage contract does not promise that `create` makes missing
+      folders, so the service does not rely on it: if the folder is
+      missing, `write_standup_doc` fails with 503 `service_not_configured`
+      after the events are booked. Create the folder, then replay the
+      request.
 
 ### 4. Trello
 

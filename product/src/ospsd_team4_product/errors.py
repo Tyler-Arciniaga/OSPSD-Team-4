@@ -14,8 +14,22 @@ from typing import Literal
 
 from issue_tracker_contract.errors import STATUS_FOR_CODE, ErrorCode, ErrorDetail
 
-Step = Literal["list_issues", "plan", "create_events", "write_standup_doc"]
-STEPS: tuple[Step, ...] = ("list_issues", "plan", "create_events", "write_standup_doc")
+Step = Literal[
+    "validate",
+    "check_doc",
+    "list_issues",
+    "plan",
+    "create_events",
+    "write_standup_doc",
+]
+STEPS: tuple[Step, ...] = (
+    "validate",
+    "check_doc",
+    "list_issues",
+    "plan",
+    "create_events",
+    "write_standup_doc",
+)
 
 
 class StepError(Exception):

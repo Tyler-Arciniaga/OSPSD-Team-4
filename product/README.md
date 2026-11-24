@@ -99,9 +99,19 @@ curl -s -X POST localhost:8000/v1/focus-day -H 'content-type: application/json' 
        "busy": [{"start": "2026-11-19T12:00:00-05:00", "end": "2026-11-19T13:00:00-05:00"}]}'
 ```
 
+The response lists six steps (`validate`, `check_doc`, `list_issues`,
+`plan`, `create_events`, `write_standup_doc`), and the doc is written to
+`/standups/2026-11-19-tyler.md`. The assignee must be lowercase (`a-z`,
+`0-9`, `.`, `_`, `-`); anything else is rejected with 422 on the `validate`
+step. The in-memory storage starts with the `/standups` folder; with real
+storage, an operator creates it once
+([DEPLOYMENT.md, step 3](docs/DEPLOYMENT.md#3-dropbox-team-3s-storage)).
+
 To retry or resume, send the same request with
 `"replay": {"plan": ..., "created": ...}` copied from the response
-([DESIGN.md, 4.2](docs/DESIGN.md#replay-not-recompute)).
+([DESIGN.md, 4.2](docs/DESIGN.md#replay-not-recompute)). Sending the same
+request again without `replay` once its doc exists returns 412
+`precondition_failed` on `check_doc` and books nothing.
 
 With the real providers, set the three real `*_PROVIDER` values,
 `CALENDAR_TOKEN_FILE` and the six credentials instead. This books real

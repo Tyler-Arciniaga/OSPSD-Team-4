@@ -7,18 +7,22 @@ after a deploy. It needs no credentials: the service holds them.
 2. Calls POST /v1/focus-day, depending on the target:
 
    - `fakes` (the disposable service, which runs the in-memory providers):
-     a full run must create one event per block and write the doc; a replay
-     of that response must keep every event and skip `list_issues` and
-     `plan`.
+     a full run must create one event per block and write the doc; sending
+     the same request again without `replay` must stop at `check_doc` with
+     412 (F5); a replay of the first response must keep every event and
+     skip `check_doc`, `list_issues` and `plan`.
    - `live` (production, real providers): the day is fully booked, so the
      plan has no blocks and no calendar event is created. The run still
-     reads the real tracker and writes the real doc, at the same path every
-     time (/standups/2000-01-03/release-smoke.md), so repeated releases
-     overwrite one file instead of adding more. The calendar is not
-     exercised: the service has no way to remove an event it creates.
+     reads the real tracker and writes the real doc, and leaves that doc
+     in /standups to be removed by hand. The calendar is not exercised: the
+     service has no way to remove an event it creates.
 
-   Both targets also send an invalid request, which must fail the `plan`
-   step with 422 before any provider is called.
+   A doc that already exists stops a run (F5), so each run, in both modes,
+   uses its own assignee, `release-smoke-<commit>-<UTC time>`; re-running
+   the check against a service that is still up then works too.
+
+   Both targets also send an invalid request (an upper-case assignee), which
+   must fail the `validate` step with 422 before any provider is called.
 
 It prints step statuses and counts only, never issue titles or provider
 text, and appends a summary to $GITHUB_STEP_SUMMARY when it is set.
@@ -32,6 +36,7 @@ import os
 import sys
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 import httpx
@@ -41,18 +46,25 @@ READY_POLL_SECONDS = 10.0
 REQUEST_TIMEOUT_SECONDS = 60.0
 
 SMOKE_ASSIGNEE = "release-smoke"
-FAKES_REQUEST: dict[str, Any] = {"assignee": SMOKE_ASSIGNEE, "day": "2026-11-18"}
+# The assignee of both requests is set per run (run_assignee).
+FAKES_DAY = "2026-11-18"
+FAKES_REQUEST: dict[str, Any] = {"day": FAKES_DAY}
+LIVE_DAY = "2000-01-03"
 # 2000-01-03 is a Monday; the busy interval covers the whole working window.
 LIVE_REQUEST: dict[str, Any] = {
-    "assignee": SMOKE_ASSIGNEE,
-    "day": "2000-01-03",
+    "day": LIVE_DAY,
     "timezone": "America/New_York",
     "working_window": {"start": "09:00", "end": "17:00"},
     "busy": [
         {"start": "2000-01-03T09:00:00-05:00", "end": "2000-01-03T17:00:00-05:00"}
     ],
 }
-INVALID_REQUEST: dict[str, Any] = {"assignee": "../smoke", "day": "2026-11-18"}
+INVALID_REQUEST: dict[str, Any] = {"assignee": "Release-Smoke", "day": "2026-11-18"}
+
+
+def run_assignee(commit: str, now: datetime) -> str:
+    """A doc path of its own for each run, e.g. release-smoke-0123abc-20261120-153000."""
+    return f"{SMOKE_ASSIGNEE}-{commit[:7]}-{now:%Y%m%d-%H%M%S}"
 
 
 class Client(Protocol):
@@ -122,20 +134,26 @@ def _expect_ok(status: int, body: dict[str, Any], what: str) -> None:
         )
 
 
-def check_fakes(client: Client) -> list[str]:
-    status, first = _post(client, FAKES_REQUEST)
+def check_fakes(client: Client, assignee: str) -> list[str]:
+    request = FAKES_REQUEST | {"assignee": assignee}
+    status, first = _post(client, request)
     _expect_ok(status, first, "first run")
     blocks = first["plan"]["blocks"]
     if not blocks or len(first["created"]) != len(blocks):
         raise SmokeError(
             f"first run: {len(blocks)} blocks but {len(first['created'])} events"
         )
-    if first["doc"]["path"] != f"/standups/2026-11-18/{SMOKE_ASSIGNEE}.md":
+    if first["doc"]["path"] != f"/standups/{FAKES_DAY}-{assignee}.md":
         raise SmokeError("first run: the doc was written to an unexpected path")
 
-    replay = FAKES_REQUEST | {
-        "replay": {"plan": first["plan"], "created": first["created"]}
-    }
+    status, again = _post(client, request)
+    if status != 412 or again.get("failed_step") != "check_doc" or again["created"]:
+        raise SmokeError(
+            f"same request again: HTTP {status}, failed step "
+            f"{again.get('failed_step')!r}, {len(again.get('created') or {})} events"
+        )
+
+    replay = request | {"replay": {"plan": first["plan"], "created": first["created"]}}
     status, second = _post(client, replay)
     _expect_ok(status, second, "replay")
     if second["created"] != first["created"]:
@@ -144,16 +162,17 @@ def check_fakes(client: Client) -> list[str]:
         raise SmokeError("replay: list_issues was not skipped")
     return [
         f"first run: ok, {len(blocks)} blocks, {len(first['created'])} events, doc written",
-        "replay: ok, every event kept, list_issues and plan skipped",
+        "same request again: 412, stopped at check_doc, no events",
+        "replay: ok, every event kept, check_doc, list_issues and plan skipped",
     ]
 
 
-def check_live(client: Client) -> list[str]:
-    status, body = _post(client, LIVE_REQUEST)
+def check_live(client: Client, assignee: str) -> list[str]:
+    status, body = _post(client, LIVE_REQUEST | {"assignee": assignee})
     _expect_ok(status, body, "booked day")
     if body["plan"]["blocks"] or body["created"]:
         raise SmokeError("booked day: a block or event was created")
-    if body["doc"]["path"] != f"/standups/2000-01-03/{SMOKE_ASSIGNEE}.md":
+    if body["doc"]["path"] != f"/standups/{LIVE_DAY}-{assignee}.md":
         raise SmokeError("booked day: the doc was written to an unexpected path")
     return [
         (
@@ -165,17 +184,28 @@ def check_live(client: Client) -> list[str]:
 
 def check_invalid(client: Client) -> str:
     status, body = _post(client, INVALID_REQUEST)
-    if status != 422 or body.get("failed_step") != "plan":
+    if status != 422 or body.get("failed_step") != "validate":
         raise SmokeError(
             f"invalid request: HTTP {status}, failed step {body.get('failed_step')!r}"
         )
-    return "invalid request: 422, rejected in the plan step"
+    return "invalid request: 422, rejected in the validate step"
 
 
-def run(client: Client, *, commit: str, mode: str, **ready: Any) -> list[str]:
+def run(
+    client: Client,
+    *,
+    commit: str,
+    mode: str,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    **ready: Any,
+) -> list[str]:
     wait_until_ready(client, commit, **ready)
     lines = [f"ready with commit {commit}"]
-    lines += check_fakes(client) if mode == "fakes" else check_live(client)
+    assignee = run_assignee(commit, now())
+    if mode == "fakes":
+        lines += check_fakes(client, assignee)
+    else:
+        lines += check_live(client, assignee)
     lines.append(check_invalid(client))
     return lines
 
