@@ -1,0 +1,41 @@
+[project]
+name = "focus-day-tui"
+version = "0.1.0"
+description = "Terminal UI for the OSPSD Team 4 product service: plan and book a focus day."
+readme = "README.md"
+# Same Python as the product service, so one interpreter runs both.
+requires-python = ">=3.14"
+# The TUI talks to the product API over HTTP only (README.md).
+dependencies = [
+    "httpx>=0.28.1",
+    "textual>=8.2.8",
+]
+
+[project.scripts]
+focus-day = "focus_day_tui.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.5.0",
+    "ruff>=0.16.10",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+# Lets tests import shared helpers as `tests.<module>`.
+pythonpath = ["."]
+
+[tool.ruff]
+# Ruff's default rules, as in the product service.
+src = ["src", "tests"]
+
+[tool.mypy]
+strict = true
