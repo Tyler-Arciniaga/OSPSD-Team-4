@@ -29,7 +29,7 @@ from ospsd_team4_product.fakes import (
     InMemoryStateStore,
 )
 from ospsd_team4_product.main import app
-from ospsd_team4_product.store import PlanBlock, StoreError
+from ospsd_team4_product.store import CalendarBlock, StoreError
 
 FAKES = {
     "TRACKER_PROVIDER": "ospsd_team4_product.fakes:InMemoryIssueProvider",
@@ -708,10 +708,10 @@ def test_wrong_method_uses_the_hw1_error_shape(service: Service) -> None:
 DAY = date(2026, 11, 18)
 
 
-def saved_blocks(body: dict[str, Any]) -> tuple[PlanBlock, ...]:
+def saved_blocks(body: dict[str, Any]) -> tuple[CalendarBlock, ...]:
     """The blocks a 200 response should have saved, with their event IDs."""
     return tuple(
-        PlanBlock(
+        CalendarBlock(
             issue_id=block["issue_id"],
             title=block["title"],
             start=block["start"],

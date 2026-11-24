@@ -15,8 +15,8 @@ import pytest
 
 from ospsd_team4_product.fakes import InMemoryStateStore
 from ospsd_team4_product.store import (
+    CalendarBlock,
     PlanBlock,
-    PlanMatch,
     PostgresStateStore,
     ProgressEntry,
     StateStore,
@@ -28,8 +28,10 @@ NEXT_DAY = date(2026, 11, 20)
 AT = datetime(2026, 11, 19, 15, 30, tzinfo=UTC)
 
 
-def block(issue_id: str, start_hour: int = 9, event: str | None = None) -> PlanBlock:
-    return PlanBlock(
+def block(
+    issue_id: str, start_hour: int = 9, event: str | None = None
+) -> CalendarBlock:
+    return CalendarBlock(
         issue_id=issue_id,
         title=f"Work on {issue_id}",
         start=f"2026-11-19T{start_hour:02d}:00:00-05:00",
@@ -114,9 +116,9 @@ def test_find_plans_with_issue_newest_day_first(store: StateStore) -> None:
     store.save_plan("tyler", NEXT_DAY, [block("card-9")])
 
     assert store.find_plans_with_issue("card-1") == [
-        PlanMatch("alice", NEXT_DAY, block("card-1", 11, "e3")),
-        PlanMatch("bob", NEXT_DAY, block("card-1", 10, "e2")),
-        PlanMatch("tyler", DAY, block("card-1", 9, "e1")),
+        PlanBlock("alice", NEXT_DAY, block("card-1", 11, "e3")),
+        PlanBlock("bob", NEXT_DAY, block("card-1", 10, "e2")),
+        PlanBlock("tyler", DAY, block("card-1", 9, "e1")),
     ]
     assert store.find_plans_with_issue("card-404") == []
 

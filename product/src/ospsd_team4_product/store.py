@@ -51,7 +51,7 @@ class StoreError(Exception):
 
 
 @dataclass(frozen=True)
-class PlanBlock:
+class CalendarBlock:
     """A booked focus block of an approved plan."""
 
     issue_id: str
@@ -62,12 +62,12 @@ class PlanBlock:
 
 
 @dataclass(frozen=True)
-class PlanMatch:
+class PlanBlock:
     """A block of someone's approved plan, found by its issue."""
 
     assignee: str
     day: date
-    block: PlanBlock
+    block: CalendarBlock
 
 
 @dataclass(frozen=True)
@@ -107,7 +107,7 @@ def check_remaining(percent: int) -> None:
         raise ValueError("remaining percent must be a whole number from 1 to 100")
 
 
-def check_blocks(blocks: Sequence[PlanBlock]) -> None:
+def check_blocks(blocks: Sequence[CalendarBlock]) -> None:
     """Raise StoreError if an issue appears in more than one block.
 
     The in-memory store calls this; Postgres enforces the same rule with a
@@ -124,14 +124,14 @@ UNAVAILABLE = "The state store is unavailable"
 
 class StateStore(Protocol):
     def save_plan(
-        self, assignee: str, day: date, blocks: Sequence[PlanBlock]
+        self, assignee: str, day: date, blocks: Sequence[CalendarBlock]
     ) -> None: ...
 
-    def get_plan(self, assignee: str, day: date) -> tuple[PlanBlock, ...] | None:
+    def get_plan(self, assignee: str, day: date) -> tuple[CalendarBlock, ...] | None:
         """The approved plan's blocks in order, or None if none is saved."""
         ...
 
-    def find_plans_with_issue(self, issue_id: str) -> list[PlanMatch]:
+    def find_plans_with_issue(self, issue_id: str) -> list[PlanBlock]:
         """Every approved plan's block for this issue, newest day first."""
         ...
 
@@ -269,7 +269,9 @@ class PostgresStateStore:
         except psycopg.Error as exc:
             raise StoreError(message, cause=type(exc).__name__) from None
 
-    def save_plan(self, assignee: str, day: date, blocks: Sequence[PlanBlock]) -> None:
+    def save_plan(
+        self, assignee: str, day: date, blocks: Sequence[CalendarBlock]
+    ) -> None:
         with self._transaction(SAVE_FAILED) as conn:
             # Locks the (assignee, day) row, so concurrent saves of the same
             # plan run one after the other; the last one wins.
@@ -302,7 +304,7 @@ class PostgresStateStore:
                     ],
                 )
 
-    def get_plan(self, assignee: str, day: date) -> tuple[PlanBlock, ...] | None:
+    def get_plan(self, assignee: str, day: date) -> tuple[CalendarBlock, ...] | None:
         with self._transaction() as conn:
             exists = conn.execute(
                 "SELECT 1 FROM approved_plans WHERE assignee = %s AND day = %s",
@@ -315,9 +317,9 @@ class PostgresStateStore:
                 " WHERE assignee = %s AND day = %s ORDER BY position",
                 (assignee, day),
             ).fetchall()
-        return tuple(PlanBlock(*row) for row in rows)
+        return tuple(CalendarBlock(*row) for row in rows)
 
-    def find_plans_with_issue(self, issue_id: str) -> list[PlanMatch]:
+    def find_plans_with_issue(self, issue_id: str) -> list[PlanBlock]:
         with self._transaction() as conn:
             rows = conn.execute(
                 "SELECT assignee, day, issue_id, title, start_at, end_at, event_id"
@@ -325,7 +327,7 @@ class PostgresStateStore:
                 (issue_id,),
             ).fetchall()
         return [
-            PlanMatch(assignee=row[0], day=row[1], block=PlanBlock(*row[2:]))
+            PlanBlock(assignee=row[0], day=row[1], block=CalendarBlock(*row[2:]))
             for row in rows
         ]
 

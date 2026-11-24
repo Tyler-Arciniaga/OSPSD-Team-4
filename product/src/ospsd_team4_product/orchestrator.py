@@ -62,7 +62,7 @@ from ospsd_team4_product.planner import (
     parse_interval,
     plan_day,
 )
-from ospsd_team4_product.store import PlanBlock, StateStore, StoreError
+from ospsd_team4_product.store import CalendarBlock, StateStore, StoreError
 
 INVALID_REQUEST = "The request is invalid"
 SAVE_FAILED = (
@@ -309,7 +309,7 @@ class FocusDay:
     def _save_plan(self, inputs: _Inputs, plan: Plan, created: dict[str, str]) -> None:
         """Save the booked plan; every block has an event by now."""
         blocks = [
-            PlanBlock(
+            CalendarBlock(
                 issue_id=block.issue_id,
                 title=block.title,
                 start=block.start,
