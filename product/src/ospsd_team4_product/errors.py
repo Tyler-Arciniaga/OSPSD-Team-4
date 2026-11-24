@@ -14,6 +14,7 @@ from typing import Literal
 
 from issue_tracker_contract.errors import STATUS_FOR_CODE, ErrorCode, ErrorDetail
 
+# The focus-day steps (STEPS), then the issue-status steps.
 Step = Literal[
     "validate",
     "check_doc",
@@ -22,6 +23,8 @@ Step = Literal[
     "create_events",
     "write_standup_doc",
     "save_plan",
+    "find_issue",
+    "read_plan",
 ]
 STEPS: tuple[Step, ...] = (
     "validate",

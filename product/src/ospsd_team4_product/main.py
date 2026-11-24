@@ -4,8 +4,9 @@
 liveness checks nothing, readiness reports that startup configuration was
 validated and which commit is running.
 
-`POST /v1/focus-day` runs the operation (orchestrator.py). Its error bodies,
-including those for a malformed request, are described in
+`POST /v1/focus-day` runs the focus-day operation (orchestrator.py) and
+`GET /v1/issue-status` the issue-status one (issue_status.py). Their error
+bodies, including those for a malformed request, are described in
 product/docs/ERRORS.md.
 """
 
@@ -15,9 +16,10 @@ import os
 import re
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
-from typing import Any, Literal
+from datetime import UTC, datetime
+from typing import Annotated, Any, Literal
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from issue_tracker_contract.errors import (
@@ -33,11 +35,17 @@ from ospsd_team4_product.adapters.calendar import CalendarAdapter
 from ospsd_team4_product.adapters.storage import StorageAdapter
 from ospsd_team4_product.adapters.tracker import TrackerAdapter
 from ospsd_team4_product.config import ConfigError, load_config
+from ospsd_team4_product.errors import StepError
 from ospsd_team4_product.factories import build_providers, build_store
+from ospsd_team4_product.issue_status import IssueStatus, invalid_query
 from ospsd_team4_product.models import (
+    FocusDayErrorBody,
     FocusDayErrorResponse,
     FocusDayRequest,
     FocusDayResponse,
+    IssueStatusErrorResponse,
+    IssueStatusQuery,
+    IssueStatusResponse,
 )
 from ospsd_team4_product.orchestrator import FocusDay, Outcome, rejected_request
 
@@ -46,6 +54,8 @@ logger = logging.getLogger("ospsd_team4_product")
 # A Git commit ID, full or abbreviated. Anything else is reported as unknown,
 # so a misconfigured variable can never echo arbitrary text.
 COMMIT_PATTERN = r"[0-9a-f]{7,40}"
+
+ISSUE_STATUS_PATH = "/v1/issue-status"
 
 
 class LivenessResponse(BaseModel):
@@ -71,6 +81,10 @@ def deployed_commit(environ: Mapping[str, str] = os.environ) -> str:
     return "unknown"
 
 
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Validate configuration, build the providers and connect to the state
@@ -89,13 +103,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         raise
     app.state.providers = providers
     app.state.store = store
+    # Read on every request, so it can be replaced after startup.
+    app.state.clock = utc_now
+    tracker = TrackerAdapter(providers.tracker)
     app.state.focus_day = FocusDay(
-        tracker=TrackerAdapter(providers.tracker),
+        tracker=tracker,
         calendar=CalendarAdapter(providers.calendar),
         storage=StorageAdapter(providers.storage),
         store=store,
         config=config,
     )
+    app.state.issue_status = IssueStatus(tracker=tracker, store=store, config=config)
     try:
         yield
     finally:
@@ -163,6 +181,57 @@ def focus_day(body: FocusDayRequest, request: Request) -> JSONResponse:
     )
 
 
+def _issue_status_failure(exc: StepError) -> JSONResponse:
+    """The error body, after logging one JSON line: never messages."""
+    logger.warning(
+        json.dumps(
+            {
+                "event": "issue_status_failed",
+                "status": "failed",
+                "http_status": exc.status,
+                "step": exc.step,
+                "code": exc.code.value,
+                "retryable": exc.retryable,
+                "may_have_applied": exc.may_have_applied,
+                "cause": exc.cause,
+            }
+        )
+    )
+    body = IssueStatusErrorResponse(
+        status="failed",
+        failed_step=exc.step,
+        error=FocusDayErrorBody(
+            code=exc.code,
+            message=exc.message,
+            details=exc.details,
+            step=exc.step,
+            retryable=exc.retryable,
+            may_have_applied=exc.may_have_applied,
+        ),
+    )
+    return JSONResponse(status_code=exc.status, content=body.model_dump(mode="json"))
+
+
+@app.get(
+    ISSUE_STATUS_PATH,
+    response_model=IssueStatusResponse,
+    responses={
+        status: {"model": IssueStatusErrorResponse}
+        for status in (403, 404, 422, 500, 502, 503)
+    },
+)
+def issue_status(
+    query: Annotated[IssueStatusQuery, Query()], request: Request
+) -> JSONResponse:
+    """Find an issue and report on it from its owner's approved plan."""
+    operation: IssueStatus = request.app.state.issue_status
+    try:
+        body = operation.run(query, now=request.app.state.clock())
+    except StepError as exc:
+        return _issue_status_failure(exc)
+    return JSONResponse(content=body.model_dump(mode="json"))
+
+
 def _field(location: tuple[int | str, ...]) -> str:
     """("body", "busy", 0, "start") -> "busy[0].start"."""
     name = ""
@@ -175,11 +244,14 @@ def _field(location: tuple[int | str, ...]) -> str:
 def handle_validation_error(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
-    """A malformed body fails the `validate` step before any provider call."""
+    """A malformed body fails the `validate` step (`find_issue` for
+    issue-status) before any provider call."""
     details = [
         ErrorDetail(field=_field(tuple(error["loc"])), message=error["msg"])
         for error in exc.errors()
     ]
+    if request.url.path == ISSUE_STATUS_PATH:
+        return _issue_status_failure(invalid_query(details))
     outcome = rejected_request(details)
     _log_failure(outcome)
     return JSONResponse(

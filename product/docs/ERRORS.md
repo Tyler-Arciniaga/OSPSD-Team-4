@@ -1,9 +1,9 @@
 # Errors
 
 This is the single reference for every error the product service can report:
-startup failures, the error body of `POST /v1/focus-day`, and how each
-provider's failures map to it. Code that maps errors links here instead of
-repeating the tables.
+startup failures, the error bodies of `POST /v1/focus-day` and
+`GET /v1/issue-status`, and how each provider's failures map to them. Code
+that maps errors links here instead of repeating the tables.
 
 ## Codes and HTTP statuses
 
@@ -26,15 +26,15 @@ HW1 model but the product does not use them.
 
 ## Step errors
 
-Every failure inside the operation is a `StepError`
+Every failure inside an operation is a `StepError`
 (`src/ospsd_team4_product/errors.py`). Only the adapters create them from
-provider failures, and the orchestrator from a state store failure
-(`save_plan`); nothing else from a provider or the database reaches the
-orchestrator.
+provider failures, and the operations from a state store failure
+(`save_plan`, `read_plan`); nothing else from a provider or the database
+reaches an operation.
 
 | Field              | Meaning                                                                    |
 | ------------------ | -------------------------------------------------------------------------- |
-| `step`             | `validate`, `check_doc`, `list_issues`, `plan`, `create_events`, `write_standup_doc` or `save_plan` |
+| `step`             | Focus-day: `validate`, `check_doc`, `list_issues`, `plan`, `create_events`, `write_standup_doc` or `save_plan`. Issue-status: `find_issue` or `read_plan` |
 | `code`             | An HW1 code from the table above; it sets the HTTP status                  |
 | `message`          | Safe to show callers. Always written by this service, never a provider's   |
 | `retryable`        | Repeating the same request later may succeed (a transient outage)          |
@@ -294,6 +294,64 @@ saves the plan. The log line's `cause` is the database error's class name;
 the database's own message, which can name hosts or users, is never
 logged or returned.
 
+## `GET /v1/issue-status`
+
+Source: `src/ospsd_team4_product/issue_status.py`, `models.py`, `main.py`.
+`ambiguous` and `no_approved_plan` are 200 answers, not errors. A failed step
+returns the HTTP status of its code and this body; `error` has the same fields
+as focus-day's:
+
+```json
+{
+  "status": "failed",
+  "failed_step": "find_issue",
+  "error": {
+    "code": "not_found",
+    "message": "No issue matches",
+    "details": null,
+    "step": "find_issue",
+    "retryable": false,
+    "may_have_applied": false
+  }
+}
+```
+
+The endpoint writes nothing, so `may_have_applied` is always false and a
+request can always be repeated. Each failure is logged as one JSON line
+(`event: issue_status_failed`) with the step, code, HTTP status, flags and
+`cause`, never the message, the query or any provider text. As for
+`list_issues`, an unexpected tracker exception also logs its traceback.
+
+### `find_issue` (query and tracker)
+
+| Failure                                       | Code            | HTTP            | retryable                     |
+| --------------------------------------------- | --------------- | --------------- | ----------------------------- |
+| invalid query parameters (below)              | `invalid_input` | 422             | no                            |
+| no issue has this `issue_id` or matches `title` | `not_found`   | 404             | no                            |
+| tracker `ServiceError` with any code          | the same code   | that code's     | yes only for `provider_error` |
+| any other tracker exception                   | `provider_error` | 502            | no                            |
+
+The last two rows are the [`list_issues` table](#list_issues-tracker), since
+the step reads the same list. Its message for no match is "No issue matches".
+
+Query parameters are checked before the tracker is called. The message is
+"The request is invalid", with one `ErrorDetail` per problem:
+
+| Field               | Problem                                                                 |
+| ------------------- | ----------------------------------------------------------------------- |
+| `issue_id`, `title` | neither or both are given (one detail for each), or the one given is blank |
+| `day`               | not `YYYY-MM-DD`, or not a real date                                    |
+| any unknown parameter | extra parameters are rejected                                         |
+
+### `read_plan` (state store)
+
+| Store error  | Code             | HTTP | retryable | may_have_applied |
+| ------------ | ---------------- | ---- | --------- | ---------------- |
+| `StoreError` | `internal_error` | 500  | yes       | no               |
+
+Message: `The saved plans could not be read. Try again later.` The log line's
+`cause` is the database error's class name, as for `save_plan`.
+
 ## Startup errors
 
 Configuration is checked once at startup (`config.py`, `factories.py`). A
@@ -325,7 +383,7 @@ the service instead of failing each request with `service_not_configured`.
 Likewise the service connects to the state database (and creates any
 missing tables) before serving, so a wrong or unreachable `STATE_DB_URL`
 stops startup. If the database goes down later, requests fail only at the
-`save_plan` step, and the pool reconnects once it is back.
+`save_plan` and `read_plan` steps, and the pool reconnects once it is back.
 
 ## Other HTTP errors
 
