@@ -4,7 +4,9 @@
 liveness checks nothing, readiness reports that startup configuration was
 validated and which commit is running.
 
-`POST /v1/focus-day` runs the operation (orchestrator.py). Its error bodies,
+`POST /v1/focus-day` runs the operation (orchestrator.py): without
+`confirm` it proposes a plan, with `confirm: true` it books the approved
+one. Its error bodies,
 including those for a malformed request, are described in
 product/docs/ERRORS.md.
 """
@@ -36,6 +38,7 @@ from ospsd_team4_product.config import ConfigError, load_config
 from ospsd_team4_product.factories import build_providers, build_store
 from ospsd_team4_product.models import (
     FocusDayErrorResponse,
+    FocusDayProposal,
     FocusDayRequest,
     FocusDayResponse,
 )
@@ -151,10 +154,14 @@ _ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
 }
 
 
-@app.post("/v1/focus-day", response_model=FocusDayResponse, responses=_ERROR_RESPONSES)
+@app.post(
+    "/v1/focus-day",
+    response_model=FocusDayProposal | FocusDayResponse,
+    responses=_ERROR_RESPONSES,
+)
 def focus_day(body: FocusDayRequest, request: Request) -> JSONResponse:
-    """List issues, plan focus blocks, book them, write the standup doc, and
-    save the plan."""
+    """Propose a day of focus blocks, or, with `confirm: true` and the
+    approved plan, book them, write the standup doc, and save the plan."""
     operation: FocusDay = request.app.state.focus_day
     outcome = operation.run(body)
     _log_failure(outcome)

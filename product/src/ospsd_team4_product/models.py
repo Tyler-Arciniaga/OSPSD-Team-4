@@ -1,5 +1,9 @@
 """Request and response bodies of `POST /v1/focus-day`.
 
+A request is a proposal unless it has `confirm: true`. A proposal returns
+the plan (FocusDayProposal) and books nothing; a confirmed request books the
+plan only if it still equals `approved_plan` (orchestrator.py).
+
 The error body extends the HW1 shape (`issue_tracker_contract.errors`):
 `error.code` and `error.message` keep their HW1 meaning, and the product adds
 the failed step and whether retrying is useful or a write may have taken
@@ -10,7 +14,14 @@ from datetime import date
 from typing import Annotated, Literal
 
 from issue_tracker_contract.errors import ErrorBody
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StringConstraints,
+    field_validator,
+)
 
 from ospsd_team4_product.config import MAX_MINUTES
 from ospsd_team4_product.errors import Step
@@ -100,6 +111,10 @@ class FocusDayRequest(_Strict):
     working_window: WorkingWindowModel | None = None
     busy: list[BusyModel] = Field(default_factory=list)
     default_minutes: int | None = Field(default=None, ge=1, le=MAX_MINUTES)
+    # False: propose. True: book `approved_plan`, or retry with `replay`.
+    confirm: StrictBool = False
+    # The `plan` of the proposal the caller approved, sent back unchanged.
+    approved_plan: PlanModel | None = None
     replay: ReplayModel | None = None
 
     @field_validator("day")
@@ -132,8 +147,22 @@ class DocModel(BaseModel):
     id: str | None
 
 
+class FocusDayProposal(BaseModel):
+    """200 without `confirm`: the plan to approve. Nothing was booked, so
+    `created` is always empty and `doc` is null."""
+
+    status: Literal["proposed"]
+    steps: list[StepModel]
+    plan: PlanModel
+    created: dict[str, str]
+    doc: None = None
+    issues_truncated: bool | None
+    failed_step: None = None
+
+
 class FocusDayResponse(BaseModel):
-    """200: every step finished. Unscheduled issues are not a failure."""
+    """200 with `confirm`: every step finished. Unscheduled issues are not a
+    failure."""
 
     status: Literal["ok"]
     steps: list[StepModel]

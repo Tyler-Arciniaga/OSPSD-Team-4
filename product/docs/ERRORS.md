@@ -47,6 +47,28 @@ URLs or operator hints. The one exception is the tracker: its `ServiceError`
 messages already follow the HW1 rule (written by our tracker package for
 callers), so they pass through unchanged.
 
+## Propose and confirm
+
+`POST /v1/focus-day` is called twice per day (#90,
+[DESIGN.md](DESIGN.md#propose-then-confirm)):
+
+1. **Propose:** the request without `confirm` (or with `"confirm": false`).
+   Only `validate`, `check_doc`, `list_issues` and `plan` run. Success is
+   200 with `status: proposed`, the `plan`, `created: {}` and `doc: null`;
+   `create_events`, `write_standup_doc` and `save_plan` are `skipped`.
+   Nothing is booked, written or saved, so a proposal that fails has
+   `may_have_applied: false` and can simply be sent again.
+2. **Confirm:** the same request plus `"confirm": true` and
+   `"approved_plan"`, the proposal's `plan` copied unchanged. The reads run
+   again, and the `plan` step books nothing unless the recomputed plan
+   equals `approved_plan` ([`plan`](#plan-approval-check)). Success is 200
+   with `status: ok`.
+
+So a 200 body's `status` is `proposed` or `ok`, and an error body's is
+`partial` or `failed`. A request that does not mean to book is never
+treated as a booking, and the reverse: `approved_plan` or `replay` without
+`confirm: true` is rejected in `validate` (below).
+
 ## Error body of `POST /v1/focus-day`
 
 Source: `src/ospsd_team4_product/models.py`, `orchestrator.py`. The body
@@ -76,7 +98,8 @@ Example (calendar outage on block 2 of 3, HTTP 502):
     {"name": "list_issues", "status": "ok", "error": null},
     {"name": "plan", "status": "ok", "error": null},
     {"name": "create_events", "status": "failed", "error": {"...": "same as error"}},
-    {"name": "write_standup_doc", "status": "skipped", "error": null}
+    {"name": "write_standup_doc", "status": "skipped", "error": null},
+    {"name": "save_plan", "status": "skipped", "error": null}
   ],
   "plan": {"blocks": ["..."], "unscheduled": []},
   "created": {"demo-1": "fake-event-1"},
@@ -99,10 +122,12 @@ Rules:
 - Any failed step returns the HTTP status of its code. A plan that leaves
   some issues unscheduled (`no_free_slot`) is not an error: it is 200 with
   `status: ok`.
-- To retry, send the same request with `replay: {"plan": ..., "created": ...}`
-  copied from the failure body. On replay `check_doc`, `list_issues` and
-  `plan` are `skipped`, existing events are kept, and only missing ones are
-  created.
+- To retry a confirmed run, send the same request with `"confirm": true`
+  and `replay: {"plan": ..., "created": ...}` copied from the failure body
+  (no `approved_plan`: the replayed plan is the approved one). On replay
+  `check_doc`, `list_issues` and `plan` are `skipped`, existing events are
+  kept, and only missing ones are created. A failed proposal booked
+  nothing; send the proposal again instead.
 - A run without `replay` whose doc already exists stops at `check_doc` with
   412 `precondition_failed`, before anything is booked
   ([`check_doc`](#check_doc-storage)). Sending the same request twice
@@ -170,11 +195,24 @@ Planner and path rules (`PlanInputError(field, message)`):
 | `replay.plan.blocks[i].issue_id`             | the same issue appears in two blocks            |
 | `replay.created`                             | names an issue with no block in `replay.plan`   |
 
+Approval rules (#90, [Propose and confirm](#propose-and-confirm)):
+
+| Field           | Problem                                                              |
+| --------------- | -------------------------------------------------------------------- |
+| `confirm`       | not a JSON boolean (`"yes"` and `1` are rejected, not converted)     |
+| `confirm`       | `replay` is sent without `confirm: true`                             |
+| `approved_plan` | missing when `confirm` is true (and there is no `replay`)            |
+| `approved_plan` | sent without `confirm: true`; the request would otherwise be a proposal that books nothing |
+| `approved_plan` | sent together with `replay`; `replay.plan` is the approved plan      |
+| `approved_plan.*` | not a plan (`blocks` and `unscheduled`, as in a response)          |
+
 ## `check_doc` (storage)
 
 Source: `src/ospsd_team4_product/adapters/storage.py` (`check_doc_absent`).
-Runs only on a run without `replay`, after `validate` and before any other
-provider call (F5). It calls `get_metadata` on the doc path:
+Runs on every request without `replay`, proposals included, after
+`validate` and before any other provider call (F5). A proposal for a day
+that is already booked is therefore rejected here before anyone reviews a
+plan that could not be booked. It calls `get_metadata` on the doc path:
 
 | Result of `get_metadata`        | Outcome                                                  |
 | ------------------------------- | -------------------------------------------------------- |
@@ -197,6 +235,28 @@ What the check does not catch:
   it again without `replay` books its events a second time. Replay instead.
 - Two runs for the same assignee and day that start at the same time both
   pass the check before either writes the doc.
+
+## `plan` (approval check)
+
+Source: `src/ospsd_team4_product/orchestrator.py` (`_check_approved`). On a
+confirm only, after the planner has recomputed the plan from the request,
+the whole plan is compared with `approved_plan`: every block's `issue_id`,
+`title`, `start` and `end`, every unscheduled issue, and their order. Any
+difference fails the step before the first write:
+
+| Case                                      | Code                  | HTTP | retryable | may_have_applied |
+| ----------------------------------------- | --------------------- | ---- | --------- | ---------------- |
+| recomputed plan differs from `approved_plan` | `precondition_failed` | 412  | no        | no               |
+
+Message: `The plan changed since you reviewed it`. `status` is `failed`,
+`created` is `{}`, and `plan` is the **recomputed** plan, which the caller
+shows the owner and, if approved, sends as the next `approved_plan`. Typical
+causes: an issue was added to or closed on the tracker after the proposal,
+or the caller edited a block (editing before approval is not supported
+yet). The log line's `cause` is `plan_changed`.
+
+Repeating the same confirm gives the same 412 until the request or the
+tracker changes, so it is not retryable.
 
 ## `create_events` (calendar)
 

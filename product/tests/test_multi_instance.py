@@ -26,7 +26,7 @@ import httpx
 import pytest
 
 from ospsd_team4_product.store import PostgresStateStore
-from tests.test_focus_day import FAKES, REQUEST, replay_of
+from tests.test_focus_day import FAKES, REQUEST, confirmed, replay_of
 
 PRODUCT = Path(__file__).parents[1]
 DAY = date(2026, 11, 18)
@@ -47,6 +47,11 @@ class Instance:
 
     def focus_day(self, body: dict[str, Any]) -> Any:
         return self.client.post("/v1/focus-day", json=body)
+
+    def book(self, body: dict[str, Any]) -> Any:
+        """Propose, then confirm the proposed plan unchanged."""
+        plan = self.focus_day(body).json()["plan"]
+        return self.focus_day(confirmed(body, plan))
 
 
 def start(url: str) -> Instance:
@@ -109,8 +114,8 @@ def test_a_plan_saved_through_one_instance_is_visible_to_another(
 ) -> None:
     a, b = instances
 
-    body_a = a.focus_day(REQUEST | {"assignee": "alice"}).json()
-    body_b = b.focus_day(REQUEST | {"assignee": "bob"}).json()
+    body_a = a.book(REQUEST | {"assignee": "alice"}).json()
+    body_b = b.book(REQUEST | {"assignee": "bob"}).json()
 
     assert body_a["status"] == body_b["status"] == "ok"
     for assignee, body in (("alice", body_a), ("bob", body_b)):
@@ -127,7 +132,7 @@ def test_concurrent_saves_through_both_instances_leave_one_whole_plan(
     a, b = instances
     # A repeated run for the same day must be a replay (check_doc, F5), so
     # the concurrent saves are replays of one run, through both instances.
-    first = a.focus_day(REQUEST).json()
+    first = a.book(REQUEST).json()
     replay = replay_of(first)
 
     with ThreadPoolExecutor(max_workers=10) as pool:
@@ -140,3 +145,20 @@ def test_concurrent_saves_through_both_instances_leave_one_whole_plan(
     # Every block comes from the same response: one writer won, whole.
     winners = [r.json()["created"] for r in responses]
     assert {block.issue_id: block.event_id for block in plan} in winners
+
+
+def test_a_plan_proposed_on_one_instance_can_be_confirmed_on_another(
+    instances: tuple[Instance, Instance], shared: PostgresStateStore
+) -> None:
+    """Proposals keep no server-side state, so any instance can confirm."""
+    a, b = instances
+
+    proposal = a.focus_day(REQUEST).json()
+    body = b.focus_day(confirmed(REQUEST, proposal["plan"])).json()
+
+    assert proposal["status"] == "proposed"
+    assert body["status"] == "ok"
+    assert body["plan"] == proposal["plan"]
+    plan = shared.get_plan("tyler", DAY)
+    assert plan is not None
+    assert [block.event_id for block in plan] == list(body["created"].values())

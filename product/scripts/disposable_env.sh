@@ -20,6 +20,7 @@
 #   - with the in-memory providers (selected through the same variables)
 #     and a throwaway Postgres container as the state store, /healthz and
 #     /readyz answer, /readyz reports the commit, POST /v1/focus-day
+#     proposes a plan without booking it, then, confirmed with that plan,
 #     completes all seven steps, and the plan is in the database.
 #
 # Usage: product/scripts/disposable_env.sh       (from a clean checkout)
@@ -171,11 +172,22 @@ echo "  /readyz -> ${ready}"
 [[ "$ready" == *' 200' ]] && pass "/readyz 200" || fail "/readyz not 200"
 [[ "$ready" == *"\"commit\":\"${COMMIT}\""* ]] && pass "/readyz reports commit" || fail "/readyz commit mismatch"
 
+FOCUS_DAY_BODY='"assignee": "disposable", "day": "2026-11-18"'
+proposal="$(curl -sS -w ' %{http_code}' -X POST "http://127.0.0.1:${PORT}/v1/focus-day" \
+  -H 'content-type: application/json' -d "{${FOCUS_DAY_BODY}}" || true)"
+[[ "$proposal" == *' 200' && "$proposal" == *'"status":"proposed"'* && "$proposal" == *'"created":{}'* ]] \
+  && pass "POST /v1/focus-day without confirm proposes a plan and books nothing" \
+  || fail "focus-day proposal: ${proposal}"
+
+# The response's fields come in a fixed order (models.FocusDayProposal), so
+# the plan is everything between "plan": and ,"created":.
+approved="${proposal#*\"plan\":}"
+approved="${approved%%,\"created\":*}"
 result="$(curl -sS -w ' %{http_code}' -X POST "http://127.0.0.1:${PORT}/v1/focus-day" \
   -H 'content-type: application/json' \
-  -d '{"assignee": "disposable", "day": "2026-11-18"}' || true)"
+  -d "{${FOCUS_DAY_BODY}, \"confirm\": true, \"approved_plan\": ${approved}}" || true)"
 [[ "$result" == *' 200' && "$result" == *'"status":"ok"'* ]] \
-  && pass "POST /v1/focus-day completes with the in-memory providers" \
+  && pass "POST /v1/focus-day with confirm books the approved plan" \
   || fail "POST /v1/focus-day: ${result}"
 [[ "$result" == *'"failed_step":null'* && "$result" == *'"path":"/standups/2026-11-18-disposable.md"'* ]] \
   && pass "every step ran and the doc was written" || fail "unexpected focus-day body"
