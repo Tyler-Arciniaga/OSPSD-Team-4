@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from focus_day_tui import timeline
 from focus_day_tui.client import FocusDayResult, parse_focus_day
 from focus_day_tui.form import BusyRow, FormValues, build_request, to_iso
-from focus_day_tui.state import LastRun, StateStore, default_state_dir
+from focus_day_tui.state import LastRun, LocalStateStore, default_state_dir
 from focus_day_tui.zones import system_timezone
 from tests.bodies import OK, PARTIAL
 
@@ -57,7 +57,7 @@ def test_state_dir_comes_from_the_environment(tmp_path: Path) -> None:
 
 
 def test_unreadable_state_files_are_treated_as_empty(tmp_path: Path) -> None:
-    store = StateStore(tmp_path)
+    store = LocalStateStore(tmp_path)
     (tmp_path / "preferences.json").write_text("{not json")
     (tmp_path / "last-focus-day.json").write_text(json.dumps({"plan": []}))
     assert store.load_preferences().assignee == ""
@@ -65,7 +65,7 @@ def test_unreadable_state_files_are_treated_as_empty(tmp_path: Path) -> None:
 
 
 def test_the_last_run_round_trips(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "new")
+    store = LocalStateStore(tmp_path / "new")
     run = LastRun({"assignee": "tyler"}, PARTIAL["plan"], PARTIAL["created"])
     store.save_last_run(run)
     assert store.load_last_run() == run

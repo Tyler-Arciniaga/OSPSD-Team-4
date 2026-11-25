@@ -64,7 +64,7 @@ class LastRun:
         return body
 
 
-class StateStore:
+class LocalStateStore:
     def __init__(self, directory: Path) -> None:
         self.directory = directory
 

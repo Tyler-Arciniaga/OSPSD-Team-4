@@ -234,7 +234,7 @@ class ApiClient:
         return response.status_code, payload, trace_id
 
     async def ready(self) -> RequestFailure | None:
-        """None when `GET /readyz` answers 200, otherwise why not."""
+        """None when `GET /readyz` answers 200."""
         sent = await self._send("GET", "/readyz")
         if isinstance(sent, RequestFailure):
             return sent
