@@ -42,7 +42,7 @@ from focus_day_tui.messages import (
     failure_lines,
     step_lines,
 )
-from focus_day_tui.state import LastRun, Preferences, StateStore
+from focus_day_tui.state import LastRun, LocalStateStore, Preferences
 from focus_day_tui.zones import system_timezone
 
 DEFAULT_API_URL = "http://localhost:8000"
@@ -490,7 +490,7 @@ class FocusDayApp(App[None]):
     ) -> None:
         super().__init__()
         self.client = ApiClient(api_url, timeout, transport)
-        self.store = StateStore(state_dir)
+        self.store = LocalStateStore(state_dir)
         self.today = today or date.today()
         self.system_zone = system_zone or system_timezone()
 
