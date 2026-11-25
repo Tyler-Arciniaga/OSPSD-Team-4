@@ -151,7 +151,7 @@ In `~/.focus-day/` (or `$FOCUS_DAY_STATE_DIR`):
 | File | Contents | When |
 | --- | --- | --- |
 | `preferences.json` | assignee, window, block minutes, time zone | after each successful run; used as the form's defaults next time |
-| `last-focus-day.json` | the request, `plan` and `created` of a run that stopped partway | after a run fails at booking or the doc; deleted after a successful retry |
+| `last-focus-day.json` | the request, `plan` and `created` of a run that stopped partway | after a run fails at booking or the doc; deleted after any successful run |
 
 Both are conveniences on your machine; deleting them is safe.
 
