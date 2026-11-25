@@ -56,8 +56,10 @@ class TrackerAdapter:
                 retryable=exc.code == ErrorCode.PROVIDER_ERROR,
                 cause=exc.cause,
             ) from None
-        except Exception as exc:  # contract breach: never leak it
-            logger.exception("tracker raised an unexpected exception")
+        except Exception as exc:  # noqa: BLE001 - contract breach: never leak it
+            logger.error(
+                "tracker raised an unexpected exception: %s", type(exc).__name__
+            )
             raise StepError(
                 step,
                 ErrorCode.PROVIDER_ERROR,

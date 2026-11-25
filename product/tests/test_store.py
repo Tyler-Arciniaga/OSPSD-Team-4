@@ -123,6 +123,14 @@ def test_find_plans_with_issue_newest_day_first(store: StateStore) -> None:
     assert store.find_plans_with_issue("card-404") == []
 
 
+def test_same_day_owner_is_the_latest_save(store: StateStore) -> None:
+    store.save_plan("alice", DAY, [block("card-1", 9, "e1")])
+    store.save_plan("bob", DAY, [block("card-1", 10, "e2")])
+
+    owners = [match.assignee for match in store.find_plans_with_issue("card-1")]
+    assert owners == ["bob", "alice"]
+
+
 # Remaining share
 
 

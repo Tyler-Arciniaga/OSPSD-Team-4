@@ -35,6 +35,7 @@ class InMemoryStateStore:
         self.failures.check("save_plan")
         check_blocks(blocks)
         with self._lock:
+            self._plans.pop((assignee, day), None)  # re-insert: newest save last
             self._plans[(assignee, day)] = tuple(blocks)
 
     def get_plan(self, assignee: str, day: date) -> tuple[CalendarBlock, ...] | None:
@@ -47,11 +48,11 @@ class InMemoryStateStore:
         with self._lock:
             matches = [
                 PlanBlock(assignee=assignee, day=day, block=block)
-                for (assignee, day), blocks in self._plans.items()
+                for (assignee, day), blocks in reversed(self._plans.items())
                 for block in blocks
                 if block.issue_id == issue_id
             ]
-        matches.sort(key=lambda match: match.assignee)
+        # Stable: same-day plans stay newest save first.
         matches.sort(key=lambda match: match.day, reverse=True)
         return matches
 

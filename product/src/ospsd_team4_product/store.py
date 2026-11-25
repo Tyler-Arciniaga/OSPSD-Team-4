@@ -322,8 +322,11 @@ class PostgresStateStore:
     def find_plans_with_issue(self, issue_id: str) -> list[PlanBlock]:
         with self._transaction() as conn:
             rows = conn.execute(
-                "SELECT assignee, day, issue_id, title, start_at, end_at, event_id"
-                " FROM plan_blocks WHERE issue_id = %s ORDER BY day DESC, assignee",
+                "SELECT b.assignee, b.day, b.issue_id, b.title, b.start_at, b.end_at,"
+                " b.event_id FROM plan_blocks b JOIN approved_plans p"
+                " ON p.assignee = b.assignee AND p.day = b.day"
+                " WHERE b.issue_id = %s"
+                " ORDER BY b.day DESC, p.saved_at DESC, b.assignee",
                 (issue_id,),
             ).fetchall()
         return [

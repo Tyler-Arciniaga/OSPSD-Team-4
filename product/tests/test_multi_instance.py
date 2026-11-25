@@ -140,3 +140,21 @@ def test_concurrent_saves_through_both_instances_leave_one_whole_plan(
     # Every block comes from the same response: one writer won, whole.
     winners = [r.json()["created"] for r in responses]
     assert {block.issue_id: block.event_id for block in plan} in winners
+
+
+def test_issue_status_on_one_instance_answers_from_a_plan_saved_on_another(
+    instances: tuple[Instance, Instance], shared: PostgresStateStore
+) -> None:
+    a, b = instances
+
+    saved = a.focus_day(REQUEST | {"assignee": "alice"}).json()
+    response = b.client.get(
+        "/v1/issue-status", params={"issue_id": "demo-1", "day": "2026-11-18"}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "answered"
+    assert body["owner"] == "alice"
+    block = next(x for x in saved["plan"]["blocks"] if x["issue_id"] == "demo-1")
+    assert body["scheduled"] == {"start": block["start"], "end": block["end"]}

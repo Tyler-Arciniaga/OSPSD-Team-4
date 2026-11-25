@@ -412,7 +412,9 @@ def test_tracker_failure(
     }
 
 
-def test_unexpected_tracker_exception_does_not_leak(service: StatusService) -> None:
+def test_unexpected_tracker_exception_does_not_leak(
+    service: StatusService, caplog: pytest.LogCaptureFixture
+) -> None:
     service.tracker.failures.always = RuntimeError(SECRET)
 
     response = service.get(issue_id="card-c")
@@ -421,6 +423,7 @@ def test_unexpected_tracker_exception_does_not_leak(service: StatusService) -> N
     assert response.json()["failed_step"] == "find_issue"
     assert response.json()["error"]["code"] == "provider_error"
     assert SECRET not in response.text
+    assert SECRET not in caplog.text
 
 
 @pytest.mark.parametrize(
