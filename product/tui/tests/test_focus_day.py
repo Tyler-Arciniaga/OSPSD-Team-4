@@ -367,6 +367,24 @@ async def test_retry_works_after_the_app_is_reopened(
     assert not (state_dir / "last-focus-day.json").exists()
 
 
+async def test_a_successful_new_run_deletes_the_saved_run(
+    make_app: MakeApp, api: FakeApi, state_dir: Path
+) -> None:
+    api.reply(502, PARTIAL)
+    api.reply(200, OK)
+    app = make_app()
+    async with app.run_test(size=SIZE) as pilot:
+        fill(app, assignee="tyler")
+        await submit(pilot)
+        assert (state_dir / "last-focus-day.json").exists()
+        await submit(pilot)
+        assert "Your focus day is booked." in text(app, "#messages")
+        bindings = {b.binding.action for b in app.active_bindings.values()}
+        assert "retry" not in bindings
+    assert "replay" not in api.posts[1]
+    assert not (state_dir / "last-focus-day.json").exists()
+
+
 async def test_with_nothing_saved_retry_is_hidden_and_r_says_so(
     make_app: MakeApp, api: FakeApi
 ) -> None:

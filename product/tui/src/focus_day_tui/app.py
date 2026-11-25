@@ -323,7 +323,7 @@ class FocusDayScreen(Screen[None]):
         if isinstance(outcome, RequestFailure):
             self.show_failure(outcome, values)
         else:
-            self.show_result(outcome, body, retry=retry, values=values)
+            self.show_result(outcome, body, values=values)
 
     def show_failure(self, failure: RequestFailure, values: FormValues | None) -> None:
         client = self.focus_app.client
@@ -360,7 +360,6 @@ class FocusDayScreen(Screen[None]):
         result: FocusDayResult,
         body: dict[str, Any],
         *,
-        retry: bool,
         values: FormValues | None,
     ) -> None:
         app = self.focus_app
@@ -395,12 +394,10 @@ class FocusDayScreen(Screen[None]):
                 lines.append(f"{len(unscheduled)} issue(s) did not fit; see the list.")
             try:
                 app.store.save_preferences(Preferences.from_request(request))
-                if retry:
-                    app.store.clear_last_run()
+                app.store.clear_last_run()
             except OSError:
                 lines.append(f"Could not save to {app.store.directory}.")
-            if retry:
-                self.last_run = None
+            self.last_run = None
             self.show_messages(lines, "ok")
         else:
             unplaced = None
