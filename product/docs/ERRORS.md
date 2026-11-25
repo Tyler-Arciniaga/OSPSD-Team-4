@@ -332,7 +332,9 @@ request can always be repeated. Each failure is logged as one JSON line
 | any other tracker exception                   | `provider_error` | 502            | no                            |
 
 The last two rows are the [`list_issues` table](#list_issues-tracker), since
-the step reads the same list. Its message for no match is "No issue matches".
+the step reads the same list. Its message for no match is "No issue matches". When the tracker list was
+truncated at 100 issues, it is "No issue matches among the newest 100 issues;
+older issues are not searched" (cause `no_match_truncated`).
 
 Query parameters are checked before the tracker is called. The message is
 "The request is invalid", with one `ErrorDetail` per problem:

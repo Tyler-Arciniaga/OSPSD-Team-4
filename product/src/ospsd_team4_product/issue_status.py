@@ -34,6 +34,9 @@ from ospsd_team4_product.planner import PlanIssue
 from ospsd_team4_product.store import StateStore, StoreError
 
 NO_MATCH = "No issue matches"
+NO_MATCH_TRUNCATED = (
+    "No issue matches among the newest 100 issues; older issues are not searched"
+)
 READ_FAILED = "The saved plans could not be read. Try again later."
 
 
@@ -96,13 +99,21 @@ class IssueStatus:
         An ID is looked up in the list too: the provider's get_issue also
         returns archived issues and those of other lists (another team's).
         """
-        issues = self._tracker.list_issues(step="find_issue").issues
+        listed = self._tracker.list_issues(step="find_issue")
+        issues = listed.issues
         if query.title is not None:
             part = query.title.casefold()
             found = [issue for issue in issues if part in issue.title.casefold()]
         else:
             found = [issue for issue in issues if issue.id == query.issue_id]
         if not found:
+            if listed.truncated:
+                raise StepError(
+                    "find_issue",
+                    ErrorCode.NOT_FOUND,
+                    NO_MATCH_TRUNCATED,
+                    cause="no_match_truncated",
+                )
             raise StepError(
                 "find_issue", ErrorCode.NOT_FOUND, NO_MATCH, cause="no_match"
             )

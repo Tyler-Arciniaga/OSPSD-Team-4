@@ -143,6 +143,21 @@ def test_no_match_is_not_found(service: StatusService, params: dict[str, str]) -
     }
 
 
+def test_no_match_in_a_truncated_list_says_so(service: StatusService) -> None:
+    service.tracker.issues = [Issue(id=f"card-{n}", title="x") for n in range(100)]
+
+    response = service.get(issue_id="card-old")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["message"] == (
+        "No issue matches among the newest 100 issues; older issues are not searched"
+    )
+    service.tracker.issues = service.tracker.issues[:3]
+    assert service.get(issue_id="card-old").json()["error"]["message"] == (
+        "No issue matches"
+    )
+
+
 def test_a_planned_issue_deleted_from_the_tracker_is_not_found(
     service: StatusService,
 ) -> None:
