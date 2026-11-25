@@ -97,23 +97,3 @@ INFO:     127.0.0.1:50765 - "POST /v1/focus-day HTTP/1.1" 200 OK
   unreachable URL it opens and shows `Cannot reach the service at <url>.
   Is it running?`. `focus-day --timeout soon` prints the usage and exits
   with code 2. `tests/test_terminal.py` repeats the unreachable case in CI.
-
-### Found and fixed while running this
-
-- **Startup crash in a real terminal.** The first build registered the
-  Focus day screen as a Textual app mode. Headless tests passed, but in a
-  terminal the app crashed on start (`ScreenStackError: No screens on
-  stack` from `Input._watch_selection`, Textual 8.2.8) because an input
-  with a value was composed before the mode's screen was on the stack. The
-  screen is now the app's default screen, and `tests/test_terminal.py`
-  starts the real app in a pseudo-terminal so this cannot come back
-  unnoticed.
-- **A storage rejection was blamed on the form.** An earlier run against
-  another local service returned `invalid_input` from `write_standup_doc`
-  with no `details`, and the TUI said "Fix these and submit again.",
-  which nothing on the form can fix. It now says the storage service
-  refused the request and to ask the operator to check its configuration
-  (`test_a_provider_rejection_is_not_blamed_on_the_form`).
-- **Repeated wording.** A retryable outage read "The calendar is
-  unavailable right now: The calendar is currently unavailable." The TUI
-  now names the service only when the API's message does not.
