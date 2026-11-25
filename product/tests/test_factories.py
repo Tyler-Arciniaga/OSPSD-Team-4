@@ -17,6 +17,7 @@ FAKES = {
     "TRACKER_PROVIDER": "ospsd_team4_product.fakes:InMemoryIssueProvider",
     "CALENDAR_PROVIDER": "ospsd_team4_product.fakes:InMemoryCalendarService",
     "STORAGE_PROVIDER": "ospsd_team4_product.fakes:InMemoryDocumentStorage",
+    "STATE_DB_URL": "memory://",
 }
 
 

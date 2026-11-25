@@ -12,6 +12,10 @@ Steps, in order, each run at most once per request:
 4. `create_events`: one calendar event per block, in block order. Fails fast
    on the first calendar error; an uncertain create is never retried.
 5. `write_standup_doc`: upsert the doc, only once every event exists.
+6. `save_plan`: save the plan, with each block's event ID, as the assignee's
+   approved plan for the day (store.py). Only a run whose other steps all
+   succeeded saves anything, so the store never holds a draft. Saving
+   replaces any earlier plan for that day, so a replay can repeat it.
 
 All input is validated in the `validate` step, before any provider is
 called, so invalid input never has a side effect.
@@ -22,7 +26,7 @@ could move blocks, for example once the caller lists our own events as busy.
 For each block with an event ID in `created`, `get` confirms the event still
 exists; only blocks without an event, or whose event is NOT_FOUND, get a new
 one. The doc write is then repeated, which is safe because the same plan
-gives the same bytes.
+gives the same bytes, and the plan is saved again.
 
 Only the adapters know provider types. This module sees StepError and
 plain values.
@@ -58,8 +62,13 @@ from ospsd_team4_product.planner import (
     parse_interval,
     plan_day,
 )
+from ospsd_team4_product.store import CalendarBlock, StateStore, StoreError
 
 INVALID_REQUEST = "The request is invalid"
+SAVE_FAILED = (
+    "Your calendar blocks and standup doc are done, but the plan could not be"
+    " saved. Retry with replay to save it."
+)
 
 
 @dataclass(frozen=True)
@@ -211,11 +220,13 @@ class FocusDay:
         tracker: TrackerAdapter,
         calendar: CalendarAdapter,
         storage: StorageAdapter,
+        store: StateStore,
         config: ProductConfig,
     ) -> None:
         self._tracker = tracker
         self._calendar = calendar
         self._storage = storage
+        self._store = store
         self._config = config
 
     def run(self, request: FocusDayRequest) -> Outcome:
@@ -246,6 +257,8 @@ class FocusDay:
                 ),
             )
             progress.done("write_standup_doc")
+            self._save_plan(inputs, progress.plan, progress.created)
+            progress.done("save_plan")
         except StepError as exc:
             return progress.failure(exc)
         return progress.success(DocModel(path=stored.path, id=stored.id))
@@ -292,6 +305,31 @@ class FocusDay:
             return inputs.plan(issues)
         except PlanInputError as exc:
             raise _invalid(exc, "plan") from None
+
+    def _save_plan(self, inputs: _Inputs, plan: Plan, created: dict[str, str]) -> None:
+        """Save the booked plan; every block has an event by now."""
+        blocks = [
+            CalendarBlock(
+                issue_id=block.issue_id,
+                title=block.title,
+                start=block.start,
+                end=block.end,
+                event_id=created[block.issue_id],
+            )
+            for block in plan.blocks
+        ]
+        try:
+            self._store.save_plan(inputs.assignee, inputs.day, blocks)
+        except StoreError as exc:
+            # Nothing was saved (the write is one transaction), and saving
+            # replaces the day's plan, so a replay can simply repeat it.
+            raise StepError(
+                "save_plan",
+                ErrorCode.INTERNAL_ERROR,
+                SAVE_FAILED,
+                retryable=True,
+                cause=exc.cause or "store_error",
+            ) from None
 
     def _create_events(self, plan: Plan, created: dict[str, str]) -> None:
         """Make sure each block has an event; `created` is updated in place.

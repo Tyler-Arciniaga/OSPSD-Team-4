@@ -38,6 +38,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    # A throwaway database for the state store tests (tests/conftest.py).
+    # Same major version as the local docker-compose.yml database.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: focus_day
+          POSTGRES_PASSWORD: focus_day
+          POSTGRES_DB: focus_day_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U focus_day -d focus_day_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -68,8 +85,14 @@ jobs:
         run: uv run --locked mypy src tests scripts
 
       # Unit, orchestrator, adapter, import-boundary and fake conformance
-      # tests. No network access or provider credentials.
+      # tests, plus the state store and multi-instance tests against the
+      # Postgres service above. No provider credentials. REQUIRE_POSTGRES_TESTS
+      # makes the Postgres tests fail, rather than skip, if the database is
+      # missing.
       - name: Run tests
+        env:
+          TEST_STATE_DB_URL: postgresql://focus_day:focus_day@localhost:5432/focus_day_test
+          REQUIRE_POSTGRES_TESTS: "1"
         run: uv run --locked pytest
 
   # Check that the product image builds. Nothing is pushed or deployed.

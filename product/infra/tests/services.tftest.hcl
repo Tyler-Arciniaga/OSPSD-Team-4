@@ -40,6 +40,14 @@ run "production_starts_on_the_bootstrap_digest_with_the_real_providers" {
     error_message = "Only production gets the credentials."
   }
   assert {
+    condition     = !contains(keys(render_web_service.product.env_vars), "STATE_DB_URL")
+    error_message = "Production's STATE_DB_URL holds a password: it must come from the env group, never from Terraform."
+  }
+  assert {
+    condition     = contains(output.required_secrets.env_vars, "STATE_DB_URL")
+    error_message = "STATE_DB_URL must be listed as a secret set by hand in the env group."
+  }
+  assert {
     condition     = length(render_web_service.disposable) == 0 && output.disposable_service_id == null
     error_message = "The disposable service must be off by default."
   }
@@ -81,6 +89,10 @@ run "disposable_service_runs_the_fakes_without_secrets" {
   assert {
     condition     = !contains(keys(render_web_service.disposable[0].env_vars), "CALENDAR_TOKEN_FILE")
     error_message = "The disposable service needs no calendar token."
+  }
+  assert {
+    condition     = render_web_service.disposable[0].env_vars["STATE_DB_URL"].value == "memory://"
+    error_message = "The disposable service must use the in-memory state store, never production's database."
   }
   assert {
     condition     = !contains(render_env_group_link.secrets.service_ids, render_web_service.disposable[0].id)

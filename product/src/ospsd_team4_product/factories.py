@@ -1,4 +1,5 @@
-"""Build the three providers from configuration, once, at startup.
+"""Build the three providers and the state store from configuration, once,
+at startup.
 
 This is the only place that calls a provider's constructor, and the only
 place provider-specific constructor arguments are supplied (i.e. the calendar's
@@ -8,9 +9,11 @@ orchestrator never sees which one was chosen.
 A provider that cannot be built (for example Dropbox without its
 credentials, which raises in its constructor without a network call) stops
 startup with a ConfigError naming the variable. The provider's own message
-is not repeated, since it may describe credentials.
+is not repeated, since it may describe credentials. The same holds for a
+state database that cannot be reached.
 """
 
+import importlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
@@ -21,11 +24,14 @@ from issue_tracker_contract.interface import IssueProvider
 
 from ospsd_team4_product.config import (
     CALENDAR_PROVIDER,
+    MEMORY_STORE_URL,
+    STATE_DB_URL,
     STORAGE_PROVIDER,
     TRACKER_PROVIDER,
     ConfigError,
     ProductConfig,
 )
+from ospsd_team4_product.store import PostgresStateStore, StateStore, StoreError
 
 CALENDAR_OPERATIONS = ("create", "get", "replace", "delete")
 
@@ -71,3 +77,18 @@ def build_providers(config: ProductConfig) -> Providers:
         calendar=cast(CalendarService, calendar),  # checked above
         storage=storage,
     )
+
+
+def build_store(config: ProductConfig) -> StateStore:
+    """Connect to the state database (creating its tables), or the in-memory
+    store for MEMORY_STORE_URL. Raises ConfigError if it cannot be reached."""
+    if config.state_db_url == MEMORY_STORE_URL:
+        # Imported by name, like a provider, so only configuration selects a fake.
+        fakes = importlib.import_module("ospsd_team4_product.fakes")
+        return cast(StateStore, fakes.InMemoryStateStore())
+    try:
+        return PostgresStateStore.connect(config.state_db_url)
+    except StoreError:
+        raise ConfigError(
+            f"Cannot connect to state database; check {STATE_DB_URL}"
+        ) from None

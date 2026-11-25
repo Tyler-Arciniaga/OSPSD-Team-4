@@ -15,10 +15,12 @@
 #     configured value: nothing set; the real partner providers without the
 #     calendar token file; the real providers with a placeholder token file
 #     but no Dropbox credentials (this also proves the tracker, Team 5 and
-#     Team 3 packages import and build inside the image);
-#   - with the in-memory providers (selected through the same variables),
-#     /healthz and /readyz answer, /readyz reports the commit, and
-#     POST /v1/focus-day completes all six steps.
+#     Team 3 packages import and build inside the image); STATE_DB_URL
+#     unset, not a postgresql:// URL, or naming an unreachable database;
+#   - with the in-memory providers (selected through the same variables)
+#     and a throwaway Postgres container as the state store, /healthz and
+#     /readyz answer, /readyz reports the commit, POST /v1/focus-day
+#     completes all seven steps, and the plan is in the database.
 #
 # Usage: product/scripts/disposable_env.sh       (from a clean checkout)
 #        IMAGE_REF=<repo>@sha256:<digest> EXPECTED_COMMIT=<sha> product/scripts/disposable_env.sh
@@ -40,7 +42,11 @@ else
   IMAGE="ospsd-team4-product-disposable:${COMMIT:0:12}"
 fi
 CONTAINER="ospsd-team4-product-disposable-$$"
+DB_CONTAINER="ospsd-team4-product-disposable-db-$$"
+NETWORK="ospsd-team4-product-disposable-net-$$"
 PORT="${DISPOSABLE_PORT:-18100}"
+# Same major version as docker-compose.yml and CI.
+POSTGRES_IMAGE="postgres:17-alpine"
 
 FAKES=(
   -e TRACKER_PROVIDER=ospsd_team4_product.fakes:InMemoryIssueProvider
@@ -55,6 +61,8 @@ REAL=(
 # Fake values. The checks below prove none of them is ever printed.
 FAKE_TRELLO_KEY="fake-disposable-trello-key-0000"
 FAKE_DROPBOX_KEY="fake-disposable-dropbox-key-0000"
+FAKE_DB_PASSWORD="fake-disposable-db-password-0000"
+STATE_DB_URL="postgresql://focus_day:${FAKE_DB_PASSWORD}@${DB_CONTAINER}:5432/focus_day"
 
 TOKEN_DIR="$(mktemp -d)"
 printf '{"token": "fake-disposable-google-token-0000"}\n' >"${TOKEN_DIR}/token.json"
@@ -69,7 +77,8 @@ fail() {
 }
 
 cleanup() {
-  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  docker rm -f "$CONTAINER" "$DB_CONTAINER" >/dev/null 2>&1 || true
+  docker network rm "$NETWORK" >/dev/null 2>&1 || true
   rm -rf "$TOKEN_DIR"
   if [[ "${KEEP_IMAGE:-0}" != "1" ]]; then
     docker rmi -f "$IMAGE" >/dev/null 2>&1 || true
@@ -111,7 +120,8 @@ expect_startup_failure() {
     || fail "${description}: started"
   grep -q "$expected" <<<"$output" && pass "${description}: names ${expected}" \
     || fail "${description}: does not name ${expected}"
-  grep -qe "$FAKE_TRELLO_KEY" -e "$FAKE_DROPBOX_KEY" -e "fake-disposable-google-token" <<<"$output" \
+  grep -qe "$FAKE_TRELLO_KEY" -e "$FAKE_DROPBOX_KEY" -e "fake-disposable-google-token" \
+    -e "$FAKE_DB_PASSWORD" <<<"$output" \
     && fail "${description}: printed a configured value" \
     || pass "${description}: prints no configured value"
 }
@@ -125,11 +135,28 @@ expect_startup_failure "real providers, no Dropbox credentials" "STORAGE_PROVIDE
   "${REAL[@]}" -e TRELLO_API_KEY="$FAKE_TRELLO_KEY" \
   -e DROPBOX_APP_KEY="$FAKE_DROPBOX_KEY" \
   -v "${TOKEN_DIR}/token.json:/etc/secrets/token.json:ro" \
-  -e CALENDAR_TOKEN_FILE=/etc/secrets/token.json
+  -e CALENDAR_TOKEN_FILE=/etc/secrets/token.json \
+  -e STATE_DB_URL=memory://
+expect_startup_failure "no state database" "Missing required configuration: STATE_DB_URL" \
+  "${FAKES[@]}"
+expect_startup_failure "state database not Postgres" "STATE_DB_URL must be a postgresql:// URL" \
+  "${FAKES[@]}" -e STATE_DB_URL="mysql://focus_day:${FAKE_DB_PASSWORD}@db/focus_day"
+expect_startup_failure "state database unreachable" "Cannot connect to state database" \
+  "${FAKES[@]}" -e STATE_DB_URL="postgresql://focus_day:${FAKE_DB_PASSWORD}@127.0.0.1:1/focus_day"
+
+echo "Starting a throwaway state database"
+docker network create "$NETWORK" >/dev/null
+docker run -d --name "$DB_CONTAINER" --network "$NETWORK" \
+  -e POSTGRES_USER=focus_day -e POSTGRES_PASSWORD="$FAKE_DB_PASSWORD" -e POSTGRES_DB=focus_day \
+  "$POSTGRES_IMAGE" >/dev/null
+for _ in $(seq 1 60); do
+  docker exec "$DB_CONTAINER" pg_isready -q -U focus_day -d focus_day -h 127.0.0.1 && break
+  sleep 1
+done
 
 echo "Starting with the in-memory providers on port ${PORT}"
-docker run -d --name "$CONTAINER" -p "127.0.0.1:${PORT}:8000" -e PORT=8000 \
-  "${FAKES[@]}" -e TRELLO_API_KEY="$FAKE_TRELLO_KEY" "$IMAGE" >/dev/null
+docker run -d --name "$CONTAINER" --network "$NETWORK" -p "127.0.0.1:${PORT}:8000" -e PORT=8000 \
+  "${FAKES[@]}" -e STATE_DB_URL="$STATE_DB_URL" -e TRELLO_API_KEY="$FAKE_TRELLO_KEY" "$IMAGE" >/dev/null
 
 for _ in $(seq 1 60); do
   curl -fsS "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1 && break
@@ -152,9 +179,17 @@ result="$(curl -sS -w ' %{http_code}' -X POST "http://127.0.0.1:${PORT}/v1/focus
   || fail "POST /v1/focus-day: ${result}"
 [[ "$result" == *'"failed_step":null'* && "$result" == *'"path":"/standups/2026-11-18-disposable.md"'* ]] \
   && pass "every step ran and the doc was written" || fail "unexpected focus-day body"
+[[ "$result" == *'{"name":"save_plan","status":"ok","error":null}'* ]] \
+  && pass "the save_plan step ran" || fail "save_plan step missing or not ok"
+
+saved="$(docker exec "$DB_CONTAINER" psql -U focus_day -d focus_day -tAc \
+  "SELECT count(*) FROM plan_blocks WHERE assignee = 'disposable' AND day = '2026-11-18'" 2>&1 || true)"
+[[ "$saved" == "3" ]] && pass "the plan's 3 blocks are in the state database" \
+  || fail "state database holds '${saved}' blocks for the plan"
 
 logs="$(docker logs "$CONTAINER" 2>&1)"
-grep -qe "$FAKE_TRELLO_KEY" <<<"$logs" && fail "logs contain a credential" || pass "logs contain no credential"
+grep -qe "$FAKE_TRELLO_KEY" -e "$FAKE_DB_PASSWORD" <<<"$logs" \
+  && fail "logs contain a credential" || pass "logs contain no credential"
 
 echo
 if [[ "$failures" -eq 0 ]]; then

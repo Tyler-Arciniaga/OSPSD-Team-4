@@ -28,11 +28,13 @@ HW1 model but the product does not use them.
 
 Every failure inside the operation is a `StepError`
 (`src/ospsd_team4_product/errors.py`). Only the adapters create them from
-provider failures; nothing else from a provider reaches the orchestrator.
+provider failures, and the orchestrator from a state store failure
+(`save_plan`); nothing else from a provider or the database reaches the
+orchestrator.
 
 | Field              | Meaning                                                                    |
 | ------------------ | -------------------------------------------------------------------------- |
-| `step`             | `validate`, `check_doc`, `list_issues`, `plan`, `create_events` or `write_standup_doc` |
+| `step`             | `validate`, `check_doc`, `list_issues`, `plan`, `create_events`, `write_standup_doc` or `save_plan` |
 | `code`             | An HW1 code from the table above; it sets the HTTP status                  |
 | `message`          | Safe to show callers. Always written by this service, never a provider's   |
 | `retryable`        | Repeating the same request later may succeed (a transient outage)          |
@@ -55,7 +57,7 @@ their HW1 meaning, and the product adds `error.step`, `error.retryable` and
 | Field         | Meaning                                                                 |
 | ------------- | ----------------------------------------------------------------------- |
 | `status`      | `partial` if `created` is not empty, otherwise `failed`                 |
-| `steps`       | All six steps, each `ok`, `failed` or `skipped`; the failed one has `error` |
+| `steps`       | All seven steps, each `ok`, `failed` or `skipped`; the failed one has `error` |
 | `plan`        | The plan, or `null` if planning did not finish                          |
 | `created`     | Issue ID to event ID, for every event known to exist                    |
 | `doc`         | Always `null` on failure                                                |
@@ -267,6 +269,31 @@ retryable because repeating it can book a duplicate event.
 
 Unexpected exceptions are logged by class name only.
 
+## `save_plan` (state store)
+
+Source: `src/ospsd_team4_product/orchestrator.py`, `store.py`. The step runs
+only after every other step succeeded, and saves the plan with each block's
+event ID as the assignee's approved plan for the day. A failed earlier step
+skips it, so a `partial` or `failed` run never saves anything.
+
+The save is one database transaction that replaces the day's plan, so a
+failure leaves nothing saved and repeating it is safe. Any `StoreError`
+(the database is down, unreachable, or rejected the write) fails the step
+with:
+
+| Store error  | Code             | HTTP | retryable | may_have_applied |
+| ------------ | ---------------- | ---- | --------- | ---------------- |
+| `StoreError` | `internal_error` | 500  | yes       | no               |
+
+Message: `Your calendar blocks and standup doc are done, but the plan could
+not be saved. Retry with replay to save it.` By then every event exists and
+the doc is written, so `status` is `partial` (or `failed` when the plan has
+no blocks). A replay with the response's `plan` and `created` confirms the
+events with `get`, creates none, rewrites the doc with the same bytes, and
+saves the plan. The log line's `cause` is the database error's class name;
+the database's own message, which can name hosts or users, is never
+logged or returned.
+
 ## Startup errors
 
 Configuration is checked once at startup (`config.py`, `factories.py`). A
@@ -289,9 +316,16 @@ exits before serving requests. Messages name the variable, never its value.
 | `TRACKER_PROVIDER must build an IssueProvider`                    | the factory returned the wrong type                          |
 | `CALENDAR_PROVIDER must build a CalendarService`                  | the factory returned the wrong type                          |
 | `STORAGE_PROVIDER must build a DocumentStorage`                   | the factory returned the wrong type                          |
+| `Missing required configuration: STATE_DB_URL`                    | `STATE_DB_URL` is unset or empty                             |
+| `STATE_DB_URL must be a postgresql:// URL (or memory:// for the in-memory store)` | the value is not a `postgresql://` or `postgres://` URL with a host, nor exactly `memory://` |
+| `Cannot connect to state database; check STATE_DB_URL`            | the database could not be reached within 5 seconds, rejected the credentials, or the tables could not be created |
 
 Because providers are built at startup, a missing Dropbox credential stops
 the service instead of failing each request with `service_not_configured`.
+Likewise the service connects to the state database (and creates any
+missing tables) before serving, so a wrong or unreachable `STATE_DB_URL`
+stops startup. If the database goes down later, requests fail only at the
+`save_plan` step, and the pool reconnects once it is back.
 
 ## Other HTTP errors
 
