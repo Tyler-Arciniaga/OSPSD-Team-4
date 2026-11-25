@@ -108,7 +108,7 @@ def build_request(values: FormValues) -> tuple[dict[str, Any] | None, dict[str, 
 
     minutes: int | None = None
     if values.block_minutes.strip():
-        if values.block_minutes.strip().isdigit():
+        if values.block_minutes.strip().isdecimal():
             minutes = int(values.block_minutes.strip())
         else:
             errors["block_minutes"] = "Enter a whole number of minutes"
