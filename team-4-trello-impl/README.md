@@ -2,8 +2,8 @@
 
 Team 4's Trello implementation of the shared issue tracker contract
 ([`issue-tracker-contract`](../contract/README.md)). Install it in your own
-service, point it at your own Trello test list with three environment
-variables, and use it wherever the contract's `IssueProvider` is expected.
+service, point it at your own Trello test list with constructor arguments
+or three environment variables, and use it wherever the contract's `IssueProvider` is expected.
 
 The package contains only the provider: no web framework, no telemetry
 library, and no `app` module, so it cannot collide with your service's own
@@ -14,7 +14,7 @@ library. Its only dependency is the contract, which brings pydantic.
 | --- | --- |
 | Distribution | `team-4-issue-tracker-trello` |
 | Import name | `team_4_issue_tracker_trello` |
-| Current version | 1.0.0, tag `team-4-issue-tracker-trello-v1.0.0` |
+| Current version | 1.1.0, tag `team-4-issue-tracker-trello-v1.1.0` |
 | Implements | `issue-tracker-contract` 1.1.0 (installed automatically) |
 | Python | 3.11.5 or newer |
 
@@ -23,20 +23,20 @@ library. Its only dependency is the contract, which brings pydantic.
 With pip:
 
 ```bash
-pip install "team-4-issue-tracker-trello @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@team-4-issue-tracker-trello-v1.0.0#subdirectory=team-4-trello-impl"
+pip install "team-4-issue-tracker-trello @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@team-4-issue-tracker-trello-v1.1.0#subdirectory=team-4-trello-impl"
 ```
 
 With uv, from your project's directory:
 
 ```bash
-uv add "git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@team-4-issue-tracker-trello-v1.0.0#subdirectory=team-4-trello-impl"
+uv add "git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@team-4-issue-tracker-trello-v1.1.0#subdirectory=team-4-trello-impl"
 ```
 
 That records the tag in your `pyproject.toml`:
 
 ```toml
 [tool.uv.sources]
-team-4-issue-tracker-trello = { git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git", subdirectory = "team-4-trello-impl", rev = "team-4-issue-tracker-trello-v1.0.0" }
+team-4-issue-tracker-trello = { git = "https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git", subdirectory = "team-4-trello-impl", rev = "team-4-issue-tracker-trello-v1.1.0" }
 ```
 
 Two things to check if `uv add` fails to resolve:
@@ -60,15 +60,47 @@ Two things to check if `uv add` fails to resolve:
 
 ## Configuration
 
-The provider reads three environment variables each time it contacts
-Trello. Nothing is read at import or construction, so a missing variable
-surfaces as an error on the first call, not as an import failure.
+The provider needs three values. Pass any of them to the constructor as
+keyword arguments; each one you leave out is read from its environment
+variable, as in 1.0.0:
 
-| Variable | Value |
-| --- | --- |
-| `TRELLO_API_KEY` | API key of a Trello app on your test account |
-| `TRELLO_TOKEN` | Token that account granted with read and write access |
-| `TRELLO_LIST_ID` | Full 24-character ID of the list issues live in |
+```python
+TrelloIssueProvider()  # all three from the environment (the default)
+TrelloIssueProvider(api_key=key, token=token, list_id=list_id)
+TrelloIssueProvider(list_id=list_id)  # key and token from the environment
+```
+
+| Argument | Fallback variable | Value |
+| --- | --- | --- |
+| `api_key` | `TRELLO_API_KEY` | API key of a Trello app on your test account |
+| `token` | `TRELLO_TOKEN` | Token that account granted with read and write access |
+| `list_id` | `TRELLO_LIST_ID` | Full 24-character ID of the list issues live in |
+
+- `api_key` and `token` name one Trello account and are sent with every
+  request. `list_id` is the one list that `list_issues`, `create_issue`,
+  `create_tagged_issue`, `find_tagged_issue` and `ping` work in.
+  `get_issue`, `update_issue` and `delete_issue` take a card ID and use only
+  the credentials, so they work without a list.
+- `None` (the default) means "use the environment variable". The variable is
+  read each time a call contacts Trello, not at construction.
+- An empty string `""` counts as missing and does **not** fall back to the
+  environment. It fails like an unset variable.
+- Nothing is checked at import or construction, so `TrelloIssueProvider()`
+  always succeeds. Missing values surface as an error on the first call that
+  needs them (see [Errors](#errors)).
+
+**Several accounts in one process.** Each provider keeps its own arguments,
+so a service that acts for several users can create one provider per user,
+each with that user's own key, token and list, and use them at the same time,
+including from different threads:
+
+```python
+alice = TrelloIssueProvider(api_key=a_key, token=a_token, list_id=a_list)
+bob = TrelloIssueProvider(api_key=b_key, token=b_token, list_id=b_list)
+```
+
+Do not switch users by changing environment variables per request; one
+user's call could then pick up another user's credentials.
 
 Use your own dedicated test account and test list. Keep these values out of
 your repository, for example in a gitignored `.env` file or your deployment
@@ -115,7 +147,7 @@ card name; nothing else from the card is exposed.
 | `get_issue(issue_id, *, fresh=False)` | Reads the card. |
 | `update_issue(issue_id, changes)` | Renames the card when `changes.title` is set. |
 | `delete_issue(issue_id)` | Permanently deletes the card. |
-| `create_issue(title)` | Creates a card in `TRELLO_LIST_ID`. |
+| `create_issue(title)` | Creates a card in the configured list. |
 | `list_issues(*, limit)` | Open (not archived) cards in the list, newest first, at most `limit`. |
 | `create_tagged_issue(title, creation_token)` | Like `create_issue`, but stores a marker for `creation_token` as the card's description. |
 | `find_tagged_issue(creation_token)` | The oldest card in the list, archived or not, carrying that marker, or `None`. |
@@ -148,7 +180,7 @@ contains credentials, URLs or Trello response bodies.
 
 | `code` | Status | When |
 | --- | --- | --- |
-| `service_not_configured` | 503 | `TRELLO_API_KEY` or `TRELLO_TOKEN` is unset (`cause` `missing_credentials`), or `TRELLO_LIST_ID` is unset when creating or listing (`missing_target_list`). No request is sent. |
+| `service_not_configured` | 503 | The API key or token is missing or empty, from both the argument and `TRELLO_API_KEY`/`TRELLO_TOKEN` (`cause` `missing_credentials`), or the list is missing or empty when creating or listing (`missing_target_list`). No request is sent. |
 | `not_found` | 404 | The card does not exist (Trello 404), or the ID cannot be a Trello card ID (`cause` `malformed_issue_id`, checked before anything else, no request sent). |
 | `access_denied` | 403 | Trello rejected the credentials or access (401 or 403). |
 | `provider_error` | 502 | Trello timed out, could not be reached, rate limited (429), failed (5xx), rejected the request (other 4xx, including a wrong list ID), or returned something unusable. |
@@ -179,9 +211,6 @@ nothing on the span itself.
 
 ## Known limitations
 
-- **One list per process.** Configuration comes from environment variables,
-  not constructor arguments, so every `TrelloIssueProvider` in a process uses
-  the same credentials and list.
 - `list_issues` fetches the whole list from Trello and then sorts and cuts it
   (Trello's list endpoint has no limit), so very large lists are slow.
 - `update_issue` can only change the title, because that is all the contract

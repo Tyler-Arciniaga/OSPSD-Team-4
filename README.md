@@ -521,7 +521,7 @@ service. It contains only `TrelloIssueProvider`, depends only on the tagged
 contract, and is released under its own tags:
 
 ```bash
-pip install "team-4-issue-tracker-trello @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@team-4-issue-tracker-trello-v1.0.0#subdirectory=team-4-trello-impl"
+pip install "team-4-issue-tracker-trello @ git+https://github.com/Tyler-Arciniaga/OSPSD-Team-4.git@team-4-issue-tracker-trello-v1.1.0#subdirectory=team-4-trello-impl"
 ```
 
 Its README covers uv installation, configuration and errors; its

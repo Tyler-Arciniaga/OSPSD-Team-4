@@ -31,13 +31,13 @@ from team_4_issue_tracker_trello._tracing import provider_span
 CARD_ID_PATTERN = r"[0-9a-f]{24}"
 
 
-def _credentials() -> tuple[str, str]:
-    """Return the Trello API key and token, or fail if either is missing."""
-    key = os.environ.get("TRELLO_API_KEY")
-    token = os.environ.get("TRELLO_TOKEN")
-    if not key or not token:
-        raise credentials_not_configured()
-    return key, token
+def _setting(given: str | None, variable: str) -> str | None:
+    """Return a constructor argument, or its environment variable if omitted.
+
+    `None` means "use the environment". Any string, including `""`, is used
+    as given; the callers treat an empty value as missing.
+    """
+    return os.environ.get(variable) if given is None else given
 
 
 def _require_card_id(issue_id: str) -> None:
@@ -47,14 +47,6 @@ def _require_card_id(issue_id: str) -> None:
     """
     if not re.fullmatch(CARD_ID_PATTERN, issue_id):
         raise malformed_issue_id()
-
-
-def _target_list_id() -> str:
-    """Return the list new cards are created in, or fail if it is missing."""
-    list_id = os.environ.get("TRELLO_LIST_ID")
-    if not list_id:
-        raise target_not_configured("list")
-    return list_id
 
 
 # Written as a card's description to mark the card a creation produced.
@@ -82,13 +74,15 @@ def _never_sent(exc: Exception) -> bool:
     return isinstance(reason, (socket.gaierror, ConnectionRefusedError))
 
 
-def _trello_headers() -> dict[str, str]:
+def _trello_headers(key: str | None, token: str | None) -> dict[str, str]:
     """Return request headers carrying the Trello key and token.
 
+    Fails with `missing_credentials` if either is missing or empty.
     Credentials go in the Authorization header rather than the query string,
     so they never appear in request URLs or in HTTPError.url.
     """
-    key, token = _credentials()
+    if not key or not token:
+        raise credentials_not_configured()
     return {
         "Accept": "application/json",
         "Authorization": f'OAuth oauth_consumer_key="{key}", oauth_token="{token}"',
@@ -159,7 +153,48 @@ class TrelloIssueProvider:
     """`IssueProvider` backed by Trello's REST API.
 
     Opens one connection per request, so it holds nothing to release.
+
+    `api_key` and `token` identify the Trello account used for every request.
+    `list_id` is the one list that `list_issues`, `create_issue`,
+    `create_tagged_issue`, `find_tagged_issue` and `ping` work in;
+    `get_issue`, `update_issue` and `delete_issue` address a card by ID and
+    use only the credentials.
+
+    An omitted argument (`None`) falls back to `TRELLO_API_KEY`,
+    `TRELLO_TOKEN` or `TRELLO_LIST_ID`, read when each call runs, exactly as
+    in 1.0.0. An empty string counts as missing and does not fall back.
+    Nothing is checked at construction: a missing key or token fails when a
+    call runs (`missing_credentials`), and a missing list when a
+    list-dependent call runs (`missing_target_list`).
+
+    Providers built with different arguments share no state, so one process
+    can serve several Trello accounts and lists at once.
     """
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        token: str | None = None,
+        list_id: str | None = None,
+    ) -> None:
+        self._api_key = api_key
+        self._token = token
+        self._list_id = list_id
+
+    def _headers(self) -> dict[str, str]:
+        """Request headers for this provider's account, or fail if unconfigured."""
+        return _trello_headers(
+            _setting(self._api_key, "TRELLO_API_KEY"),
+            _setting(self._token, "TRELLO_TOKEN"),
+        )
+
+    def _target_list_id(self) -> str:
+        """Return this provider's list, or fail if it is missing."""
+        list_id = _setting(self._list_id, "TRELLO_LIST_ID")
+        if not list_id:
+            raise target_not_configured("list")
+        return list_id
 
     def close(self) -> None:
         """Nothing to release: each request opens and closes its own connection."""
@@ -168,8 +203,8 @@ class TrelloIssueProvider:
         """Read the configured list's ID; True only if Trello answers with it."""
         try:
             request = Request(
-                f"https://api.trello.com/1/lists/{_target_list_id()}?fields=id",
-                headers=_trello_headers(),
+                f"https://api.trello.com/1/lists/{self._target_list_id()}?fields=id",
+                headers=self._headers(),
                 method="GET",
             )
             with (
@@ -265,8 +300,8 @@ class TrelloIssueProvider:
         A Trello 404 here means the configured list is wrong, not a missing
         issue, so it is reported as a provider failure.
         """
-        headers = _trello_headers()
-        list_id = _target_list_id()
+        headers = self._headers()
+        list_id = self._target_list_id()
         params = urlencode({"fields": fields, "filter": card_filter})
         request = Request(
             f"https://api.trello.com/1/lists/{list_id}/cards?{params}",
@@ -289,8 +324,8 @@ class TrelloIssueProvider:
 
     def _create_card(self, title: str, desc: str | None = None) -> Issue:
         """Send one card creation request and report whether a failure is certain."""
-        headers = _trello_headers()
-        list_id = _target_list_id()
+        headers = self._headers()
+        list_id = self._target_list_id()
 
         fields = {"idList": list_id, "name": title}
         if desc is not None:
@@ -331,7 +366,7 @@ class TrelloIssueProvider:
         body). Send any returned cards to `_card_to_issue()` to turn a card body into an Issue.
         """
         _require_card_id(issue_id)
-        headers = _trello_headers()
+        headers = self._headers()
 
         url = f"https://api.trello.com/1/cards/{issue_id}"
         if params:
