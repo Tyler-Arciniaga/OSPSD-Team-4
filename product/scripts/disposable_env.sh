@@ -25,7 +25,7 @@
 #
 # Usage: product/scripts/disposable_env.sh       (from a clean checkout)
 #        IMAGE_REF=<repo>@sha256:<digest> EXPECTED_COMMIT=<sha> product/scripts/disposable_env.sh
-# Needs: docker, curl, git.
+# Needs: docker, curl, git, jq.
 
 set -euo pipefail
 
@@ -172,20 +172,18 @@ echo "  /readyz -> ${ready}"
 [[ "$ready" == *' 200' ]] && pass "/readyz 200" || fail "/readyz not 200"
 [[ "$ready" == *"\"commit\":\"${COMMIT}\""* ]] && pass "/readyz reports commit" || fail "/readyz commit mismatch"
 
-FOCUS_DAY_BODY='"assignee": "disposable", "day": "2026-11-18"'
+FOCUS_DAY_BODY='{"assignee": "disposable", "day": "2026-11-18"}'
 proposal="$(curl -sS -w ' %{http_code}' -X POST "http://127.0.0.1:${PORT}/v1/focus-day" \
-  -H 'content-type: application/json' -d "{${FOCUS_DAY_BODY}}" || true)"
+  -H 'content-type: application/json' -d "$FOCUS_DAY_BODY" || true)"
 [[ "$proposal" == *' 200' && "$proposal" == *'"status":"proposed"'* && "$proposal" == *'"created":{}'* ]] \
   && pass "POST /v1/focus-day without confirm proposes a plan and books nothing" \
   || fail "focus-day proposal: ${proposal}"
 
-# The response's fields come in a fixed order (models.FocusDayProposal), so
-# the plan is everything between "plan": and ,"created":.
-approved="${proposal#*\"plan\":}"
-approved="${approved%%,\"created\":*}"
+# The confirm: the same body plus the proposal's plan (without the status code).
+confirm="$(jq -c --argjson body "$FOCUS_DAY_BODY" \
+  '$body + {confirm: true, approved_plan: .plan}' <<<"${proposal% *}" || true)"
 result="$(curl -sS -w ' %{http_code}' -X POST "http://127.0.0.1:${PORT}/v1/focus-day" \
-  -H 'content-type: application/json' \
-  -d "{${FOCUS_DAY_BODY}, \"confirm\": true, \"approved_plan\": ${approved}}" || true)"
+  -H 'content-type: application/json' -d "$confirm" || true)"
 [[ "$result" == *' 200' && "$result" == *'"status":"ok"'* ]] \
   && pass "POST /v1/focus-day with confirm books the approved plan" \
   || fail "POST /v1/focus-day: ${result}"
