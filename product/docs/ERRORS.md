@@ -257,7 +257,9 @@ Message: `The plan changed since you reviewed it`. `status` is `failed`,
 shows the owner and, if approved, sends as the next `approved_plan`. Typical
 causes: an issue was added to or closed on the tracker after the proposal,
 or the caller edited a block (editing before approval is not supported
-yet). The log line's `cause` is `plan_changed`.
+yet). The comparison is on the exact strings, so `approved_plan` must be
+sent back as received: the same instant written differently (`Z` instead
+of `-05:00`) is a difference. The log line's `cause` is `plan_changed`.
 Replaying this body is rejected (`created` is empty), since that would book
 a plan nobody approved.
 
