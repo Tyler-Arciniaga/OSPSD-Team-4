@@ -216,6 +216,9 @@ def check_fakes(client: Client, assignee: str) -> list[str]:
 def check_live(client: Client, assignee: str) -> list[str]:
     request = LIVE_REQUEST | {"assignee": assignee}
     proposal = _propose(client, request, "booked day proposal")
+    if proposal["plan"]["blocks"]:
+        # Confirming would book a real event that nothing removes.
+        raise SmokeError("booked day proposal: the plan has blocks; not confirming")
     status, body = _post(client, _confirmed(request, proposal["plan"]))
     _expect_ok(status, body, "booked day")
     if body["plan"]["blocks"] or body["created"]:

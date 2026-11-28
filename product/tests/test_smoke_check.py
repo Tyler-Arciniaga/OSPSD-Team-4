@@ -70,6 +70,21 @@ def test_live_mode_creates_no_event(service: Service) -> None:
     assert service.calendar.events == {}
 
 
+def test_live_mode_stops_before_confirming_a_plan_with_blocks(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the day is not fully booked, no real event may be booked."""
+    monkeypatch.setattr(
+        smoke_check, "LIVE_REQUEST", smoke_check.LIVE_REQUEST | {"busy": []}
+    )
+
+    with pytest.raises(smoke_check.SmokeError, match="the plan has blocks"):
+        smoke_check.check_live(service.client, "release-smoke")
+
+    assert service.calendar.failures.calls("create") == 0
+    assert service.storage.files == {}
+
+
 def test_fakes_mode_checks_the_duplicate_run_and_the_replay(service: Service) -> None:
     lines = smoke_check.run(service.client, commit=COMMIT, mode="fakes", sleep=no_wait)
 
