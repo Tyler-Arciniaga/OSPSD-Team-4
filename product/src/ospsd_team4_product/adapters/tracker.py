@@ -1,4 +1,4 @@
-"""Issue tracker adapter for the `list_issues` step.
+"""Issue tracker adapter for the `list_issues` and `find_issue` steps.
 
 The error mapping is documented in product/docs/ERRORS.md ("list_issues
 (tracker)").
@@ -37,7 +37,7 @@ class TrackerAdapter:
     def __init__(self, provider: IssueProvider) -> None:
         self._provider = provider
 
-    def list_issues(self) -> IssueList:
+    def list_issues(self, *, step: Step = STEP) -> IssueList:
         """Every issue in the configured collection, up to the contract's limit.
 
         The contract has no assignee field or filter, so this is every issue
@@ -50,16 +50,18 @@ class TrackerAdapter:
             # read changes nothing; provider_error is worth retrying, as the
             # HW1 API documents for reads.
             raise StepError(
-                STEP,
+                step,
                 exc.code,
                 exc.message,
                 retryable=exc.code == ErrorCode.PROVIDER_ERROR,
                 cause=exc.cause,
             ) from None
-        except Exception as exc:  # contract breach: never leak it
-            logger.exception("tracker raised an unexpected exception")
+        except Exception as exc:  # noqa: BLE001 - contract breach: never leak it
+            logger.error(
+                "tracker raised an unexpected exception: %s", type(exc).__name__
+            )
             raise StepError(
-                STEP,
+                step,
                 ErrorCode.PROVIDER_ERROR,
                 "The issue tracker returned an unusable response",
                 cause=type(exc).__name__,

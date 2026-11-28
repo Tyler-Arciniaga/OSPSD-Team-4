@@ -77,7 +77,7 @@ def _translate_error(exc: CalendarError, *, write: bool) -> StepError:
 
 
 def _unexpected(exc: Exception, *, write: bool) -> StepError:
-    logger.exception("calendar raised an unexpected exception")
+    logger.error("calendar raised an unexpected exception: %s", type(exc).__name__)
     return StepError(
         STEP,
         ErrorCode.PROVIDER_ERROR,

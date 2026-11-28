@@ -1,9 +1,10 @@
 # OSPSD Team 4 Product Service
 
 `ospsd-team4-product` (import package `ospsd_team4_product`) is our HW3
-product service. Its one operation, `POST /v1/focus-day`, reads issues from
-our tracker, plans focus blocks around the caller's busy times, books them in
-a calendar and writes a standup doc to cloud storage. The tracker is our
+product service. `POST /v1/focus-day` reads issues from our tracker, plans
+focus blocks around the caller's busy times, books them in a calendar and
+writes a standup doc to cloud storage. `GET /v1/issue-status` answers whether
+an issue is scheduled, from its owner's approved plan. The tracker is our
 Trello package, the calendar is Team 5's Google Calendar package, and the
 storage is Team 3's Dropbox package, each chosen by configuration.
 
@@ -150,7 +151,14 @@ exact commands.
 | --- | --- |
 | `GET /healthz` | Liveness: the process is serving |
 | `GET /readyz` | Readiness: configuration loaded; reports the deployed commit |
-| `POST /v1/focus-day` | The operation; request, response and errors in [DESIGN.md](docs/DESIGN.md) and [ERRORS.md](docs/ERRORS.md) |
+| `POST /v1/focus-day` | Plan and book a focus day; request, response and errors in [DESIGN.md](docs/DESIGN.md) and [ERRORS.md](docs/ERRORS.md) |
+| `GET /v1/issue-status` | Whether an issue is scheduled, how much is left, and whether its block passed with no report. Read-only; exactly one of `issue_id` and `title`, and an optional `day` ([DESIGN.md](docs/DESIGN.md#issue-status), [ERRORS.md](docs/ERRORS.md#get-v1issue-status)) |
+
+After the focus-day request above, with the fakes:
+
+```sh
+curl -s 'localhost:8000/v1/issue-status?title=design&day=2026-11-19'
+```
 
 ## Checks
 

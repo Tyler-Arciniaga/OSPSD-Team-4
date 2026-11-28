@@ -339,13 +339,16 @@ def test_tracker_failure(service: Service) -> None:
     assert service.calendar.failures.calls("create") == 0
 
 
-def test_unexpected_tracker_exception_does_not_leak(service: Service) -> None:
+def test_unexpected_tracker_exception_does_not_leak(
+    service: Service, caplog: pytest.LogCaptureFixture
+) -> None:
     service.tracker.failures.fail("list_issues", RuntimeError(SECRET))
 
     response = service.post(REQUEST)
 
     assert response.status_code == 502
     assert SECRET not in response.text
+    assert SECRET not in caplog.text
     assert response.json()["error"]["code"] == "provider_error"
 
 

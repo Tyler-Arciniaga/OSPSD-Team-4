@@ -28,8 +28,9 @@
 ## Overview
 
 `ospsd-team4-product` is a separate service, in the same repository as our
-HW2 issue service, with one operation: `POST /v1/focus-day`. Given an
-assignee, a day and the times they are busy, it:
+HW2 issue service, with two operations. `GET /v1/issue-status` answers a
+question about one issue ([Issue status](#issue-status)).
+`POST /v1/focus-day`, given an assignee, a day and the times they are busy:
 
 1. checks that no standup doc exists yet for that assignee and day, so the
    same request sent twice does not book the day twice (F5),
@@ -365,17 +366,67 @@ Contract quotes are from `calendar-contract` `v0.1.0`
 - **Revisit when:** the free database's limits matter (see Known
   limitations), or the state grows beyond these three records.
 
+## Issue status
+
+`GET /v1/issue-status` (`issue_status.py`) is the RFD's scenario 3: is this
+issue scheduled, how much is left, and did its block pass with no report? The
+input is structured; turning a plain-language question into a query is the
+Level 3 agent's job.
+
+**Lookup order.** Parameters are validated first, then:
+
+1. `find_issue` reads the tracker list, as `list_issues` does, and keeps the
+   issue whose ID is `issue_id`, or every issue whose title contains `title`
+   (ignoring case). Nothing: 404. Several: `ambiguous`, sorted by title, and
+   the store is not read. An ID is also looked up in the list, not with
+   `get_issue`, because Trello's `get_issue` returns archived cards and cards
+   of any list the token can read, and the configured list is what defines
+   "same team". The cost is the list's limit: only the 100 newest issues can
+   be found (F6).
+2. `read_plan` reads every saved plan containing the issue, newest day first.
+   None: `no_approved_plan`. Otherwise the answer comes from the newest plan's
+   owner: their block for `day` (default: today in `DEFAULT_TIMEZONE`), the
+   remaining share, and the completion log. The issue's title comes from the
+   tracker, so a renamed issue shows its current title.
+
+**Owner.** The assignee of the newest saved plan containing the issue, by plan
+day; two plans for the same day give the most recently saved one.
+Claims do not exist yet, so this stands in for "who claimed it". Only the
+owner's blocks are reported: another assignee's block on `day` gives
+`scheduled: null`.
+
+**`passed_without_report`.** True when the issue's block on
+`last_planned_day` (the owner's newest planned day) ended before now and the
+completion log has no entry for (owner, that day, issue). It does not depend
+on the queried `day`. Now comes from `app.state.clock`, set at startup and
+read on each request, so tests replace it.
+
+**Why it is read-only.** The answer uses only the tracker list and the state
+store, and nothing is recorded about the question, so there is nothing to
+approve and any request can be repeated. The store holds only approved plans
+([State store](#state-store)), so a draft is never published.
+`test_queries_write_nothing` checks that no provider or store write happens.
+
+| Case | HTTP, status | Test |
+| --- | --- | --- |
+| Invalid query | 422 `invalid_input`, step `find_issue`, tracker not called | `test_invalid_input_is_rejected_before_any_call` |
+| No match, including an issue deleted from the tracker | 404 `not_found`, step `find_issue` | `test_no_match_is_not_found`, `test_a_planned_issue_deleted_from_the_tracker_is_not_found` |
+| Tracker fails | Tracker's code, step `find_issue` | `test_tracker_failure` |
+| State database down | 500 `internal_error`, `retryable: true`, step `read_plan` | `test_store_read_failure` |
+
+Error bodies: [ERRORS.md](ERRORS.md#get-v1issue-status).
+
 ## Boundaries, validation, credentials and invariants
 
 **Boundaries.** Three layers, and each one imports only the layer below it:
 
 | Layer | Code | Knows about |
 | --- | --- | --- |
-| Our API | `main.py`, `models.py`, `orchestrator.py`, `planner.py`, `doc.py` | Our own models, `StepError` and the HW1 error codes (`issue_tracker_contract.errors`); never a provider interface or type |
+| Our API | `main.py`, `models.py`, `orchestrator.py`, `issue_status.py`, `planner.py`, `doc.py` | Our own models, `StepError` and the HW1 error codes (`issue_tracker_contract.errors`); never a provider interface or type |
 | Adapters | `adapters/` | The shared contracts (`issue-tracker-contract`, `calendar-contract`, `cloud-storage-api`); they translate contract results and errors into our types |
 | Implementations | Trello, Team 5, Team 3 packages | Reached only through the contract interfaces; never imported by name |
 
-The state store sits beside the adapters: the orchestrator uses the
+The state store sits beside the adapters: the operations use the
 `StateStore` protocol and `StoreError`, and only `store.py` imports the
 database driver.
 

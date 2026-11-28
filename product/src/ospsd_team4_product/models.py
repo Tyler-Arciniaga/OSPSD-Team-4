@@ -1,6 +1,6 @@
-"""Request and response bodies of `POST /v1/focus-day`.
+"""Request and response models of `POST /v1/focus-day` and `GET /v1/issue-status`.
 
-The error body extends the HW1 shape (`issue_tracker_contract.errors`):
+The error bodies extend the HW1 shape (`issue_tracker_contract.errors`):
 `error.code` and `error.message` keep their HW1 meaning, and the product adds
 the failed step and whether retrying is useful or a write may have taken
 effect. See product/docs/ERRORS.md.
@@ -153,5 +153,74 @@ class FocusDayErrorResponse(BaseModel):
     created: dict[str, str]
     doc: None = None
     issues_truncated: bool | None
+    failed_step: Step
+    error: FocusDayErrorBody
+
+
+NonBlank = Annotated[str, StringConstraints(pattern=r"\S")]
+
+
+class IssueStatusQuery(_Strict):
+    """Query parameters. The operation checks that exactly one of `issue_id`
+    and `title` is given."""
+
+    issue_id: NonBlank | None = None
+    title: NonBlank | None = None
+    day: IsoDay | None = None
+
+    @field_validator("day")
+    @classmethod
+    def _real_day(cls, value: str) -> str:
+        date.fromisoformat(value)  # rejects e.g. 2026-02-30
+        return value
+
+    def parsed_day(self) -> date | None:
+        return date.fromisoformat(self.day) if self.day is not None else None
+
+
+class IssueModel(BaseModel):
+    issue_id: str
+    title: str
+
+
+class ScheduledModel(BaseModel):
+    start: str
+    end: str
+
+
+class IssueStatusAmbiguous(BaseModel):
+    """200: several titles matched; the client asks which one is meant."""
+
+    status: Literal["ambiguous"]
+    matches: list[IssueModel]
+
+
+class IssueStatusNoPlan(BaseModel):
+    """200: the issue exists, but no saved plan contains it."""
+
+    status: Literal["no_approved_plan"]
+    issue: IssueModel
+
+
+class IssueStatusAnswered(BaseModel):
+    """200: what the owner's saved plan says."""
+
+    status: Literal["answered"]
+    issue: IssueModel
+    owner: str
+    day: date
+    scheduled: ScheduledModel | None
+    remaining_percent: int | None
+    last_planned_day: date
+    passed_without_report: bool
+
+
+IssueStatusResponse = IssueStatusAmbiguous | IssueStatusNoPlan | IssueStatusAnswered
+
+
+class IssueStatusErrorResponse(BaseModel):
+    """A step failed. Nothing was written."""
+
+    status: Literal["failed"]
     failed_step: Step
     error: FocusDayErrorBody
