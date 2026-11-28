@@ -4,7 +4,7 @@
   from the last successful run, used as the form's defaults.
 - `last-focus-day.json`: the request, `plan` and `created` of the last run
   that failed partway, so Retry can send them back as `replay`, even after
-  the app was closed. Deleted after a successful retry.
+  the app was closed. Deleted after any successful run.
 
 These are conveniences for one person on one machine. A missing or unreadable
 file is treated as empty; the API holds no state that depends on them.
