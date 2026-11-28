@@ -124,7 +124,7 @@ Source: `src/ospsd_team4_product/adapters/tracker.py`.
 | any other exception              | provider_error | no                             | no               |
 
 A failed read changes nothing, so `may_have_applied` is always false. An
-unexpected exception is logged with its traceback and reported as "The issue
+unexpected exception is logged by type name only (no traceback or message) and reported as "The issue
 tracker returned an unusable response".
 
 Not an error: the tracker contract returns at most `MAX_LIST_LIMIT` (100)
@@ -320,7 +320,7 @@ The endpoint writes nothing, so `may_have_applied` is always false and a
 request can always be repeated. Each failure is logged as one JSON line
 (`event: issue_status_failed`) with the step, code, HTTP status, flags and
 `cause`, never the message, the query or any provider text. As for
-`list_issues`, an unexpected tracker exception also logs its traceback.
+`list_issues` (and `focus-day`), an unexpected tracker exception logs only its type name.
 
 ### `find_issue` (query and tracker)
 

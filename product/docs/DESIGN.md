@@ -390,7 +390,7 @@ Level 3 agent's job.
    tracker, so a renamed issue shows its current title.
 
 **Owner.** The assignee of the newest saved plan containing the issue, by plan
-day; two plans for the same day give the first assignee alphabetically.
+day; two plans for the same day give the most recently saved one.
 Claims do not exist yet, so this stands in for "who claimed it". Only the
 owner's blocks are reported: another assignee's block on `day` gives
 `scheduled: null`.
