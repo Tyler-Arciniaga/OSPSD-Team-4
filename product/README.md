@@ -2,8 +2,9 @@
 
 `ospsd-team4-product` (import package `ospsd_team4_product`) is our HW3
 product service. Its one operation, `POST /v1/focus-day`, reads issues from
-our tracker, plans focus blocks around the caller's busy times, books them in
-a calendar and writes a standup doc to cloud storage. The tracker is our
+our tracker and proposes focus blocks around the caller's busy times. Once
+the caller confirms that exact plan, it books the blocks in a calendar and
+writes a standup doc to cloud storage. The tracker is our
 Trello package, the calendar is Team 5's Google Calendar package, and the
 storage is Team 3's Dropbox package, each chosen by configuration.
 
@@ -105,21 +106,38 @@ Then, from another shell:
 
 ```sh
 curl -s localhost:8000/readyz
-curl -s -X POST localhost:8000/v1/focus-day -H 'content-type: application/json' \
-  -d '{"assignee": "tyler", "day": "2026-11-19",
+
+BODY='{"assignee": "tyler", "day": "2026-11-19",
        "busy": [{"start": "2026-11-19T12:00:00-05:00", "end": "2026-11-19T13:00:00-05:00"}]}'
+
+# 1. Propose: returns {"status": "proposed", "plan": {...}} and books nothing.
+curl -s -X POST localhost:8000/v1/focus-day -H 'content-type: application/json' \
+  -d "$BODY" | tee proposal.json
+
+# 2. Confirm: the same body plus "confirm": true and the plan from step 1.
+jq -c --argjson body "$BODY" '$body + {confirm: true, approved_plan: .plan}' proposal.json \
+  | curl -s -X POST localhost:8000/v1/focus-day -H 'content-type: application/json' -d @-
 ```
 
-The response lists seven steps (`validate`, `check_doc`, `list_issues`,
-`plan`, `create_events`, `write_standup_doc`, `save_plan`), and the doc is written to
-`/standups/2026-11-19-tyler.md`. The assignee must be lowercase (`a-z`,
+(`jq` only copies the plan into the second body; pasting it by hand works
+too.) The proposal runs `validate`, `check_doc`, `list_issues` and `plan`
+and marks the other steps `skipped`. The confirm lists all seven steps
+(`validate`, `check_doc`, `list_issues`, `plan`, `create_events`,
+`write_standup_doc`, `save_plan`) as `ok`, and the doc is written to
+`/standups/2026-11-19-tyler.md`. If the plan changed in between (for
+example an issue was added to the tracker), the confirm returns 412
+`precondition_failed` on `plan`, books nothing, and carries the new plan to
+review and confirm instead. **A request without `"confirm": true` never
+books anything** (a breaking change in #90: before it, the first call
+booked the day). The assignee must be lowercase (`a-z`,
 `0-9`, `.`, `_`, `-`); anything else is rejected with 422 on the `validate`
 step. The in-memory storage starts with the `/standups` folder; with real
 storage, an operator creates it once
 ([DEPLOYMENT.md, step 3](docs/DEPLOYMENT.md#3-dropbox-team-3s-storage)).
 
-To retry or resume, send the same request with
-`"replay": {"plan": ..., "created": ...}` copied from the response
+To retry or resume a confirmed run, send the same request with
+`"confirm": true` and `"replay": {"plan": ..., "created": ...}` copied from
+the response
 ([DESIGN.md, 4.2](docs/DESIGN.md#replay-not-recompute)). Sending the same
 request again without `replay` once its doc exists returns 412
 `precondition_failed` on `check_doc` and books nothing.
@@ -150,7 +168,7 @@ exact commands.
 | --- | --- |
 | `GET /healthz` | Liveness: the process is serving |
 | `GET /readyz` | Readiness: configuration loaded; reports the deployed commit |
-| `POST /v1/focus-day` | The operation; request, response and errors in [DESIGN.md](docs/DESIGN.md) and [ERRORS.md](docs/ERRORS.md) |
+| `POST /v1/focus-day` | The operation: propose a plan, then confirm it to book it; request, response and errors in [DESIGN.md](docs/DESIGN.md) and [ERRORS.md](docs/ERRORS.md) |
 
 ## Checks
 
@@ -164,8 +182,9 @@ uv run pytest
 ```
 
 The tests use the fakes and need no credentials or network. They include
-the planner, every adapter error mapping, every focus-day failure and
-replay path (including `save_plan`), the startup configuration errors, the
+the planner, every adapter error mapping, propose and confirm (including
+a plan that changed in between), every focus-day failure and replay path
+(including `save_plan`), the startup configuration errors, the
 import boundary (`tests/test_import_boundary.py`) and the post-deploy smoke
 check against the app in process.
 

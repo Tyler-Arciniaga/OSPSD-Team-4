@@ -4,18 +4,23 @@ Run by the product release workflow (.github/workflows/release-product.yml)
 after a deploy. It needs no credentials: the service holds them.
 
 1. Waits for /healthz, then for /readyz to be ready and report the commit.
-2. Calls POST /v1/focus-day, depending on the target:
+2. Calls POST /v1/focus-day, depending on the target. Every booking is two
+   calls: a proposal (no `confirm`), which must book nothing, then a
+   confirm with the proposal's plan as `approved_plan`.
 
    - `fakes` (the disposable service, which runs the in-memory providers):
-     a full run must create one event per block and write the doc; sending
-     the same request again without `replay` must stop at `check_doc` with
-     412 (F5); a replay of the first response must keep every event and
-     skip `check_doc`, `list_issues` and `plan`.
+     the proposal must list blocks and book nothing; a confirm with an
+     edited plan must stop at `plan` with 412 and book nothing; a confirm
+     with the proposed plan must create one event per block and write the
+     doc; sending that confirm again without `replay` must stop at
+     `check_doc` with 412 (F5); a replay of the booked response must keep
+     every event and skip `check_doc`, `list_issues` and `plan`.
    - `live` (production, real providers): the day is fully booked, so the
      plan has no blocks and no calendar event is created. The run still
      reads the real tracker and writes the real doc, and leaves that doc
      in /standups to be removed by hand. The calendar is not exercised: the
-     service has no way to remove an event it creates.
+     service has no way to remove an event it creates. The edited-plan
+     check is skipped: if it wrongly passed, it would book a real event.
 
    A doc that already exists stops a run (F5), so each run, in both modes,
    uses its own assignee, `release-smoke-<commit>-<UTC time>`; re-running
@@ -134,26 +139,62 @@ def _expect_ok(status: int, body: dict[str, Any], what: str) -> None:
         )
 
 
+def _propose(client: Client, request: dict[str, Any], what: str) -> dict[str, Any]:
+    status, body = _post(client, request)
+    if status != 200 or body.get("status") != "proposed":
+        error = body.get("error") or {}
+        raise SmokeError(
+            f"{what}: HTTP {status}, status {body.get('status')!r}, "
+            f"failed step {body.get('failed_step')!r}, code {error.get('code')!r}"
+        )
+    if _steps(body).get("create_events") != "skipped":
+        raise SmokeError(f"{what}: the proposal booked something")
+    return body
+
+
+def _confirmed(request: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
+    return request | {"confirm": True, "approved_plan": plan}
+
+
 def check_fakes(client: Client, assignee: str) -> list[str]:
     request = FAKES_REQUEST | {"assignee": assignee}
-    status, first = _post(client, request)
-    _expect_ok(status, first, "first run")
+    proposal = _propose(client, request, "proposal")
+    plan = proposal["plan"]
+    if not plan["blocks"]:
+        raise SmokeError("proposal: no blocks to book")
+
+    edited = plan | {"blocks": plan["blocks"][:-1]}
+    status, stale = _post(client, _confirmed(request, edited))
+    if status != 412 or stale.get("failed_step") != "plan" or stale["created"]:
+        raise SmokeError(
+            f"edited plan: HTTP {status}, failed step "
+            f"{stale.get('failed_step')!r}, {len(stale.get('created') or {})} events"
+        )
+
+    confirm = _confirmed(request, plan)
+    status, first = _post(client, confirm)
+    _expect_ok(status, first, "confirmed run")
     blocks = first["plan"]["blocks"]
     if not blocks or len(first["created"]) != len(blocks):
         raise SmokeError(
-            f"first run: {len(blocks)} blocks but {len(first['created'])} events"
+            f"confirmed run: {len(blocks)} blocks but {len(first['created'])} events"
         )
+    if first["plan"] != plan:
+        raise SmokeError("confirmed run: the booked plan is not the approved one")
     if first["doc"]["path"] != f"/standups/{FAKES_DAY}-{assignee}.md":
-        raise SmokeError("first run: the doc was written to an unexpected path")
+        raise SmokeError("confirmed run: the doc was written to an unexpected path")
 
-    status, again = _post(client, request)
+    status, again = _post(client, confirm)
     if status != 412 or again.get("failed_step") != "check_doc" or again["created"]:
         raise SmokeError(
             f"same request again: HTTP {status}, failed step "
             f"{again.get('failed_step')!r}, {len(again.get('created') or {})} events"
         )
 
-    replay = request | {"replay": {"plan": first["plan"], "created": first["created"]}}
+    replay = request | {
+        "confirm": True,
+        "replay": {"plan": first["plan"], "created": first["created"]},
+    }
     status, second = _post(client, replay)
     _expect_ok(status, second, "replay")
     if second["created"] != first["created"]:
@@ -161,14 +202,24 @@ def check_fakes(client: Client, assignee: str) -> list[str]:
     if _steps(second).get("list_issues") != "skipped":
         raise SmokeError("replay: list_issues was not skipped")
     return [
-        f"first run: ok, {len(blocks)} blocks, {len(first['created'])} events, doc written",
+        f"proposal: {len(blocks)} blocks, nothing booked",
+        "edited plan: 412, stopped at plan, no events",
+        (
+            f"confirmed run: ok, {len(blocks)} blocks, "
+            f"{len(first['created'])} events, doc written"
+        ),
         "same request again: 412, stopped at check_doc, no events",
         "replay: ok, every event kept, check_doc, list_issues and plan skipped",
     ]
 
 
 def check_live(client: Client, assignee: str) -> list[str]:
-    status, body = _post(client, LIVE_REQUEST | {"assignee": assignee})
+    request = LIVE_REQUEST | {"assignee": assignee}
+    proposal = _propose(client, request, "booked day proposal")
+    if proposal["plan"]["blocks"]:
+        # Confirming would book a real event that nothing removes.
+        raise SmokeError("booked day proposal: the plan has blocks; not confirming")
+    status, body = _post(client, _confirmed(request, proposal["plan"]))
     _expect_ok(status, body, "booked day")
     if body["plan"]["blocks"] or body["created"]:
         raise SmokeError("booked day: a block or event was created")
@@ -176,8 +227,9 @@ def check_live(client: Client, assignee: str) -> list[str]:
         raise SmokeError("booked day: the doc was written to an unexpected path")
     return [
         (
-            f"booked day: ok, tracker read ({len(body['plan']['unscheduled'])} "
-            "issues, none scheduled), no events, doc written"
+            "booked day: proposed then confirmed, tracker read "
+            f"({len(body['plan']['unscheduled'])} issues, none scheduled), "
+            "no events, doc written"
         ),
     ]
 

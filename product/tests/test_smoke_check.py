@@ -6,6 +6,7 @@ it against the deployed service.
 
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 import pytest
@@ -69,13 +70,73 @@ def test_live_mode_creates_no_event(service: Service) -> None:
     assert service.calendar.events == {}
 
 
+def test_live_mode_stops_before_confirming_a_plan_with_blocks(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the day is not fully booked, no real event may be booked."""
+    monkeypatch.setattr(
+        smoke_check, "LIVE_REQUEST", smoke_check.LIVE_REQUEST | {"busy": []}
+    )
+
+    with pytest.raises(smoke_check.SmokeError, match="the plan has blocks"):
+        smoke_check.check_live(service.client, "release-smoke")
+
+    assert service.calendar.failures.calls("create") == 0
+    assert service.storage.files == {}
+
+
 def test_fakes_mode_checks_the_duplicate_run_and_the_replay(service: Service) -> None:
     lines = smoke_check.run(service.client, commit=COMMIT, mode="fakes", sleep=no_wait)
 
     assert "same request again: 412, stopped at check_doc, no events" in lines
     assert service.calendar.failures.calls("create") == 3
     assert service.calendar.failures.calls("get") == 3
-    assert service.tracker.failures.calls("list_issues") == 1
+    # The proposal, the edited-plan confirm and the confirmed run each list
+    # issues once; the duplicate stops at check_doc and the replay skips it.
+    assert service.tracker.failures.calls("list_issues") == 3
+
+
+def test_fakes_mode_checks_the_proposal_and_the_edited_plan(service: Service) -> None:
+    lines = smoke_check.run(service.client, commit=COMMIT, mode="fakes", sleep=no_wait)
+
+    assert lines[1] == "proposal: 3 blocks, nothing booked"
+    assert lines[2] == "edited plan: 412, stopped at plan, no events"
+    assert lines[3].startswith("confirmed run: ok, 3 blocks, 3 events")
+
+
+def test_a_service_that_books_without_confirm_fails_the_check(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Against a service from before #90, which booked on the first call."""
+    booked: dict[str, Any] = {
+        "status": "ok",
+        "steps": [{"name": "create_events", "status": "ok", "error": None}],
+        "plan": {"blocks": [], "unscheduled": []},
+        "created": {"demo-1": "fake-event-1"},
+    }
+    monkeypatch.setattr(smoke_check, "_post", lambda client, body: (200, booked))
+
+    with pytest.raises(smoke_check.SmokeError, match="proposal"):
+        smoke_check.check_fakes(service.client, "release-smoke")
+
+
+def test_a_service_that_ignores_the_approved_plan_fails_the_check(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Against a service that books any `approved_plan` it is sent."""
+    real_post = smoke_check._post
+
+    def ok_on_confirm(
+        client: smoke_check.Client, body: dict[str, Any]
+    ) -> tuple[int, dict[str, Any]]:
+        if body.get("confirm"):
+            return 200, {"status": "ok", "failed_step": None, "created": {"x": "y"}}
+        return real_post(client, body)
+
+    monkeypatch.setattr(smoke_check, "_post", ok_on_confirm)
+
+    with pytest.raises(smoke_check.SmokeError, match="edited plan"):
+        smoke_check.check_fakes(service.client, "release-smoke")
 
 
 def test_a_failing_step_fails_the_check(service: Service) -> None:

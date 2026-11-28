@@ -26,7 +26,8 @@
 #   3. deploy   Point the Render service at <image>@<digest>, deploy, wait
 #               until live, and confirm /readyz reports the commit.
 #   4. smoke    POST /v1/focus-day against the deployed service
-#               (product/scripts/smoke_check.py): a full run and a replay on
+#               (product/scripts/smoke_check.py): propose then confirm, a
+#               rejected edited plan, and a replay on
 #               the in-memory providers for disposable; a fully booked day
 #               (tracker read, doc written, no calendar event) for production.
 #   5. record   The release's GitHub Deployment; success only if smoke passed.

@@ -1,4 +1,18 @@
-"""The focus-day operation: plan, then apply.
+"""The focus-day operation: propose a plan, then book it once approved.
+
+Propose (`confirm` false, the default) runs `validate`, `check_doc`,
+`list_issues` and `plan`, and returns `status: proposed` with the plan. It
+only reads: nothing is booked, written or saved, and the later steps are
+`skipped`.
+
+Confirm (`confirm: true` with `approved_plan`, the proposal's `plan` sent
+back unchanged) runs the same reads, then compares the recomputed plan with
+`approved_plan`. If they differ (the tracker changed, or the caller edited
+the plan), the `plan` step fails with 412 and nothing is written; the error
+body carries the new plan to show the owner. If they match, the later steps
+book exactly what the owner approved. Nothing is kept between the two calls:
+the approved plan travels in the request, so any caller (TUI, agent, curl)
+gets the same rule.
 
 Steps, in order, each run at most once per request:
 
@@ -8,7 +22,7 @@ Steps, in order, each run at most once per request:
    not book a second set of events (F5).
 2. `list_issues`: every issue in the configured tracker collection, up to
    100; `issues_truncated` reports when the limit was reached (F6).
-3. `plan`: the pure planner; no I/O.
+3. `plan`: the pure planner; no I/O. On confirm, also the approval check.
 4. `create_events`: one calendar event per block, in block order. Fails fast
    on the first calendar error; an uncertain create is never retried.
 5. `write_standup_doc`: upsert the doc, only once every event exists.
@@ -20,9 +34,10 @@ Steps, in order, each run at most once per request:
 All input is validated in the `validate` step, before any provider is
 called, so invalid input never has a side effect.
 
-Replay: a retry sends back the earlier response's `plan` and `created`. The
-plan is not recomputed (`check_doc`, `list_issues` and `plan` are skipped): recomputing
-could move blocks, for example once the caller lists our own events as busy.
+Replay (only with `confirm: true`): a retry of a confirmed run sends back
+the earlier response's `plan` and `created`. The plan is not recomputed
+(`check_doc`, `list_issues` and `plan` are skipped): recomputing could move
+blocks, for example once the caller lists our own events as busy.
 For each block with an event ID in `created`, `get` confirms the event still
 exists; only blocks without an event, or whose event is NOT_FOUND, get a new
 one. The doc write is then repeated, which is safe because the same plan
@@ -48,6 +63,7 @@ from ospsd_team4_product.models import (
     DocModel,
     FocusDayErrorBody,
     FocusDayErrorResponse,
+    FocusDayProposal,
     FocusDayRequest,
     FocusDayResponse,
     PlanModel,
@@ -65,6 +81,7 @@ from ospsd_team4_product.planner import (
 from ospsd_team4_product.store import CalendarBlock, StateStore, StoreError
 
 INVALID_REQUEST = "The request is invalid"
+PLAN_CHANGED = "The plan changed since you reviewed it"
 SAVE_FAILED = (
     "Your calendar blocks and standup doc are done, but the plan could not be"
     " saved. Retry with replay to save it."
@@ -76,7 +93,7 @@ class Outcome:
     """The HTTP status and body of one focus-day request."""
 
     status_code: int
-    body: FocusDayResponse | FocusDayErrorResponse
+    body: FocusDayResponse | FocusDayProposal | FocusDayErrorResponse
     # The failed step's internal reason, for logs only (StepError.cause).
     cause: str | None = None
 
@@ -93,6 +110,8 @@ class _Inputs:
     window_end: time
     busy: tuple[BusyInterval, ...]
     minutes: int
+    confirm: bool
+    approved_plan: PlanModel | None
     replay_plan: Plan | None
     replay_created: dict[str, str]
 
@@ -122,6 +141,18 @@ class _Progress:
 
     def done(self, step: Step) -> None:
         self.statuses[step] = "ok"
+
+    def proposal(self) -> Outcome:
+        assert self.plan is not None
+        return Outcome(
+            200,
+            FocusDayProposal(
+                status="proposed",
+                steps=[StepModel(name=s, status=v) for s, v in self.statuses.items()],
+                plan=PlanModel.of(self.plan),
+                issues_truncated=self.issues_truncated,
+            ),
+        )
 
     def success(self, doc: DocModel) -> Outcome:
         assert self.plan is not None
@@ -191,6 +222,31 @@ def rejected_request(details: list[ErrorDetail]) -> Outcome:
     )
 
 
+def _check_approval_fields(request: FocusDayRequest) -> None:
+    """How `confirm`, `approved_plan` and `replay` may combine; raise
+    PlanInputError otherwise.
+
+    Only a confirmed request writes anything, so a request that looks like
+    it means to book (it carries `approved_plan` or `replay`) but is not
+    confirmed is rejected rather than quietly treated as a proposal.
+    """
+    if request.replay is not None:
+        if not request.confirm:
+            raise PlanInputError("confirm", "must be true to replay a booked run")
+        if request.approved_plan is not None:
+            raise PlanInputError(
+                "approved_plan", "must not be sent with replay; replay.plan is used"
+            )
+    elif request.confirm and request.approved_plan is None:
+        raise PlanInputError(
+            "approved_plan", "is required with confirm: send the proposal's plan"
+        )
+    elif not request.confirm and request.approved_plan is not None:
+        raise PlanInputError(
+            "approved_plan", "is only used with confirm: true; nothing was booked"
+        )
+
+
 def _replay_plan(request: FocusDayRequest) -> tuple[Plan | None, dict[str, str]]:
     """Check a replayed plan by the planner's own rules; raise PlanInputError."""
     if request.replay is None:
@@ -210,7 +266,31 @@ def _replay_plan(request: FocusDayRequest) -> tuple[Plan | None, dict[str, str]]
             raise PlanInputError(
                 "replay.created", "names an issue with no block in replay.plan"
             )
+    # Replay skips the approval check, so it only resumes a run that booked
+    # something; with no event yet, propose and confirm again. A plan with
+    # no blocks books no event, so its doc and save can still be replayed.
+    if plan.blocks and not request.replay.created:
+        raise PlanInputError(
+            "replay.created",
+            "is empty, so nothing was booked: confirm the plan instead of replaying",
+        )
     return plan, dict(request.replay.created)
+
+
+def _check_approved(plan: Plan, approved: PlanModel | None) -> None:
+    """Fail the `plan` step unless `plan` is exactly the approved plan.
+
+    The whole plan is compared, blocks and unscheduled issues in order: a
+    moved, removed or added block, a new issue, or an edited title all mean
+    the owner did not see what would be booked.
+    """
+    if PlanModel.of(plan) != approved:
+        raise StepError(
+            "plan",
+            ErrorCode.PRECONDITION_FAILED,
+            PLAN_CHANGED,
+            cause="plan_changed",
+        )
 
 
 class FocusDay:
@@ -241,6 +321,10 @@ class FocusDay:
                 progress.issues_truncated = listed.truncated
                 progress.done("list_issues")
                 progress.plan = self._plan(listed.issues, inputs)
+                if not inputs.confirm:
+                    progress.done("plan")
+                    return progress.proposal()
+                _check_approved(progress.plan, inputs.approved_plan)
                 progress.done("plan")
             else:
                 progress.plan = inputs.replay_plan
@@ -288,11 +372,14 @@ class FocusDay:
                     BusyInterval(start=b.start, end=b.end) for b in request.busy
                 ),
                 minutes=request.default_minutes or config.default_minutes,
+                confirm=request.confirm,
+                approved_plan=request.approved_plan,
                 replay_plan=None,
                 replay_created={},
             )
             # With no issues, the planner only validates its input.
             inputs.plan([])
+            _check_approval_fields(request)
             replay_plan, replay_created = _replay_plan(request)
         except PlanInputError as exc:
             raise _invalid(exc) from None

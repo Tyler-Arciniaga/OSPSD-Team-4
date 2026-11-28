@@ -8,7 +8,7 @@
 
 #### Status: Implemented (HW3 Milestone 1); review follow-ups F1 to F6 implemented, F7 planned ([Follow-up work](#follow-up-work-from-design-review))
 
-#### Last Update Date: 11/23/2026
+#### Last Update Date: 11/24/2026
 
 #### Relevant Links
 
@@ -28,13 +28,19 @@
 ## Overview
 
 `ospsd-team4-product` is a separate service, in the same repository as our
-HW2 issue service, with one operation: `POST /v1/focus-day`. Given an
-assignee, a day and the times they are busy, it:
+HW2 issue service, with one operation: `POST /v1/focus-day`. It is called
+twice for each day ([Propose, then confirm](#propose-then-confirm), #90):
+first to **propose** a plan, which books nothing, and then, once the owner
+has approved that plan, to **confirm** it. Given an assignee, a day and the
+times they are busy, it:
 
 1. checks that no standup doc exists yet for that assignee and day, so the
    same request sent twice does not book the day twice (F5),
 2. reads the issues in our tracker (our Trello implementation),
-3. plans one focus block per issue in the available free time,
+3. plans one focus block per issue in the available free time. A proposal
+   stops here and returns the plan with `status: proposed`. A confirm
+   checks that the plan still equals the `approved_plan` it was sent, and
+   books nothing if it does not,
 4. books each block in a calendar (i.e. Team 5's Google Calendar implementation),
 5. writes a standup doc listing the plan to cloud storage (i.e. Team 3's Dropbox
    implementation),
@@ -75,7 +81,8 @@ caller sends, and conflict avoidance is only as good as that list.
 
 ```
 Caller
-  |  POST /v1/focus-day  {assignee, day, timezone, working_window, busy, default_minutes, replay}
+  |  POST /v1/focus-day  {assignee, day, timezone, working_window, busy, default_minutes,
+  |                       confirm, approved_plan, replay}
   v
 main.py  (schema validation, HW1-shaped errors, failure log line)
   |
@@ -87,13 +94,16 @@ orchestrator.FocusDay.run
   |-- 1. list_issues --------> TrackerAdapter  --> IssueProvider    (issue-tracker-contract v1.1.0)
   |                                                 '-> team_4_issue_tracker_trello  -> Trello REST
   |-- 2. plan ---------------> planner.plan_day    (pure function, no I/O)
+  |        no confirm:  return status "proposed" with the plan (nothing below runs)
+  |        confirm:     412 unless the plan equals approved_plan
   |-- 3. create_events ------> CalendarAdapter --> CalendarService  (calendar-contract v0.1.0)
   |                                                 '-> team5_calendar  -> Google Calendar, primary calendar
   |-- 4. write_standup_doc --> StorageAdapter  --> DocumentStorage  (cloud-storage-api 0.3.1)
   |                                                 '-> dropbox_client_impl  -> Dropbox
   |-- 5. save_plan ----------> StateStore      --> PostgresStateStore -> Postgres (shared by all instances)
   v
-6. response: status, steps (7 in total, validate first), plan, created, doc, issues_truncated  (or the error body with failed_step details)
+6. response: status (proposed or ok), steps (7 in total, validate first), plan, issues_truncated,
+   and on ok also created, doc  (or the error body with failed_step details)
 
 Startup (lifespan): config.py resolves *_PROVIDER paths and checks STATE_DB_URL -> factories.py
 builds the three providers once and connects to the state database (creating its tables) -> any
@@ -109,7 +119,12 @@ the `save_plan` step ([#85](https://github.com/Tyler-Arciniaga/OSPSD-Team-4/issu
 so it shows four steps; a run today ends with a fifth,
 `{"name": "save_plan", "status": "ok", "error": null}`, after which
 the three blocks and their event IDs are tyler's approved plan for
-2026-11-19.
+2026-11-19. It also predates propose and confirm (#90). Today the same
+request first returns the three blocks below with `status: proposed`
+and steps 3 onward `skipped`; the run traced here is the
+second call, the same body plus `"confirm": true` and that `plan` as
+`"approved_plan"`, whose `plan` step also checks the recomputed plan
+equals it.
 
 **Request**
 
@@ -227,8 +242,11 @@ None.
 }
 ```
 
-- `status` is `ok` only when every step finished. A failure returns the
-  error body instead, with `partial` or `failed` (4.3).
+- `status` is `ok` only when every step of a confirmed request finished.
+  A proposal returns only `status: proposed`, `steps`, `plan` and
+  `issues_truncated`, with `create_events`, `write_standup_doc` and
+  `save_plan` `skipped`. A failure returns the error body instead, with `partial` or
+  `failed` (4.3).
 - `steps` always lists every step in order. Each is `ok`, `failed` or
   `skipped`, and `error` is set only on the step that failed. On a replay,
   `check_doc`, `list_issues` and `plan` are `skipped`. This run, recorded
@@ -254,6 +272,51 @@ None.
 
 Contract quotes are from `calendar-contract` `v0.1.0`
 (`calendar_contract/service.py`).
+
+### Propose, then confirm
+
+- **Constraint:** the RFD's first key scenario has the developer approve
+  the plan before anything is created, and its Proposal says "nothing
+  changes on the tracker, calendar or in storage until the owner confirms
+  the specific plan". Every client (the TUI, the Level 3 agent, `curl`)
+  must be held to that, not just one of them.
+- **Approach:** the endpoint takes `confirm` (default `false`) and
+  `approved_plan`. Without `confirm` it runs only the reads (`validate`,
+  `check_doc`, `list_issues`, `plan`) and returns `status: proposed` with
+  the plan. With `confirm: true` it runs the same reads, recomputes the
+  plan from the same request, and books only if the result equals
+  `approved_plan`, blocks and unscheduled issues alike, in order.
+  Otherwise the `plan` step fails with 412 `precondition_failed` ("The
+  plan changed since you reviewed it"), nothing is written, and the error
+  body's `plan` is the new plan to show the owner. `replay` needs
+  `confirm: true`, since only a confirmed run can have booked anything,
+  and, when its plan has blocks, a non-empty `created`: replay skips the
+  approval check, so it only resumes a run that booked at least one event.
+  `check_doc` runs on the proposal too, so a day that is already booked is
+  reported before anyone reviews a plan that cannot be booked.
+- **Alternatives:**
+  - *Ask for approval only in the TUI.* Rejected: it puts a product rule in
+    one client, and any other caller could skip it.
+  - *Store proposals server-side under an ID.* Rejected, as for `POST
+    /v1/progress` (#86): sending the plan back keeps the instances
+    stateless (a proposal from one instance can be confirmed on another,
+    `tests/test_multi_instance.py`) and still books nothing the owner was
+    not shown.
+- **Tradeoff:** a booking is two calls and reads the tracker and storage
+  twice. In return, approval needs no new storage and no expiry rules,
+  and an approved plan that has gone stale (an issue added or closed in
+  between, a block edited by the caller) is caught rather than booked.
+  Editing blocks before approving (the RFD's "edit individual blocks in
+  plain language") is not supported yet: any edit is a mismatch. It needs
+  the Level 3 agent.
+- **Evidence:** `tests/test_focus_day.py` (Propose and Confirm sections):
+  a proposal leaves the fake calendar, storage and state store empty; an
+  edited time, a removed block, an edited title, a reordering and an issue
+  added or closed on the tracker are each rejected with 412 and write
+  nothing. The release smoke check confirms an edited plan against the
+  deployed service and expects 412.
+- **Revisit when:** blocks can be edited before approval; then the
+  confirm step must accept the owner's edits instead of an exact match.
 
 ### Caller-held state
 
@@ -332,8 +395,8 @@ Contract quotes are from `calendar-contract` `v0.1.0`
 
   Focus-day saves its plan in a fifth step, `save_plan`, only after every
   other step succeeded, so the store never holds a draft ("answer only from
-  approved plans"). Until focus-day has its own approval step, a fully
-  booked plan counts as approved. Every write is an upsert in one
+  approved plans"). The plan saved is the one the owner confirmed
+  ([Propose, then confirm](#propose-then-confirm)). Every write is an upsert in one
   transaction, and uniqueness and ranges are database constraints, so
   concurrent requests on different instances converge on one row. Tables
   are created at startup if missing (under an advisory lock, so instances
@@ -442,6 +505,10 @@ environment variables and one mounted secret file:
    exists, or if storage cannot say whether it does (F5).
 9. Only a run whose every other step succeeded saves a plan, and a plan is
    saved whole or not at all.
+10. Nothing is booked, written or saved without `confirm: true`, and a
+    confirmed request books only a plan equal to its `approved_plan` (or,
+    on replay, its `replay.plan`, which must name at least one booked
+    event unless it has no blocks) (#90).
 
 ## 4.3 Failure modes
 
@@ -450,12 +517,17 @@ Every failure response has the body described in
 HW1 code and status, `retryable`, `may_have_applied`, and the `plan` and
 `created` known so far. `status` is `partial` if any event exists, otherwise
 `failed`. "Replay" below means sending the same request with
-`replay: {plan, created}` copied from the response.
+`"confirm": true` and `replay: {plan, created}` copied from the response.
+Rows from "Same request sent again" down describe the confirm call; a
+failure of a read step during the proposal has the same body.
 
 | Case | HTTP, status | What exists afterwards | What the caller should do | Test |
 | --- | --- | --- | --- | --- |
 | Invalid input (bad zone, window, busy interval, assignee including upper case (F1), or replay plan) | 422 `invalid_input`, `failed`, step `validate` (F3) | Nothing: rejected before any provider call | Fix the field named in `error.details` | `test_invalid_input_is_rejected_before_any_call`, `test_invalid_replay_is_rejected_before_any_call` |
-| Same request sent again without `replay` after a run that wrote its doc (for example after a timeout or a lost response) | 412 `precondition_failed`, `failed`, step `check_doc`, not retryable (F5) | Nothing new: no tracker read, no event, the earlier doc untouched | Replay with the earlier response, or remove the earlier events and doc by hand to plan the day again | `test_same_request_again_is_rejected_before_any_event`, `test_a_doc_written_by_anyone_stops_the_run` |
+| `confirm: true` without `approved_plan`, `replay` without `confirm: true`, `approved_plan` without `confirm: true` or together with `replay`, or a `confirm` that is not a JSON boolean | 422 `invalid_input`, `failed`, step `validate`, detail on `approved_plan` or `confirm` (#90) | Nothing | Send the proposal's plan as `approved_plan` with `confirm: true` | `test_confirm_without_approved_plan_is_rejected`, `test_replay_without_confirm_is_rejected`, `test_invalid_approval_fields_are_rejected` |
+| Proposal (no `confirm`) | 200, `proposed` | Nothing: no event, doc or saved plan | Show the plan; confirm it to book | `test_a_request_without_confirm_is_a_proposal`, `test_a_proposal_books_writes_and_saves_nothing` |
+| The plan changed between proposal and confirm (an issue added or closed on the tracker, or the caller edited `approved_plan`) | 412 `precondition_failed`, `failed`, step `plan`, not retryable (#90) | Nothing: checked before the first write. The body's `plan` is the new plan | Show the new plan, and confirm that one if the owner approves it | `test_an_edited_approved_plan_is_rejected`, `test_an_issue_added_after_the_proposal_is_rejected`, `test_the_plan_in_a_412_can_be_reviewed_and_confirmed` |
+| Same request sent again without `replay` after a run that wrote its doc (for example after a timeout or a lost response), or a new proposal for that day | 412 `precondition_failed`, `failed`, step `check_doc`, not retryable (F5) | Nothing new: no tracker read, no event, the earlier doc untouched | Replay with the earlier response, or remove the earlier events and doc by hand to plan the day again | `test_same_request_again_is_rejected_before_any_event`, `test_proposing_a_booked_day_is_rejected`, `test_a_doc_written_by_anyone_stops_the_run` |
 | Same request sent again without `replay` after a run that failed before writing its doc | 200 `ok` (not caught: there is no doc to find) | A second set of events for the blocks the first run booked | Replay instead; if it was sent anyway, remove the duplicate events by hand | Known gap (F5), documented in ERRORS.md |
 | Two runs for the same assignee and day at the same time | Both pass `check_doc` | Two sets of events; the doc lists the later run's | Do not run concurrently; remove the duplicates by hand | Known gap (F5) |
 | Storage fails during `check_doc` | Storage's code (for example 502 `provider_error`, retryable), `failed`, step `check_doc`, `may_have_applied: false` | Nothing: fails closed, before the tracker or calendar are called | Retry the same request later if `retryable` | `test_doc_check_failure_books_nothing`, `test_check_failures_are_reads_that_applied_nothing` |
@@ -464,9 +536,9 @@ HW1 code and status, `retryable`, `may_have_applied`, and the `plan` and
 | Tracker fails | Tracker's code (for example 502 `provider_error`, retryable), `failed`, step `list_issues` | Nothing | Retry the same request later if `retryable` | `test_tracker_failure`, `test_unexpected_tracker_exception_does_not_leak` |
 | Partial fit: some issues do not fit | 200, `ok` | All fitting blocks booked, doc written; the rest in `plan.unscheduled` with `no_free_slot` | Nothing; not an error | `test_partial_fit_is_a_success` |
 | Calendar fails on the first block | 502 `provider_error` (or another mapped code), `failed`, step `create_events` | No events, no doc | Replay if `retryable` | Same path as the next row with an empty `created`; `status` is `failed` because no event exists |
-| Calendar fails on block k of n | 502 `provider_error`, `partial` | Blocks 1 to k-1 booked and in `created`; no doc | Replay: existing events are kept, only the missing ones are created, then the doc is written | `test_calendar_failure_on_block_two_of_three`, `test_replay_after_a_calendar_failure_creates_only_the_missing_events` |
+| Calendar fails on block k of n | 502 `provider_error`, `partial` | Blocks 1 to k-1 booked and in `created`; no doc | Replay: existing events are kept, only the missing ones are created, then the doc is written. If k is 1, `created` is empty and nothing was booked: confirm again instead | `test_calendar_failure_on_block_two_of_three`, `test_replay_after_a_calendar_failure_creates_only_the_missing_events`, `test_a_run_that_booked_nothing_is_confirmed_again_not_replayed` |
 | Uncertain create | 502 `provider_error`, `may_have_applied: true`, not retryable | Events before it in `created`; this one may exist with no known ID | Check the calendar first. Replaying anyway can create a duplicate | `test_uncertain_create_is_reported_and_not_retried` |
-| Calendar token missing, expired or revoked | 503 `service_not_configured`, step `create_events` | Nothing new | Operator re-authorizes and replaces the secret file (DEPLOYMENT.md, step 2); then replay | `test_expired_calendar_token_is_a_configuration_failure` |
+| Calendar token missing, expired or revoked | 503 `service_not_configured`, step `create_events` | Nothing new | Operator re-authorizes and replaces the secret file (DEPLOYMENT.md, step 2); then replay, or confirm again if `created` is empty | `test_expired_calendar_token_is_a_configuration_failure` |
 | Doc write fails after all events exist | Storage's code (for example 502 `provider_error`, `retryable: true` (F4)), `partial`, step `write_standup_doc` | Every event booked and in `created`; no doc, or possibly the doc (`may_have_applied`), which is harmless because rewriting it gives the same bytes | Replay: every event is confirmed with `get`, none recreated, and only the doc is written | `test_doc_failure_after_events_is_partial`, `test_replay_after_a_doc_failure_only_writes_the_doc` |
 | Doc folder missing (the operator has not created it) | 503 `service_not_configured`, `partial`, step `write_standup_doc`, not retryable (F2) | Every event booked and in `created`; no doc | Operator creates the folder (DEPLOYMENT.md, step 3); then replay | `test_missing_doc_folder_is_a_configuration_failure` |
 | Doc write fails with no events (empty plan) | Storage's code, `failed` | Nothing | Replay or retry | `test_storage_failure_with_no_events_is_failed` |
@@ -510,6 +582,11 @@ faulty release created; they have to be removed by hand
   can still book a day twice. A run record in storage (Team 3's
   alternative in 4.2) would close both gaps.
 - No caller authentication until Level 4 (F7).
+- A proposal cannot be edited before it is confirmed (#90): any change to
+  `approved_plan` is a 412. Editing blocks in plain language is left to
+  the Level 3 agent. Approval proves only that the caller sent back the
+  plan it was shown; without authentication (F7) it does not prove who
+  approved it.
 - **The free state database is temporary.** Render's free Postgres
   [expires 30 days after creation](https://render.com/docs/free), and is
   deleted after a further 14-day grace period unless it is upgraded to a

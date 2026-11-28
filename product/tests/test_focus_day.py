@@ -2,9 +2,12 @@
 
 The fakes are chosen through the same *_PROVIDER variables as the real
 providers, and failures are injected per step through each fake's
-FailureSchedule.
+FailureSchedule. A booking is two calls, propose then confirm
+(`Service.book`); a failure meant for the confirm call is injected between
+the two (`Service.propose`, then `Service.confirm`).
 """
 
+import copy
 from collections.abc import Iterator
 from datetime import date
 from typing import Any
@@ -75,6 +78,21 @@ class Service:
     def post(self, body: dict[str, Any]) -> Any:
         return self.client.post("/v1/focus-day", json=body)
 
+    def propose(self, body: dict[str, Any]) -> Any:
+        """Send `body` without `confirm`; it must come back as a proposal."""
+        response = self.post(body)
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "proposed"
+        return response
+
+    def confirm(self, body: dict[str, Any], plan: dict[str, Any]) -> Any:
+        """Send `body` again, confirming `plan`."""
+        return self.post(confirmed(body, plan))
+
+    def book(self, body: dict[str, Any]) -> Any:
+        """Propose, then confirm the proposed plan unchanged."""
+        return self.confirm(body, self.propose(body).json()["plan"])
+
 
 @pytest.fixture
 def service(monkeypatch: pytest.MonkeyPatch) -> Iterator[Service]:
@@ -84,9 +102,17 @@ def service(monkeypatch: pytest.MonkeyPatch) -> Iterator[Service]:
         yield Service(client)
 
 
+def confirmed(body: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
+    """The confirm request for a proposal of `body` whose plan was `plan`."""
+    return body | {"confirm": True, "approved_plan": plan}
+
+
 def replay_of(body: dict[str, Any]) -> dict[str, Any]:
     """The request a caller sends to retry: the same input plus `replay`."""
-    return REQUEST | {"replay": {"plan": body["plan"], "created": body["created"]}}
+    return REQUEST | {
+        "confirm": True,
+        "replay": {"plan": body["plan"], "created": body["created"]},
+    }
 
 
 def statuses(body: dict[str, Any]) -> dict[str, str]:
@@ -97,7 +123,7 @@ def statuses(body: dict[str, Any]) -> dict[str, str]:
 
 
 def test_success_books_every_block_and_writes_the_doc(service: Service) -> None:
-    response = service.post(REQUEST)
+    response = service.book(REQUEST)
 
     assert response.status_code == 200
     body = response.json()
@@ -153,7 +179,7 @@ def test_success_books_every_block_and_writes_the_doc(service: Service) -> None:
 
 
 def test_partial_fit_is_a_success(service: Service) -> None:
-    response = service.post(REQUEST | {"busy": [], "default_minutes": 240})
+    response = service.book(REQUEST | {"busy": [], "default_minutes": 240})
 
     assert response.status_code == 200
     body = response.json()
@@ -185,7 +211,7 @@ def test_more_than_100_issues_plans_the_newest_100_and_says_so(
         Issue(id=f"issue-{n:03}", title=f"Issue {n}") for n in range(130)
     ]
 
-    response = service.post(REQUEST | {"busy": [], "default_minutes": 1})
+    response = service.book(REQUEST | {"busy": [], "default_minutes": 1})
 
     assert response.status_code == 200
     body = response.json()
@@ -207,20 +233,364 @@ def test_truncation_is_reported_on_a_failure_after_list_issues(
         CalendarError(CalendarCode.PROVIDER_UNAVAILABLE, "down", retryable=True),
     )
 
-    body = service.post(REQUEST).json()
+    body = service.book(REQUEST).json()
 
     assert body["failed_step"] == "create_events"
     assert body["issues_truncated"] is True
+
+
+# Propose: reads only, books nothing
+
+
+READ_STEPS_OK = {
+    "validate": "ok",
+    "check_doc": "ok",
+    "list_issues": "ok",
+    "plan": "ok",
+    "create_events": "skipped",
+    "write_standup_doc": "skipped",
+    "save_plan": "skipped",
+}
+
+
+def assert_nothing_written(service: Service) -> None:
+    assert service.calendar.events == {}
+    assert service.calendar.failures.calls("create") == 0
+    assert service.storage.files == {}
+    assert service.store.get_plan("tyler", DAY) is None
+    assert service.store.failures.calls("save_plan") == 0
+
+
+def test_a_request_without_confirm_is_a_proposal(service: Service) -> None:
+    response = service.post(REQUEST)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "proposed"
+    assert statuses(body) == READ_STEPS_OK
+    assert all(step["error"] is None for step in body["steps"])
+    assert [block["issue_id"] for block in body["plan"]["blocks"]] == [
+        "demo-1",
+        "demo-2",
+        "demo-3",
+    ]
+    assert body["plan"]["blocks"][0]["start"] == "2026-11-18T11:00:00-05:00"
+    assert body["issues_truncated"] is False
+    assert set(body) == {"status", "steps", "plan", "issues_truncated"}
+
+
+def test_confirm_false_is_a_proposal(service: Service) -> None:
+    body = service.post(REQUEST | {"confirm": False}).json()
+
+    assert body["status"] == "proposed"
+
+
+def test_a_proposal_books_writes_and_saves_nothing(service: Service) -> None:
+    service.propose(REQUEST)
+
+    assert_nothing_written(service)
+
+
+def test_two_identical_proposals_are_identical(service: Service) -> None:
+    first = service.propose(REQUEST).json()
+    second = service.propose(REQUEST).json()
+
+    assert second == first
+    assert_nothing_written(service)
+
+
+def test_a_proposal_reports_truncation(service: Service) -> None:
+    service.tracker.issues = [
+        Issue(id=f"issue-{n:03}", title=f"Issue {n}") for n in range(130)
+    ]
+
+    body = service.propose(REQUEST | {"busy": [], "default_minutes": 1}).json()
+
+    assert body["issues_truncated"] is True
+
+
+def test_a_failed_proposal_writes_nothing(service: Service) -> None:
+    service.tracker.failures.fail(
+        "list_issues",
+        ServiceError(ErrorCode.PROVIDER_ERROR, "The issue tracker is unavailable"),
+    )
+
+    response = service.post(REQUEST)
+
+    assert response.status_code == 502
+    assert response.json()["failed_step"] == "list_issues"
+    assert_nothing_written(service)
+
+
+# Confirm: books exactly the approved plan
+
+
+def test_confirming_the_proposed_plan_books_it(service: Service) -> None:
+    approved = service.propose(REQUEST).json()["plan"]
+
+    response = service.confirm(REQUEST, approved)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert set(statuses(body).values()) == {"ok"}
+    assert body["plan"] == approved
+    # The events, the doc and the saved plan are the approved blocks.
+    events = [
+        service.calendar.events[body["created"][b["issue_id"]]]
+        for b in approved["blocks"]
+    ]
+    assert [(e.title, e.start, e.end) for e in events] == [
+        (f"Focus: {b['title']}", b["start"], b["end"]) for b in approved["blocks"]
+    ]
+    assert len(service.calendar.events) == len(approved["blocks"])
+    doc = service.storage.files[DOC_PATH].decode()
+    for block in approved["blocks"]:
+        assert f"`{block['issue_id']}` {block['title']}" in doc
+    saved = service.store.get_plan("tyler", DAY)
+    assert saved is not None
+    assert [(b.issue_id, b.title, b.start, b.end) for b in saved] == [
+        (b["issue_id"], b["title"], b["start"], b["end"]) for b in approved["blocks"]
+    ]
+    assert saved == saved_blocks(body)
+
+
+def test_confirming_a_plan_with_unscheduled_issues(service: Service) -> None:
+    request = REQUEST | {"busy": [], "default_minutes": 240}
+    approved = service.propose(request).json()["plan"]
+    assert approved["unscheduled"] == [{"issue_id": "demo-3", "reason": "no_free_slot"}]
+
+    body = service.confirm(request, approved).json()
+
+    assert body["status"] == "ok"
+    assert body["plan"] == approved
+
+
+def test_confirm_without_approved_plan_is_rejected(service: Service) -> None:
+    assert_rejected(service, REQUEST | {"confirm": True}, "approved_plan")
+    assert_nothing_written(service)
+
+
+def _edit_first_block_time(plan: dict[str, Any]) -> None:
+    plan["blocks"][0]["start"] = "2026-11-18T11:30:00-05:00"
+
+
+def _remove_last_block(plan: dict[str, Any]) -> None:
+    plan["blocks"].pop()
+
+
+def _edit_first_block_title(plan: dict[str, Any]) -> None:
+    plan["blocks"][0]["title"] = "Something else"
+
+
+def _reorder_blocks(plan: dict[str, Any]) -> None:
+    plan["blocks"].reverse()
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        _edit_first_block_time,
+        _remove_last_block,
+        _edit_first_block_title,
+        _reorder_blocks,
+    ],
+)
+def test_an_edited_approved_plan_is_rejected(service: Service, edit: Any) -> None:
+    proposed = service.propose(REQUEST).json()["plan"]
+    approved = copy.deepcopy(proposed)
+    edit(approved)
+
+    response = service.confirm(REQUEST, approved)
+
+    assert_plan_changed(service, response, proposed)
+
+
+def test_an_issue_added_after_the_proposal_is_rejected(service: Service) -> None:
+    approved = service.propose(REQUEST).json()["plan"]
+    service.tracker.issues.append(Issue(id="demo-4", title="A new issue"))
+
+    response = service.confirm(REQUEST, approved)
+
+    current = service.propose(REQUEST).json()["plan"]
+    assert "demo-4" in [block["issue_id"] for block in current["blocks"]]
+    assert_plan_changed(service, response, current)
+
+
+def test_an_issue_closed_after_the_proposal_is_rejected(service: Service) -> None:
+    approved = service.propose(REQUEST).json()["plan"]
+    service.tracker.issues = service.tracker.issues[:2]
+
+    response = service.confirm(REQUEST, approved)
+
+    assert_plan_changed(service, response, service.propose(REQUEST).json()["plan"])
+
+
+def test_an_unscheduled_issue_added_after_the_proposal_is_rejected(
+    service: Service,
+) -> None:
+    """A new issue that does not fit still changes what the owner approved."""
+    request = REQUEST | {"busy": [], "default_minutes": 240}
+    approved = service.propose(request).json()["plan"]
+    service.tracker.issues.append(Issue(id="demo-4", title="A new issue"))
+
+    response = service.confirm(request, approved)
+
+    assert response.status_code == 412
+    assert response.json()["plan"]["blocks"] == approved["blocks"]
+    assert_nothing_written(service)
+
+
+def test_the_plan_in_a_412_can_be_reviewed_and_confirmed(service: Service) -> None:
+    approved = service.propose(REQUEST).json()["plan"]
+    service.tracker.issues.append(Issue(id="demo-4", title="A new issue"))
+    rejected = service.confirm(REQUEST, approved).json()
+
+    body = service.confirm(REQUEST, rejected["plan"]).json()
+
+    assert body["status"] == "ok"
+    assert "demo-4" in body["created"]
+
+
+def test_the_plan_in_a_412_cannot_be_replayed(service: Service) -> None:
+    """Replay skips the approval check, so it must not book the new plan."""
+    approved = service.propose(REQUEST).json()["plan"]
+    service.tracker.issues.append(Issue(id="demo-4", title="A new issue"))
+    rejected = service.confirm(REQUEST, approved).json()
+
+    assert_replay_refused(service, replay_of(rejected))
+    assert_nothing_written(service)
+
+
+def test_a_run_that_booked_nothing_is_confirmed_again_not_replayed(
+    service: Service,
+) -> None:
+    service.calendar.failures.fail(
+        "create",
+        CalendarError(CalendarCode.PROVIDER_UNAVAILABLE, "down", retryable=True),
+    )
+    first = service.book(REQUEST).json()
+    assert first["failed_step"] == "create_events"
+    assert first["created"] == {}
+
+    assert_replay_refused(service, replay_of(first))
+    body = service.book(REQUEST).json()
+
+    assert body["status"] == "ok"
+    assert len(body["created"]) == len(body["plan"]["blocks"]) == 3
+
+
+def test_a_plan_with_no_blocks_can_be_replayed_with_no_events(
+    service: Service,
+) -> None:
+    """A booked day has no event to name, so its save can still be retried."""
+    request = REQUEST | {
+        "busy": [
+            {"start": "2026-11-18T00:00:00-05:00", "end": "2026-11-19T00:00:00-05:00"}
+        ]
+    }
+    service.store.failures.fail("save_plan", StoreError("down"))
+    first = service.book(request).json()
+    assert first["failed_step"] == "save_plan"
+    assert first["plan"]["blocks"] == []
+
+    body = service.post(replay_of(first) | {"busy": request["busy"]}).json()
+
+    assert body["status"] == "ok"
+    assert service.store.get_plan("tyler", DAY) == ()
+
+
+def assert_replay_refused(service: Service, body: dict[str, Any]) -> None:
+    """A 422 on `replay.created`, with no provider called for it."""
+    reads = service.tracker.failures.calls("list_issues")
+    creates = service.calendar.failures.calls("create")
+    response = service.post(body)
+
+    assert response.status_code == 422
+    result = response.json()
+    assert result["failed_step"] == "validate"
+    assert [d["field"] for d in result["error"]["details"]] == ["replay.created"]
+    assert service.tracker.failures.calls("list_issues") == reads
+    assert service.calendar.failures.calls("create") == creates
+
+
+def assert_plan_changed(service: Service, response: Any, current: Any) -> None:
+    """A 412 on `plan`, carrying the recomputed plan, with nothing written."""
+    assert response.status_code == 412
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["failed_step"] == "plan"
+    assert body["error"] == {
+        "code": "precondition_failed",
+        "message": "The plan changed since you reviewed it",
+        "details": None,
+        "step": "plan",
+        "retryable": False,
+        "may_have_applied": False,
+    }
+    assert statuses(body) == READ_STEPS_OK | {"plan": "failed"}
+    assert body["plan"] == current
+    assert body["created"] == {}
+    assert body["doc"] is None
+    assert_nothing_written(service)
+
+
+# How confirm, approved_plan and replay combine
+
+
+def test_replay_without_confirm_is_rejected(service: Service) -> None:
+    first = service.book(REQUEST).json()
+    replay = replay_of(first)
+    del replay["confirm"]
+    events = dict(service.calendar.events)
+    gets = service.calendar.failures.calls("get")
+
+    response = service.post(replay)
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["failed_step"] == "validate"
+    assert [d["field"] for d in body["error"]["details"]] == ["confirm"]
+    assert service.calendar.events == events
+    assert service.calendar.failures.calls("get") == gets
+
+
+@pytest.mark.parametrize(
+    ("change", "field"),
+    [
+        ({"approved_plan": {"blocks": [], "unscheduled": []}}, "approved_plan"),
+        (
+            {
+                "confirm": True,
+                "approved_plan": {"blocks": [], "unscheduled": []},
+                "replay": {"plan": {"blocks": [], "unscheduled": []}},
+            },
+            "approved_plan",
+        ),
+        ({"confirm": "yes"}, "confirm"),
+        ({"confirm": 1}, "confirm"),
+        (
+            {"confirm": True, "approved_plan": {"blocks": []}},
+            "approved_plan.unscheduled",
+        ),
+    ],
+)
+def test_invalid_approval_fields_are_rejected(
+    service: Service, change: dict[str, Any], field: str
+) -> None:
+    assert_rejected(service, REQUEST | change, field)
+    assert_nothing_written(service)
 
 
 # The same request sent again without `replay` (F5)
 
 
 def test_same_request_again_is_rejected_before_any_event(service: Service) -> None:
-    first = service.post(REQUEST).json()
+    first = service.book(REQUEST).json()
     doc = service.storage.files[DOC_PATH]
+    listed = service.tracker.failures.calls("list_issues")
 
-    response = service.post(REQUEST)
+    response = service.confirm(REQUEST, first["plan"])
 
     assert response.status_code == 412
     body = response.json()
@@ -252,30 +622,47 @@ def test_same_request_again_is_rejected_before_any_event(service: Service) -> No
     # Only run 1's events exist, and its doc is untouched.
     assert set(service.calendar.events) == set(first["created"].values())
     assert service.storage.files[DOC_PATH] == doc
-    assert service.tracker.failures.calls("list_issues") == 1
+    assert service.tracker.failures.calls("list_issues") == listed
 
 
-def test_a_doc_written_by_anyone_stops_the_run(service: Service) -> None:
-    service.storage.create(DOC_PATH, b"old")
+def test_proposing_a_booked_day_is_rejected(service: Service) -> None:
+    """The proposal already says the day cannot be booked again."""
+    service.book(REQUEST)
 
     response = service.post(REQUEST)
 
     assert response.status_code == 412
+    body = response.json()
+    assert body["failed_step"] == "check_doc"
+    assert body["plan"] is None
+    assert statuses(body)["list_issues"] == "skipped"
+
+
+def test_a_doc_written_by_anyone_stops_the_run(service: Service) -> None:
+    proposal = service.propose(REQUEST).json()
+    service.storage.create(DOC_PATH, b"old")
+
+    response = service.confirm(REQUEST, proposal["plan"])
+
+    assert response.status_code == 412
+    assert response.json()["failed_step"] == "check_doc"
     assert service.calendar.events == {}
     assert service.storage.files[DOC_PATH] == b"old"
 
 
 def test_another_assignee_or_day_is_not_affected(service: Service) -> None:
-    assert service.post(REQUEST).status_code == 200
+    assert service.book(REQUEST).status_code == 200
 
-    assert service.post(REQUEST | {"assignee": "chan"}).status_code == 200
-    assert service.post(REQUEST | {"day": "2026-11-19", "busy": []}).status_code == 200
+    assert service.book(REQUEST | {"assignee": "chan"}).status_code == 200
+    assert service.book(REQUEST | {"day": "2026-11-19", "busy": []}).status_code == 200
 
 
 def test_doc_check_failure_books_nothing(service: Service) -> None:
+    proposal = service.propose(REQUEST).json()
+    listed = service.tracker.failures.calls("list_issues")
     service.storage.failures.fail("get_metadata", ProviderUnavailableError(SECRET))
 
-    response = service.post(REQUEST)
+    response = service.confirm(REQUEST, proposal["plan"])
 
     assert response.status_code == 502
     body = response.json()
@@ -284,13 +671,13 @@ def test_doc_check_failure_books_nothing(service: Service) -> None:
     assert body["error"]["code"] == "provider_error"
     assert body["error"]["retryable"] is True
     assert body["error"]["may_have_applied"] is False
-    assert service.tracker.failures.calls("list_issues") == 0
+    assert service.tracker.failures.calls("list_issues") == listed
     assert service.calendar.failures.calls("create") == 0
     assert SECRET not in response.text
 
 
 def test_replay_over_an_existing_doc_rewrites_it(service: Service) -> None:
-    first = service.post(REQUEST).json()
+    first = service.book(REQUEST).json()
     service.storage.files[DOC_PATH] = b"edited"
 
     response = service.post(replay_of(first))
@@ -304,12 +691,13 @@ def test_replay_over_an_existing_doc_rewrites_it(service: Service) -> None:
 
 
 def test_tracker_failure(service: Service) -> None:
+    proposal = service.propose(REQUEST).json()
     service.tracker.failures.fail(
         "list_issues",
         ServiceError(ErrorCode.PROVIDER_ERROR, "The issue tracker is unavailable"),
     )
 
-    response = service.post(REQUEST)
+    response = service.confirm(REQUEST, proposal["plan"])
 
     assert response.status_code == 502
     body = response.json()
@@ -340,9 +728,10 @@ def test_tracker_failure(service: Service) -> None:
 
 
 def test_unexpected_tracker_exception_does_not_leak(service: Service) -> None:
+    proposal = service.propose(REQUEST).json()
     service.tracker.failures.fail("list_issues", RuntimeError(SECRET))
 
-    response = service.post(REQUEST)
+    response = service.confirm(REQUEST, proposal["plan"])
 
     assert response.status_code == 502
     assert SECRET not in response.text
@@ -356,7 +745,7 @@ def test_calendar_failure_on_block_two_of_three(service: Service) -> None:
         on_call=2,
     )
 
-    response = service.post(REQUEST)
+    response = service.book(REQUEST)
 
     assert response.status_code == 502
     body = response.json()
@@ -385,7 +774,7 @@ def test_uncertain_create_is_reported_and_not_retried(service: Service) -> None:
         CalendarError(CalendarCode.PROVIDER_ERROR, "timeout", retryable=False),
     )
 
-    response = service.post(REQUEST)
+    response = service.book(REQUEST)
 
     assert response.status_code == 502
     body = response.json()
@@ -405,7 +794,7 @@ def test_expired_calendar_token_is_a_configuration_failure(service: Service) -> 
         ),
     )
 
-    response = service.post(REQUEST)
+    response = service.book(REQUEST)
 
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "service_not_configured"
@@ -415,7 +804,7 @@ def test_expired_calendar_token_is_a_configuration_failure(service: Service) -> 
 def test_doc_failure_after_events_is_partial(service: Service) -> None:
     service.storage.failures.fail("replace", ProviderUnavailableError(SECRET))
 
-    response = service.post(REQUEST)
+    response = service.book(REQUEST)
 
     assert response.status_code == 502
     body = response.json()
@@ -432,7 +821,7 @@ def test_uncertain_doc_write_is_retryable(service: Service) -> None:
     """Rewriting the doc gives the same bytes, so an uncertain write is safe to repeat."""
     service.storage.failures.fail("replace", ProviderError(SECRET))
 
-    response = service.post(REQUEST)
+    response = service.book(REQUEST)
 
     assert response.status_code == 502
     body = response.json()
@@ -447,7 +836,7 @@ def test_uncertain_doc_write_is_retryable(service: Service) -> None:
 def test_missing_doc_folder_is_a_configuration_failure(service: Service) -> None:
     service.storage.folders.clear()
 
-    response = service.post(REQUEST)
+    response = service.book(REQUEST)
 
     assert response.status_code == 503
     body = response.json()
@@ -473,7 +862,7 @@ def test_storage_failure_with_no_events_is_failed(service: Service) -> None:
     booked = {"start": "2026-11-18T09:00:00-05:00", "end": "2026-11-18T17:00:00-05:00"}
     service.storage.failures.fail("replace", PermissionDeniedError("denied"))
 
-    response = service.post(REQUEST | {"busy": [booked]})
+    response = service.book(REQUEST | {"busy": [booked]})
 
     assert response.status_code == 403
     body = response.json()
@@ -487,7 +876,9 @@ def test_storage_failure_with_no_events_is_failed(service: Service) -> None:
 
 
 def test_replay_skips_events_that_exist(service: Service) -> None:
-    first = service.post(REQUEST).json()
+    first = service.book(REQUEST).json()
+    checked = service.storage.failures.calls("get_metadata")
+    listed = service.tracker.failures.calls("list_issues")
 
     response = service.post(replay_of(first))
 
@@ -505,14 +896,14 @@ def test_replay_skips_events_that_exist(service: Service) -> None:
         "save_plan": "ok",
     }
     assert body["issues_truncated"] is None
-    assert service.storage.failures.calls("get_metadata") == 1
-    assert service.tracker.failures.calls("list_issues") == 1
+    assert service.storage.failures.calls("get_metadata") == checked
+    assert service.tracker.failures.calls("list_issues") == listed
     assert service.calendar.failures.calls("create") == 3
     assert service.calendar.failures.calls("get") == 3
 
 
 def test_replay_recreates_an_event_that_was_not_found(service: Service) -> None:
-    first = service.post(REQUEST).json()
+    first = service.book(REQUEST).json()
     service.calendar.delete(first["created"]["demo-2"])
 
     body = service.post(replay_of(first)).json()
@@ -538,7 +929,7 @@ def test_replay_after_a_calendar_failure_creates_only_the_missing_events(
         CalendarError(CalendarCode.PROVIDER_UNAVAILABLE, "down", retryable=True),
         on_call=2,
     )
-    first = service.post(REQUEST).json()
+    first = service.book(REQUEST).json()
 
     body = service.post(replay_of(first)).json()
 
@@ -550,7 +941,7 @@ def test_replay_after_a_calendar_failure_creates_only_the_missing_events(
 
 def test_replay_after_a_doc_failure_only_writes_the_doc(service: Service) -> None:
     service.storage.failures.fail("replace", ProviderUnavailableError("down"))
-    first = service.post(REQUEST).json()
+    first = service.book(REQUEST).json()
 
     body = service.post(replay_of(first)).json()
 
@@ -561,7 +952,7 @@ def test_replay_after_a_doc_failure_only_writes_the_doc(service: Service) -> Non
 
 
 def test_replay_stops_when_an_event_cannot_be_checked(service: Service) -> None:
-    first = service.post(REQUEST).json()
+    first = service.book(REQUEST).json()
     service.calendar.failures.fail(
         "get", CalendarError(CalendarCode.ACCESS_DENIED, "no", retryable=False)
     )
@@ -651,7 +1042,8 @@ def test_missing_body_is_rejected(service: Service) -> None:
 
 def _replay_body(blocks: list[dict[str, str]], created: dict[str, str]) -> Any:
     return REQUEST | {
-        "replay": {"plan": {"blocks": blocks, "unscheduled": []}, "created": created}
+        "confirm": True,
+        "replay": {"plan": {"blocks": blocks, "unscheduled": []}, "created": created},
     }
 
 
@@ -670,6 +1062,8 @@ BLOCK = {
         ([BLOCK | {"start": "tomorrow"}], {}, "replay.plan.blocks[0].start"),
         ([BLOCK, BLOCK], {}, "replay.plan.blocks[1].issue_id"),
         ([BLOCK], {"demo-9": "fake-event-1"}, "replay.created"),
+        # Nothing was booked, so this would book a plan nobody approved.
+        ([BLOCK], {}, "replay.created"),
     ],
 )
 def test_invalid_replay_is_rejected_before_any_call(
@@ -723,7 +1117,7 @@ def saved_blocks(body: dict[str, Any]) -> tuple[CalendarBlock, ...]:
 
 
 def test_success_saves_the_plan_with_event_ids(service: Service) -> None:
-    body = service.post(REQUEST).json()
+    body = service.book(REQUEST).json()
 
     plan = service.store.get_plan("tyler", DAY)
 
@@ -736,7 +1130,7 @@ def test_success_saves_the_plan_with_event_ids(service: Service) -> None:
 
 
 def test_unscheduled_issues_are_not_saved_as_blocks(service: Service) -> None:
-    body = service.post(REQUEST | {"busy": [], "default_minutes": 240}).json()
+    body = service.book(REQUEST | {"busy": [], "default_minutes": 240}).json()
 
     plan = service.store.get_plan("tyler", DAY)
 
@@ -748,11 +1142,12 @@ def test_unscheduled_issues_are_not_saved_as_blocks(service: Service) -> None:
 def test_a_later_save_replaces_the_saved_plan(service: Service) -> None:
     # A second run for the same day must be a replay (check_doc, F5), so a
     # replay with a shorter plan stands in for any later save.
-    first = service.post(REQUEST).json()
+    first = service.book(REQUEST).json()
     kept = first["plan"]["blocks"][:1]
     created = {kept[0]["issue_id"]: first["created"][kept[0]["issue_id"]]}
     replay = REQUEST | {
-        "replay": {"plan": {"blocks": kept, "unscheduled": []}, "created": created}
+        "confirm": True,
+        "replay": {"plan": {"blocks": kept, "unscheduled": []}, "created": created},
     }
 
     body = service.post(replay).json()
@@ -769,7 +1164,7 @@ def test_partial_run_saves_nothing(service: Service) -> None:
         on_call=2,
     )
 
-    body = service.post(REQUEST).json()
+    body = service.book(REQUEST).json()
 
     assert body["status"] == "partial"
     assert statuses(body)["save_plan"] == "skipped"
@@ -778,18 +1173,19 @@ def test_partial_run_saves_nothing(service: Service) -> None:
 
 
 def test_failed_run_saves_nothing(service: Service) -> None:
+    proposal = service.propose(REQUEST).json()
     service.tracker.failures.fail(
         "list_issues",
         ServiceError(ErrorCode.PROVIDER_ERROR, "The issue tracker is unavailable"),
     )
 
-    assert service.post(REQUEST).json()["status"] == "failed"
+    assert service.confirm(REQUEST, proposal["plan"]).json()["status"] == "failed"
     assert service.store.get_plan("tyler", DAY) is None
 
 
 def test_successful_replay_saves_the_plan(service: Service) -> None:
     service.storage.failures.fail("replace", ProviderUnavailableError("down"))
-    first = service.post(REQUEST).json()
+    first = service.book(REQUEST).json()
     assert service.store.get_plan("tyler", DAY) is None
 
     body = service.post(replay_of(first)).json()
@@ -803,7 +1199,7 @@ def test_save_failure_is_a_retryable_internal_error(service: Service) -> None:
         "save_plan", StoreError("The state store is unavailable", cause=SECRET)
     )
 
-    response = service.post(REQUEST)
+    response = service.book(REQUEST)
 
     assert response.status_code == 500
     body = response.json()
@@ -839,7 +1235,7 @@ def test_replay_after_a_save_failure_saves_without_new_events(
     service: Service,
 ) -> None:
     service.store.failures.fail("save_plan", StoreError("down"))
-    first = service.post(REQUEST).json()
+    first = service.book(REQUEST).json()
 
     body = service.post(replay_of(first)).json()
 

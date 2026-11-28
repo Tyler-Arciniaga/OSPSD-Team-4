@@ -5,10 +5,11 @@
 #
 #   cd product
 #   docker compose up --build -d
-#   curl -X POST localhost:8001/v1/focus-day -H 'content-type: application/json' \
-#     -d '{"assignee": "alice", "day": "2026-11-18"}'          # instance A
-#   curl -X POST localhost:8002/v1/focus-day -H 'content-type: application/json' \
-#     -d '{"assignee": "bob", "day": "2026-11-18"}'            # instance B
+#   curl -s -X POST localhost:8001/v1/focus-day -H 'content-type: application/json' \
+#     -d '{"assignee": "alice", "day": "2026-11-18"}' > proposal.json   # propose on A
+#   jq -c '{assignee: "alice", day: "2026-11-18", confirm: true, approved_plan: .plan}' \
+#     proposal.json | curl -s -X POST localhost:8002/v1/focus-day \
+#     -H 'content-type: application/json' -d @-                        # confirm on B
 #   docker compose exec db psql -U focus_day -c \
 #     "SELECT assignee, day, issue_id, event_id FROM plan_blocks ORDER BY 1, 2"
 #   docker compose down -v
