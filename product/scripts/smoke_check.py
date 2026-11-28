@@ -147,7 +147,7 @@ def _propose(client: Client, request: dict[str, Any], what: str) -> dict[str, An
             f"{what}: HTTP {status}, status {body.get('status')!r}, "
             f"failed step {body.get('failed_step')!r}, code {error.get('code')!r}"
         )
-    if body["created"] or _steps(body).get("create_events") != "skipped":
+    if _steps(body).get("create_events") != "skipped":
         raise SmokeError(f"{what}: the proposal booked something")
     return body
 

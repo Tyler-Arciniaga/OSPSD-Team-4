@@ -102,8 +102,8 @@ orchestrator.FocusDay.run
   |                                                 '-> dropbox_client_impl  -> Dropbox
   |-- 5. save_plan ----------> StateStore      --> PostgresStateStore -> Postgres (shared by all instances)
   v
-6. response: status (proposed or ok), steps (7 in total, validate first), plan, created, doc,
-   issues_truncated  (or the error body with failed_step details)
+6. response: status (proposed or ok), steps (7 in total, validate first), plan, issues_truncated,
+   and on ok also created, doc  (or the error body with failed_step details)
 
 Startup (lifespan): config.py resolves *_PROVIDER paths and checks STATE_DB_URL -> factories.py
 builds the three providers once and connects to the state database (creating its tables) -> any
@@ -120,8 +120,8 @@ so it shows four steps; a run today ends with a fifth,
 `{"name": "save_plan", "status": "ok", "error": null}`, after which
 the three blocks and their event IDs are tyler's approved plan for
 2026-11-19. It also predates propose and confirm (#90). Today the same
-request first returns the three blocks below with `status: proposed`,
-`created: {}` and steps 3 onward `skipped`; the run traced here is the
+request first returns the three blocks below with `status: proposed`
+and steps 3 onward `skipped`; the run traced here is the
 second call, the same body plus `"confirm": true` and that `plan` as
 `"approved_plan"`, whose `plan` step also checks the recomputed plan
 equals it.
@@ -243,9 +243,9 @@ None.
 ```
 
 - `status` is `ok` only when every step of a confirmed request finished.
-  A proposal returns the same fields with `status: proposed`, `created: {}`,
-  `doc: null`, and `create_events`, `write_standup_doc` and `save_plan`
-  `skipped`. A failure returns the error body instead, with `partial` or
+  A proposal returns only `status: proposed`, `steps`, `plan` and
+  `issues_truncated`, with `create_events`, `write_standup_doc` and
+  `save_plan` `skipped`. A failure returns the error body instead, with `partial` or
   `failed` (4.3).
 - `steps` always lists every step in order. Each is `ok`, `failed` or
   `skipped`, and `error` is set only on the step that failed. On a replay,

@@ -275,10 +275,8 @@ def test_a_request_without_confirm_is_a_proposal(service: Service) -> None:
         "demo-3",
     ]
     assert body["plan"]["blocks"][0]["start"] == "2026-11-18T11:00:00-05:00"
-    assert body["created"] == {}
-    assert body["doc"] is None
     assert body["issues_truncated"] is False
-    assert body["failed_step"] is None
+    assert set(body) == {"status", "steps", "plan", "issues_truncated"}
 
 
 def test_confirm_false_is_a_proposal(service: Service) -> None:

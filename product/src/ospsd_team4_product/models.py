@@ -148,16 +148,13 @@ class DocModel(BaseModel):
 
 
 class FocusDayProposal(BaseModel):
-    """200 without `confirm`: the plan to approve. Nothing was booked, so
-    `created` is always empty and `doc` is null."""
+    """200 without `confirm`: the plan to approve. Nothing was booked: the
+    steps after `plan` are `skipped`."""
 
     status: Literal["proposed"]
     steps: list[StepModel]
     plan: PlanModel
-    created: dict[str, str]
-    doc: None = None
     issues_truncated: bool | None
-    failed_step: None = None
 
 
 class FocusDayResponse(BaseModel):

@@ -54,8 +54,9 @@ callers), so they pass through unchanged.
 
 1. **Propose:** the request without `confirm` (or with `"confirm": false`).
    Only `validate`, `check_doc`, `list_issues` and `plan` run. Success is
-   200 with `status: proposed`, the `plan`, `created: {}` and `doc: null`;
-   `create_events`, `write_standup_doc` and `save_plan` are `skipped`.
+   200 with `status`, `steps`, `plan` and `issues_truncated` only
+   (`status: proposed`); `create_events`, `write_standup_doc` and
+   `save_plan` are `skipped`.
    Nothing is booked, written or saved, so a proposal that fails has
    `may_have_applied: false` and can simply be sent again.
 2. **Confirm:** the same request plus `"confirm": true` and

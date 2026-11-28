@@ -175,7 +175,7 @@ echo "  /readyz -> ${ready}"
 FOCUS_DAY_BODY='{"assignee": "disposable", "day": "2026-11-18"}'
 proposal="$(curl -sS -w ' %{http_code}' -X POST "http://127.0.0.1:${PORT}/v1/focus-day" \
   -H 'content-type: application/json' -d "$FOCUS_DAY_BODY" || true)"
-[[ "$proposal" == *' 200' && "$proposal" == *'"status":"proposed"'* && "$proposal" == *'"created":{}'* ]] \
+[[ "$proposal" == *' 200' && "$proposal" == *'"status":"proposed"'* && "$proposal" == *'"name":"create_events","status":"skipped"'* ]] \
   && pass "POST /v1/focus-day without confirm proposes a plan and books nothing" \
   || fail "focus-day proposal: ${proposal}"
 

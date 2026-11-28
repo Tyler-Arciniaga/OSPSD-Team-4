@@ -150,7 +150,6 @@ class _Progress:
                 status="proposed",
                 steps=[StepModel(name=s, status=v) for s, v in self.statuses.items()],
                 plan=PlanModel.of(self.plan),
-                created={},
                 issues_truncated=self.issues_truncated,
             ),
         )
