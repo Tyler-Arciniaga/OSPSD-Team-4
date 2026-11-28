@@ -132,11 +132,7 @@ class StateStore(Protocol):
         ...
 
     def find_plans_with_issue(self, issue_id: str) -> list[PlanBlock]:
-        """Every approved plan's block for this issue, newest day first.
-
-        Within a day, the most recently saved plan comes first (the issue
-        owner rule depends on it).
-        """
+        """Every approved plan's block for this issue, newest day first, then newest save first within a day."""
         ...
 
     def set_remaining(self, assignee: str, issue_id: str, percent: int) -> None:
