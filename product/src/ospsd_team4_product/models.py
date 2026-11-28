@@ -174,7 +174,9 @@ class FocusDayResponse(BaseModel):
 
 
 class FocusDayErrorResponse(BaseModel):
-    """A step failed. `plan` and `created` are what a retry sends back."""
+    """A step failed. `plan` and `created` are what a replay sends back once
+    `created` names a booked event (or the plan has no blocks); before
+    that, nothing was booked, so the caller confirms again instead."""
 
     status: Literal["partial", "failed"]
     steps: list[StepModel]

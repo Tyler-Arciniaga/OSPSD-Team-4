@@ -454,6 +454,68 @@ def test_the_plan_in_a_412_can_be_reviewed_and_confirmed(service: Service) -> No
     assert "demo-4" in body["created"]
 
 
+def test_the_plan_in_a_412_cannot_be_replayed(service: Service) -> None:
+    """Replay skips the approval check, so it must not book the new plan."""
+    approved = service.propose(REQUEST).json()["plan"]
+    service.tracker.issues.append(Issue(id="demo-4", title="A new issue"))
+    rejected = service.confirm(REQUEST, approved).json()
+
+    assert_replay_refused(service, replay_of(rejected))
+    assert_nothing_written(service)
+
+
+def test_a_run_that_booked_nothing_is_confirmed_again_not_replayed(
+    service: Service,
+) -> None:
+    service.calendar.failures.fail(
+        "create",
+        CalendarError(CalendarCode.PROVIDER_UNAVAILABLE, "down", retryable=True),
+    )
+    first = service.book(REQUEST).json()
+    assert first["failed_step"] == "create_events"
+    assert first["created"] == {}
+
+    assert_replay_refused(service, replay_of(first))
+    body = service.book(REQUEST).json()
+
+    assert body["status"] == "ok"
+    assert len(body["created"]) == len(body["plan"]["blocks"]) == 3
+
+
+def test_a_plan_with_no_blocks_can_be_replayed_with_no_events(
+    service: Service,
+) -> None:
+    """A booked day has no event to name, so its save can still be retried."""
+    request = REQUEST | {
+        "busy": [
+            {"start": "2026-11-18T00:00:00-05:00", "end": "2026-11-19T00:00:00-05:00"}
+        ]
+    }
+    service.store.failures.fail("save_plan", StoreError("down"))
+    first = service.book(request).json()
+    assert first["failed_step"] == "save_plan"
+    assert first["plan"]["blocks"] == []
+
+    body = service.post(replay_of(first) | {"busy": request["busy"]}).json()
+
+    assert body["status"] == "ok"
+    assert service.store.get_plan("tyler", DAY) == ()
+
+
+def assert_replay_refused(service: Service, body: dict[str, Any]) -> None:
+    """A 422 on `replay.created`, with no provider called for it."""
+    reads = service.tracker.failures.calls("list_issues")
+    creates = service.calendar.failures.calls("create")
+    response = service.post(body)
+
+    assert response.status_code == 422
+    result = response.json()
+    assert result["failed_step"] == "validate"
+    assert [d["field"] for d in result["error"]["details"]] == ["replay.created"]
+    assert service.tracker.failures.calls("list_issues") == reads
+    assert service.calendar.failures.calls("create") == creates
+
+
 def assert_plan_changed(service: Service, response: Any, current: Any) -> None:
     """A 412 on `plan`, carrying the recomputed plan, with nothing written."""
     assert response.status_code == 412
@@ -1002,6 +1064,8 @@ BLOCK = {
         ([BLOCK | {"start": "tomorrow"}], {}, "replay.plan.blocks[0].start"),
         ([BLOCK, BLOCK], {}, "replay.plan.blocks[1].issue_id"),
         ([BLOCK], {"demo-9": "fake-event-1"}, "replay.created"),
+        # Nothing was booked, so this would book a plan nobody approved.
+        ([BLOCK], {}, "replay.created"),
     ],
 )
 def test_invalid_replay_is_rejected_before_any_call(

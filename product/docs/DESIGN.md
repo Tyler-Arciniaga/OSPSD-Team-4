@@ -289,7 +289,9 @@ Contract quotes are from `calendar-contract` `v0.1.0`
   Otherwise the `plan` step fails with 412 `precondition_failed` ("The
   plan changed since you reviewed it"), nothing is written, and the error
   body's `plan` is the new plan to show the owner. `replay` needs
-  `confirm: true`, since only a confirmed run can have booked anything.
+  `confirm: true`, since only a confirmed run can have booked anything,
+  and, when its plan has blocks, a non-empty `created`: replay skips the
+  approval check, so it only resumes a run that booked at least one event.
   `check_doc` runs on the proposal too, so a day that is already booked is
   reported before anyone reviews a plan that cannot be booked.
 - **Alternatives:**
@@ -505,7 +507,8 @@ environment variables and one mounted secret file:
    saved whole or not at all.
 10. Nothing is booked, written or saved without `confirm: true`, and a
     confirmed request books only a plan equal to its `approved_plan` (or,
-    on replay, its `replay.plan`) (#90).
+    on replay, its `replay.plan`, which must name at least one booked
+    event unless it has no blocks) (#90).
 
 ## 4.3 Failure modes
 
@@ -533,9 +536,9 @@ failure of a read step during the proposal has the same body.
 | Tracker fails | Tracker's code (for example 502 `provider_error`, retryable), `failed`, step `list_issues` | Nothing | Retry the same request later if `retryable` | `test_tracker_failure`, `test_unexpected_tracker_exception_does_not_leak` |
 | Partial fit: some issues do not fit | 200, `ok` | All fitting blocks booked, doc written; the rest in `plan.unscheduled` with `no_free_slot` | Nothing; not an error | `test_partial_fit_is_a_success` |
 | Calendar fails on the first block | 502 `provider_error` (or another mapped code), `failed`, step `create_events` | No events, no doc | Replay if `retryable` | Same path as the next row with an empty `created`; `status` is `failed` because no event exists |
-| Calendar fails on block k of n | 502 `provider_error`, `partial` | Blocks 1 to k-1 booked and in `created`; no doc | Replay: existing events are kept, only the missing ones are created, then the doc is written | `test_calendar_failure_on_block_two_of_three`, `test_replay_after_a_calendar_failure_creates_only_the_missing_events` |
+| Calendar fails on block k of n | 502 `provider_error`, `partial` | Blocks 1 to k-1 booked and in `created`; no doc | Replay: existing events are kept, only the missing ones are created, then the doc is written. If k is 1, `created` is empty and nothing was booked: confirm again instead | `test_calendar_failure_on_block_two_of_three`, `test_replay_after_a_calendar_failure_creates_only_the_missing_events`, `test_a_run_that_booked_nothing_is_confirmed_again_not_replayed` |
 | Uncertain create | 502 `provider_error`, `may_have_applied: true`, not retryable | Events before it in `created`; this one may exist with no known ID | Check the calendar first. Replaying anyway can create a duplicate | `test_uncertain_create_is_reported_and_not_retried` |
-| Calendar token missing, expired or revoked | 503 `service_not_configured`, step `create_events` | Nothing new | Operator re-authorizes and replaces the secret file (DEPLOYMENT.md, step 2); then replay | `test_expired_calendar_token_is_a_configuration_failure` |
+| Calendar token missing, expired or revoked | 503 `service_not_configured`, step `create_events` | Nothing new | Operator re-authorizes and replaces the secret file (DEPLOYMENT.md, step 2); then replay, or confirm again if `created` is empty | `test_expired_calendar_token_is_a_configuration_failure` |
 | Doc write fails after all events exist | Storage's code (for example 502 `provider_error`, `retryable: true` (F4)), `partial`, step `write_standup_doc` | Every event booked and in `created`; no doc, or possibly the doc (`may_have_applied`), which is harmless because rewriting it gives the same bytes | Replay: every event is confirmed with `get`, none recreated, and only the doc is written | `test_doc_failure_after_events_is_partial`, `test_replay_after_a_doc_failure_only_writes_the_doc` |
 | Doc folder missing (the operator has not created it) | 503 `service_not_configured`, `partial`, step `write_standup_doc`, not retryable (F2) | Every event booked and in `created`; no doc | Operator creates the folder (DEPLOYMENT.md, step 3); then replay | `test_missing_doc_folder_is_a_configuration_failure` |
 | Doc write fails with no events (empty plan) | Storage's code, `failed` | Nothing | Replay or retry | `test_storage_failure_with_no_events_is_failed` |

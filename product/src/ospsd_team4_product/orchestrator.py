@@ -267,6 +267,14 @@ def _replay_plan(request: FocusDayRequest) -> tuple[Plan | None, dict[str, str]]
             raise PlanInputError(
                 "replay.created", "names an issue with no block in replay.plan"
             )
+    # Replay skips the approval check, so it only resumes a run that booked
+    # something; with no event yet, propose and confirm again. A plan with
+    # no blocks books no event, so its doc and save can still be replayed.
+    if plan.blocks and not request.replay.created:
+        raise PlanInputError(
+            "replay.created",
+            "is empty, so nothing was booked: confirm the plan instead of replaying",
+        )
     return plan, dict(request.replay.created)
 
 

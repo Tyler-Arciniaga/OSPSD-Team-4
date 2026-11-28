@@ -126,8 +126,11 @@ Rules:
   and `replay: {"plan": ..., "created": ...}` copied from the failure body
   (no `approved_plan`: the replayed plan is the approved one). On replay
   `check_doc`, `list_issues` and `plan` are `skipped`, existing events are
-  kept, and only missing ones are created. A failed proposal booked
-  nothing; send the proposal again instead.
+  kept, and only missing ones are created. A replay whose plan has blocks
+  must name at least one event in `created`: replay skips the approval
+  check, so it only resumes a run that booked something. With
+  `created: {}` nothing was booked, so propose and confirm again instead.
+  A failed proposal booked nothing; send the proposal again instead.
 - A run without `replay` whose doc already exists stops at `check_doc` with
   412 `precondition_failed`, before anything is booked
   ([`check_doc`](#check_doc-storage)). Sending the same request twice
@@ -194,6 +197,7 @@ Planner and path rules (`PlanInputError(field, message)`):
 | `replay.plan.blocks[i]`                      | start is not before end                         |
 | `replay.plan.blocks[i].issue_id`             | the same issue appears in two blocks            |
 | `replay.created`                             | names an issue with no block in `replay.plan`   |
+| `replay.created`                             | empty while `replay.plan` has blocks (nothing was booked: confirm again) |
 
 Approval rules (#90, [Propose and confirm](#propose-and-confirm)):
 
@@ -254,6 +258,8 @@ shows the owner and, if approved, sends as the next `approved_plan`. Typical
 causes: an issue was added to or closed on the tracker after the proposal,
 or the caller edited a block (editing before approval is not supported
 yet). The log line's `cause` is `plan_changed`.
+Replaying this body is rejected (`created` is empty), since that would book
+a plan nobody approved.
 
 Repeating the same confirm gives the same 412 until the request or the
 tracker changes, so it is not retryable.
